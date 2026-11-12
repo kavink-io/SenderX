@@ -1,0 +1,14 @@
+Flask
+flask-restx
+flask-cors
+pymongo
+dnspython
+redis
+celery
+pydantic
+pydantic-settings
+python-dotenv
+flask-jwt-extended
+bcrypt
+gunicorn
+sendgrid
