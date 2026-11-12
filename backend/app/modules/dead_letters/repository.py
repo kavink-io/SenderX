@@ -69,44 +69,74 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     
+        
     @classmethod
-    def save_from_message(cls, message, error):
+    def save_from_message(
+        cls,
+        message,
+        error,
+        organization_id=None
+    ):
         """
         Save an exhausted message in the DLQ.
 
         Supports automatic and manual failure cycles.
-
-        Uses a deterministic failure_cycle_id to prevent
-        duplicate failure-cycle entries.
+        Preserves trusted organization ID.
+        Prevents duplicate failure-cycle entries.
         """
 
         now = cls._now()
+
         message_id = message["message_id"]
 
         retry_count = message.get("retry_count", 0)
         manual_retry_count = message.get("manual_retry_count", 0)
 
-        # Deterministic identifier for this processing cycle
+        # Resolve trusted organization ID.
+        trusted_organization_id = (
+            organization_id
+            if organization_id is not None
+            else message.get("organization_id")
+        )
+
+        # Prevent tenant-owned messages from being saved
+        # without their organization ID.
+        if not trusted_organization_id:
+            raise ValueError(
+                "Organization ID is required for DLQ insertion"
+            )
+
+        # Ensure message snapshot belongs to the same tenant.
+        message_organization_id = message.get("organization_id")
+
+        if (
+            message_organization_id is not None
+            and message_organization_id != trusted_organization_id
+        ):
+            raise ValueError(
+                "Message organization ID does not match trusted organization ID"
+            )
+
+        # Deterministic failure-cycle identifier.
         failure_cycle_id = (
             f"{message_id}:{retry_count}:{manual_retry_count}"
         )
 
         snapshot_fields = [
-                "message_id",
-                "organization_id",
-                "channel",
-                "provider",
-                "recipient",
-                "data",
-                "status",
-                "retry_count",
-                "last_error",
-                "status_history",
-                "created_at",
-                "updated_at",
-                "provider_message_id",
-                "manual_retry_count"
-            ]
+            "message_id",
+            "channel",
+            "provider",
+            "recipient",
+            "data",
+            "status",
+            "retry_count",
+            "last_error",
+            "status_history",
+            "created_at",
+            "updated_at",
+            "provider_message_id",
+            "manual_retry_count"
+        ]
 
         snapshot = {
             field: message[field]
@@ -114,10 +144,8 @@ class DeadLetterRepository:
             if field in message
         }
 
-        organization_id = message.get("organization_id")
-
-        if organization_id:
-            snapshot["organization_id"] = organization_id
+        # Always explicitly preserve tenant ownership.
+        snapshot["organization_id"] = trusted_organization_id
 
         snapshot["last_error"] = str(error)
         snapshot["dead_letter_status"] = "PENDING_REVIEW"
@@ -139,35 +167,38 @@ class DeadLetterRepository:
 
         collection = cls._collection()
 
-        # Ensure the DLQ document exists.
-        # This also preserves its original creation timestamp.
+        # Ensure document exists.
+        # Include organization ID in the upsert filter.
         collection.update_one(
-            {"message_id": message_id},
+            {
+                "message_id": message_id,
+                "organization_id": trusted_organization_id
+            },
             {
                 "$setOnInsert": {
                     "message_id": message_id,
+                    "organization_id": trusted_organization_id,
                     "created_in_dlq_at": now
                 }
             },
             upsert=True
         )
 
-        # Only append the failure cycle if its identifier
-        # has not already been recorded.
+        # Add the failure snapshot only if this failure
+        # cycle has not already been recorded.
         result = collection.update_one(
             {
                 "message_id": message_id,
+                "organization_id": trusted_organization_id,
                 "failure_cycles.failure_cycle_id": {
                     "$ne": failure_cycle_id
                 }
             },
             {
                 "$set": snapshot,
-
                 "$push": {
                     "failure_cycles": failure_cycle
                 },
-
                 "$unset": {
                     "manual_retry_requested_at": "",
                     "manual_retry_queued_at": "",
@@ -178,15 +209,23 @@ class DeadLetterRepository:
 
         if result.modified_count == 0:
             current_app.logger.info(
-                "Duplicate failure cycle ignored: %s",
+                "Failure cycle already exists or no update occurred: %s",
                 failure_cycle_id
             )
 
-        return cls.find_by_message_id(message_id)
+        # Return the tenant-scoped saved document.
+        saved_record = cls.find_by_message_id(
+            message_id,
+            organization_id=trusted_organization_id
+        )
 
-    # --------------------------------------------------
-    # FIND DEAD LETTER
-    # --------------------------------------------------
+        if not saved_record:
+            raise RuntimeError(
+                f"DLQ record could not be retrieved after saving: {message_id}"
+            )
+
+        return saved_record
+
 
     @classmethod
     def find_by_message_id(cls, message_id, organization_id=None):

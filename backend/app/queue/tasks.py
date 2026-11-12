@@ -30,7 +30,7 @@ def test_task(message):
 )
 def process_message(self, message_id):
 
-    # 1. Retrieve message and its trusted organization ID.
+    # 1. Retrieve message and trusted organization ID.
     message = MessageRepository.find_by_id(message_id)
 
     if not message:
@@ -40,7 +40,6 @@ def process_message(self, message_id):
         }
 
     organization_id = message.get("organization_id")
-
     current_status = message.get("status")
 
     if current_status not in ["QUEUED", "RETRYING"]:
@@ -78,7 +77,7 @@ def process_message(self, message_id):
 
     try:
 
-        # 4. Send through the configured provider.
+        # 4. Send through configured provider.
         provider = message.get("provider")
 
         if not provider:
@@ -97,7 +96,9 @@ def process_message(self, message_id):
         saved = MessageRepository.mark_sent(
             message_id=message_id,
             provider=provider,
-            provider_message_id=result.get("provider_message_id"),
+            provider_message_id=result.get(
+                "provider_message_id"
+            ),
             organization_id=organization_id
         )
 
@@ -123,7 +124,9 @@ def process_message(self, message_id):
             "message_id": message_id,
             "status": "SENT",
             "provider": provider,
-            "provider_message_id": result.get("provider_message_id")
+            "provider_message_id": result.get(
+                "provider_message_id"
+            )
         }
 
     except Exception as error:
@@ -133,7 +136,7 @@ def process_message(self, message_id):
 
         retryable = RetryManager.is_retryable_error(error)
 
-        # 6. Permanent errors must not be retried.
+        # 6. Permanent errors are not retried.
         if not retryable:
 
             saved = MessageRepository.mark_failed(
@@ -144,21 +147,27 @@ def process_message(self, message_id):
             )
 
             current_app.logger.error(
-                f"Permanent failure for {message_id}: {error_message}"
+                f"Permanent failure for {message_id}: "
+                f"{error_message}"
             )
 
             return {
                 "success": False,
                 "message_id": message_id,
-                "status": "FAILED" if saved else "STATUS_UPDATE_FAILED",
+                "status": (
+                    "FAILED" if saved
+                    else "STATUS_UPDATE_FAILED"
+                ),
                 "retry_count": retry_count,
                 "error": error_message
             }
 
-        # 7. Temporary error: check retry limit.
-        retry_info = RetryManager.get_retry_status(retry_count)
+        # 7. Check retry limit.
+        retry_info = RetryManager.get_retry_status(
+            retry_count
+        )
 
-        # 8. All automatic retry attempts exhausted.
+        # 8. All automatic retries exhausted.
         if not retry_info["success"]:
 
             saved = MessageRepository.update_retry_info(
@@ -181,7 +190,7 @@ def process_message(self, message_id):
                     "status": "STATUS_UPDATE_FAILED"
                 }
 
-            # Fetch the latest message, including DEAD status.
+            # Fetch latest DEAD message.
             dead_message = MessageRepository.find_by_id(
                 message_id,
                 organization_id=organization_id
@@ -199,29 +208,56 @@ def process_message(self, message_id):
                     "dlq_saved": False
                 }
 
-            # 9. Save the message in the Dead Letter Queue.
-            try:
-
-                current_app.logger.info(
-                "DLQ DEBUG | message_id=%s | organization_id=%s | keys=%s",
+            # 9. Verify trusted tenant information.
+            current_app.logger.info(
+                "DLQ DEBUG | message_id=%s | organization_id=%s",
                 message_id,
-                dead_message.get("organization_id"),
-                list(dead_message.keys())
-)
+                organization_id
+            )
 
-                DeadLetterRepository.save_from_message(
-                    message=dead_message,
-                    error=error_message
+            if dead_message.get("organization_id") != organization_id:
+                current_app.logger.error(
+                    "Organization ID mismatch for message %s",
+                    message_id
                 )
 
-                current_app.logger.error(
-                    f"Message {message_id} moved to Dead Letter Queue"
+                return {
+                    "success": False,
+                    "message_id": message_id,
+                    "status": "DEAD",
+                    "dlq_saved": False,
+                    "error": "Organization ID mismatch"
+                }
+
+            # 10. Save in Dead Letter Queue.
+            try:
+
+                dlq_record = DeadLetterRepository.save_from_message(
+                    message=dead_message,
+                    error=error_message,
+                    organization_id=organization_id
+                )
+
+                if not dlq_record:
+                    raise RuntimeError(
+                        "DLQ repository returned no saved record"
+                    )
+
+                if dlq_record.get("organization_id") != organization_id:
+                    raise RuntimeError(
+                        "Saved DLQ record has incorrect organization ID"
+                    )
+
+                current_app.logger.info(
+                    "Message %s successfully saved in DLQ",
+                    message_id
                 )
 
             except Exception:
 
                 current_app.logger.exception(
-                    f"Failed to store message {message_id} in DLQ"
+                    "Failed to store message %s in DLQ",
+                    message_id
                 )
 
                 return {
@@ -237,11 +273,12 @@ def process_message(self, message_id):
                 "message_id": message_id,
                 "status": "DEAD",
                 "dlq_saved": True,
+                "organization_id": organization_id,
                 "retry_count": retry_count,
                 "error": error_message
             }
 
-        # 10. Automatic retry is available.
+        # 11. Automatic retry is available.
         delay = retry_info["delay"]
         next_retry_count = retry_info["retry_count"]
 
@@ -266,7 +303,8 @@ def process_message(self, message_id):
 
         current_app.logger.warning(
             f"Message {message_id} retrying in {delay} seconds. "
-            f"Retry {next_retry_count} of {RetryManager.MAX_RETRIES}"
+            f"Retry {next_retry_count} of "
+            f"{RetryManager.MAX_RETRIES}"
         )
 
         raise self.retry(
