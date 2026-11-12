@@ -2,7 +2,10 @@
 from flask import Blueprint, request, jsonify, current_app, g
 
 from app.modules.dead_letters.service import DeadLetterService
-from app.modules.auth.decorators import require_roles
+from app.modules.auth.decorators import (
+    require_roles,
+    require_permissions
+)
 
 
 dead_letters_bp = Blueprint("dead_letters", __name__)
@@ -245,3 +248,183 @@ def resolve_recovery(message_id):
             "success": False,
             "message": "Recovery resolution failed"
         }), 500
+
+# --------------------------------------------------
+# ORGANIZATION DLQ READ ENDPOINTS
+# --------------------------------------------------
+
+@dead_letters_bp.route("/organization", methods=["GET"])
+@require_permissions("organization:dead_letters:read")
+def get_organization_dead_letters():
+
+    organization_id = g.current_organization["organization_id"]
+
+    result = DeadLetterService.get_all_dead_letters(
+        limit=request.args.get("limit", 50),
+        page=request.args.get("page", 1),
+        status=request.args.get("status"),
+        message_id=request.args.get("message_id"),
+        recipient=request.args.get("recipient"),
+        provider=request.args.get("provider"),
+        organization_id=organization_id
+    )
+
+    return jsonify(result), 200 if result["success"] else 400
+
+
+@dead_letters_bp.route(
+    "/organization/<string:message_id>",
+    methods=["GET"]
+)
+@require_permissions("organization:dead_letters:read")
+def get_organization_dead_letter(message_id):
+
+    organization_id = g.current_organization["organization_id"]
+
+    result = DeadLetterService.get_dead_letter(
+        message_id,
+        organization_id=organization_id
+    )
+
+    return jsonify(result), 200 if result["success"] else 404
+
+
+@dead_letters_bp.route(
+    "/organization/<string:message_id>/history",
+    methods=["GET"]
+)
+@require_permissions("organization:dead_letters:read")
+def get_organization_retry_history(message_id):
+
+    organization_id = g.current_organization["organization_id"]
+
+    result = DeadLetterService.get_retry_history(
+        message_id,
+        organization_id=organization_id
+    )
+
+    return jsonify(result), 200 if result["success"] else 404
+
+@dead_letters_bp.route(
+    "/organization/statistics",
+    methods=["GET"]
+)
+@require_permissions("organization:dead_letters:read")
+def get_organization_dlq_statistics():
+
+    organization_id = g.current_organization["organization_id"]
+
+    result = DeadLetterService.get_statistics(
+        organization_id=organization_id
+    )
+
+    return jsonify(result), 200 if result["success"] else 500
+
+
+@dead_letters_bp.route(
+    "/organization/analytics/providers",
+    methods=["GET"]
+)
+@require_permissions("organization:analytics:read")
+def get_organization_provider_analytics():
+
+    organization_id = g.current_organization["organization_id"]
+
+    result = DeadLetterService.get_provider_analytics(
+        organization_id=organization_id
+    )
+
+    return jsonify(result), 200 if result["success"] else 500
+
+
+@dead_letters_bp.route(
+    "/organization/analytics/trends",
+    methods=["GET"]
+)
+@require_permissions("organization:analytics:read")
+def get_organization_failure_trends():
+
+    organization_id = g.current_organization["organization_id"]
+
+    try:
+        result = DeadLetterService.get_failure_trends(
+            start_date=request.args.get("start_date"),
+            end_date=request.args.get("end_date"),
+            provider=request.args.get("provider"),
+            organization_id=organization_id
+        )
+
+        return jsonify(result), 200 if result.get("success") else 500
+
+    except ValueError as error:
+        return jsonify({
+            "success": False,
+            "message": str(error)
+        }), 400
+
+
+
+# --------------------------------------------------
+# ORGANIZATION DLQ MANAGEMENT ENDPOINTS
+# --------------------------------------------------
+
+@dead_letters_bp.route(
+    "/organization/<string:message_id>/retry",
+    methods=["POST"]
+)
+@require_permissions("organization:dead_letters:manage")
+def retry_organization_dead_letter(message_id):
+
+    organization_id = g.current_organization["organization_id"]
+
+    result = DeadLetterService.retry_dead_letter(
+        message_id,
+        organization_id=organization_id
+    )
+
+    if not result["success"]:
+
+        if result["message"] == "Dead letter not found":
+            status_code = 404
+        elif result["message"] == "Original message not found":
+            status_code = 404
+        elif result.get("dispatch_state") == "DISPATCHING":
+            status_code = 503
+        else:
+            status_code = 400
+
+        return jsonify(result), status_code
+
+    return jsonify(result), 202
+
+
+@dead_letters_bp.route(
+    "/organization/<string:message_id>",
+    methods=["DELETE"]
+)
+@require_permissions("organization:dead_letters:manage")
+def delete_organization_dead_letter(message_id):
+
+    organization_id = g.current_organization["organization_id"]
+
+    payload = request.get_json(silent=True) or {}
+    confirm = payload.get("confirm", False)
+
+    result = DeadLetterService.delete_dead_letter(
+        message_id,
+        confirm=confirm,
+        organization_id=organization_id
+    )
+
+    if not result["success"]:
+
+        if result["message"] == "Dead letter not found":
+            status_code = 404
+        elif "status may have changed" in result["message"]:
+            status_code = 409
+        else:
+            status_code = 400
+
+        return jsonify(result), status_code
+
+    return jsonify(result), 200

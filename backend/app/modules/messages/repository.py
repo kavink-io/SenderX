@@ -15,8 +15,13 @@ class MessageRepository:
     def _now():
         return datetime.now(timezone.utc).isoformat()
 
+    # --------------------------------------------------
+    # CREATE MESSAGE
+    # --------------------------------------------------
+
     @classmethod
     def save(cls, message):
+
         response_document = message.copy()
         db_document = message.copy()
 
@@ -27,31 +32,73 @@ class MessageRepository:
 
         return response_document
 
+    # --------------------------------------------------
+    # FIND MESSAGE BY ID
+    # --------------------------------------------------
+
     @classmethod
-    def find_by_id(cls, message_id):
+    def find_by_id(cls, message_id, organization_id=None):
+
+        query = {
+            "message_id": message_id
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
         return cls._collection().find_one(
-            {"message_id": message_id},
+            query,
             {"_id": 0}
         )
 
+    # --------------------------------------------------
+    # FIND ALL MESSAGES
+    # --------------------------------------------------
+
     @classmethod
-    def find_all(cls, limit=50):
+    def find_all(cls, limit=50, organization_id=None):
+
+        query = {}
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
+        limit = max(1, min(int(limit), 100))
+
         return list(
             cls._collection().find(
-                {},
+                query,
                 {"_id": 0}
-            ).sort("created_at", -1).limit(limit)
+            ).sort(
+                "created_at", -1
+            ).limit(limit)
         )
 
+    # --------------------------------------------------
+    # UPDATE MESSAGE STATUS
+    # --------------------------------------------------
+
     @classmethod
-    def update_status(cls, message_id, new_status, old_status):
+    def update_status(
+        cls,
+        message_id,
+        new_status,
+        old_status,
+        organization_id=None
+    ):
+
         now = cls._now()
 
+        query = {
+            "message_id": message_id,
+            "status": old_status
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
         result = cls._collection().update_one(
-            {
-                "message_id": message_id,
-                "status": old_status
-            },
+            query,
             {
                 "$set": {
                     "status": new_status,
@@ -69,6 +116,11 @@ class MessageRepository:
 
         return result.modified_count > 0
 
+    # --------------------------------------------------
+    # UPDATE RETRY INFORMATION
+    # --------------------------------------------------
+
+    
     @classmethod
     def update_retry_info(
         cls,
@@ -76,9 +128,18 @@ class MessageRepository:
         retry_count,
         old_status,
         new_status,
-        error=None
+        error=None,
+        organization_id=None
     ):
         now = cls._now()
+
+        query = {
+            "message_id": message_id,
+            "status": old_status
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
 
         update_fields = {
             "retry_count": retry_count,
@@ -90,10 +151,7 @@ class MessageRepository:
             update_fields["last_error"] = str(error)
 
         result = cls._collection().update_one(
-            {
-                "message_id": message_id,
-                "status": old_status
-            },
+            query,
             {
                 "$set": update_fields,
                 "$push": {
@@ -109,25 +167,50 @@ class MessageRepository:
 
         return result.modified_count > 0
 
+    # --------------------------------------------------
+    # MARK MESSAGE FAILED
+    # --------------------------------------------------
+
     @classmethod
-    def mark_failed(cls, message_id, retry_count, error):
+    def mark_failed(
+        cls,
+        message_id,
+        retry_count,
+        error,
+        organization_id=None
+    ):
         return cls.update_retry_info(
             message_id=message_id,
             retry_count=retry_count,
             old_status="PROCESSING",
             new_status="FAILED",
-            error=str(error)
+            error=str(error),
+            organization_id=organization_id
         )
+    # --------------------------------------------------
+    # MARK MESSAGE SENT
+    # --------------------------------------------------
 
     @classmethod
-    def mark_sent(cls, message_id, provider, provider_message_id):
+    def mark_sent(
+        cls,
+        message_id,
+        provider,
+        provider_message_id,
+        organization_id=None
+    ):
         now = cls._now()
 
+        query = {
+            "message_id": message_id,
+            "status": "PROCESSING"
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
         result = cls._collection().update_one(
-            {
-                "message_id": message_id,
-                "status": "PROCESSING"
-            },
+            query,
             {
                 "$set": {
                     "status": "SENT",
@@ -146,16 +229,29 @@ class MessageRepository:
         )
 
         return result.modified_count > 0
+    # --------------------------------------------------
+    # MANUAL RETRY
+    # --------------------------------------------------
 
     @classmethod
-    def requeue_dead_message(cls, message_id, previous_retry_count):
+    def requeue_dead_message(
+        cls,
+        message_id,
+        previous_retry_count,
+        organization_id=None
+    ):
         now = cls._now()
 
+        query = {
+            "message_id": message_id,
+            "status": "DEAD"
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
         result = cls._collection().update_one(
-            {
-                "message_id": message_id,
-                "status": "DEAD"
-            },
+            query,
             {
                 "$set": {
                     "status": "QUEUED",
@@ -184,21 +280,30 @@ class MessageRepository:
         )
 
         return result.modified_count > 0
+    # --------------------------------------------------
+    # ROLLBACK MANUAL RETRY
+    # --------------------------------------------------
 
     @classmethod
     def rollback_manual_retry(
         cls,
         message_id,
         previous_retry_count,
-        previous_manual_retry_count
+        previous_manual_retry_count,
+        organization_id=None
     ):
         now = cls._now()
 
+        query = {
+            "message_id": message_id,
+            "status": "QUEUED"
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
         result = cls._collection().update_one(
-            {
-                "message_id": message_id,
-                "status": "QUEUED"
-            },
+            query,
             {
                 "$set": {
                     "status": "DEAD",

@@ -1,3 +1,4 @@
+
 from app.engine.message_engine import MessageEngine
 from app.modules.messages.repository import MessageRepository
 from app.engine.status_manager import StatusManager
@@ -7,17 +8,20 @@ from flask import current_app
 class MessageService:
 
     @staticmethod
-    def create_message(payload):
-    
+    def create_message(payload, organization_id):
+
         result = MessageEngine.prepare_message(payload)
-    
+
         if not result["success"]:
             return result
-    
+
         message = result["message"]
-    
+
+        # Never trust organization_id supplied by the client.
+        message["organization_id"] = organization_id
+
         saved_message = MessageRepository.save(message)
-    
+
         return {
             "success": True,
             "message": saved_message,
@@ -25,19 +29,28 @@ class MessageService:
         }
 
     @staticmethod
-    def get_message(message_id):
+    def get_message(message_id, organization_id):
 
-        return MessageRepository.find_by_id(message_id)
-
-    @staticmethod
-    def get_all_messages(limit=50):
-
-        return MessageRepository.find_all(limit)
+        return MessageRepository.find_by_id(
+            message_id,
+            organization_id=organization_id
+        )
 
     @staticmethod
-    def update_status(message_id, new_status):
+    def get_all_messages(organization_id, limit=50):
 
-        message = MessageRepository.find_by_id(message_id)
+        return MessageRepository.find_all(
+            limit=limit,
+            organization_id=organization_id
+        )
+
+    @staticmethod
+    def update_status(message_id, new_status, organization_id):
+
+        message = MessageRepository.find_by_id(
+            message_id,
+            organization_id=organization_id
+        )
 
         if not message:
             return {
@@ -58,7 +71,8 @@ class MessageService:
         updated = MessageRepository.update_status(
             message_id,
             new_status,
-            current_status
+            current_status,
+            organization_id=organization_id
         )
 
         if not updated:
@@ -70,7 +84,10 @@ class MessageService:
         response = {
             "success": True,
             "message": "Message status updated successfully",
-            "data": MessageRepository.find_by_id(message_id)
+            "data": MessageRepository.find_by_id(
+                message_id,
+                organization_id=organization_id
+            )
         }
 
         if new_status == "QUEUED":
@@ -94,8 +111,10 @@ class MessageService:
 
                 response["queue"] = {
                     "dispatched": False,
-                    "message": "Message saved as QUEUED, but task dispatch failed"
+                    "message": (
+                        "Message saved as QUEUED, "
+                        "but task dispatch failed"
+                    )
                 }
 
         return response
-

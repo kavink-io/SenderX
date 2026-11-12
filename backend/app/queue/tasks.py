@@ -5,12 +5,14 @@ from flask import current_app
 from app.engine.retry_manager import RetryManager
 from app.engine.status_manager import StatusManager
 from app.adapters.adapter_registry import AdapterRegistry
+
 from app.modules.messages.repository import MessageRepository
 from app.modules.dead_letters.repository import DeadLetterRepository
 
 
 @shared_task(name="senderx.test_task")
 def test_task(message):
+
     current_app.logger.info(
         f"SenderX Background Task: {message}"
     )
@@ -21,9 +23,14 @@ def test_task(message):
     }
 
 
-@shared_task(bind=True, name="senderx.process_message", max_retries=3)
+@shared_task(
+    bind=True,
+    name="senderx.process_message",
+    max_retries=3
+)
 def process_message(self, message_id):
 
+    # 1. Retrieve message and its trusted organization ID.
     message = MessageRepository.find_by_id(message_id)
 
     if not message:
@@ -31,6 +38,8 @@ def process_message(self, message_id):
             "success": False,
             "message": "Message not found"
         }
+
+    organization_id = message.get("organization_id")
 
     current_status = message.get("status")
 
@@ -40,6 +49,7 @@ def process_message(self, message_id):
             "message": f"Message cannot be processed: {current_status}"
         }
 
+    # 2. Validate status transition.
     transition = StatusManager.transition(
         current_status,
         "PROCESSING"
@@ -48,10 +58,12 @@ def process_message(self, message_id):
     if not transition["success"]:
         return transition
 
+    # 3. Update status with organization scope.
     updated = MessageRepository.update_status(
-        message_id,
-        "PROCESSING",
-        current_status
+        message_id=message_id,
+        new_status="PROCESSING",
+        old_status=current_status,
+        organization_id=organization_id
     )
 
     if not updated:
@@ -65,6 +77,8 @@ def process_message(self, message_id):
     )
 
     try:
+
+        # 4. Send through the configured provider.
         provider = message.get("provider")
 
         if not provider:
@@ -79,10 +93,12 @@ def process_message(self, message_id):
                 "Provider did not accept the message"
             )
 
+        # 5. Mark message as SENT.
         saved = MessageRepository.mark_sent(
             message_id=message_id,
             provider=provider,
-            provider_message_id=result.get("provider_message_id")
+            provider_message_id=result.get("provider_message_id"),
+            organization_id=organization_id
         )
 
         if not saved:
@@ -92,7 +108,10 @@ def process_message(self, message_id):
 
             return {
                 "success": False,
-                "message": "Provider accepted email, but status update failed"
+                "message": (
+                    "Provider accepted message, "
+                    "but status update failed"
+                )
             }
 
         current_app.logger.info(
@@ -114,13 +133,14 @@ def process_message(self, message_id):
 
         retryable = RetryManager.is_retryable_error(error)
 
-        # Permanent errors must not be retried.
+        # 6. Permanent errors must not be retried.
         if not retryable:
 
             saved = MessageRepository.mark_failed(
                 message_id=message_id,
                 retry_count=retry_count,
-                error=error_message
+                error=error_message,
+                organization_id=organization_id
             )
 
             current_app.logger.error(
@@ -135,10 +155,10 @@ def process_message(self, message_id):
                 "error": error_message
             }
 
-        # Temporary error: check retry limit.
+        # 7. Temporary error: check retry limit.
         retry_info = RetryManager.get_retry_status(retry_count)
 
-        # All retry attempts exhausted.
+        # 8. All automatic retry attempts exhausted.
         if not retry_info["success"]:
 
             saved = MessageRepository.update_retry_info(
@@ -146,7 +166,8 @@ def process_message(self, message_id):
                 retry_count=retry_count,
                 old_status="PROCESSING",
                 new_status="DEAD",
-                error=error_message
+                error=error_message,
+                organization_id=organization_id
             )
 
             if not saved:
@@ -160,10 +181,34 @@ def process_message(self, message_id):
                     "status": "STATUS_UPDATE_FAILED"
                 }
 
-            # Fetch the latest message, including DEAD status
-            dead_message = MessageRepository.find_by_id(message_id)
+            # Fetch the latest message, including DEAD status.
+            dead_message = MessageRepository.find_by_id(
+                message_id,
+                organization_id=organization_id
+            )
 
+            if not dead_message:
+                current_app.logger.error(
+                    f"Could not retrieve DEAD message {message_id}"
+                )
+
+                return {
+                    "success": False,
+                    "message_id": message_id,
+                    "status": "DEAD",
+                    "dlq_saved": False
+                }
+
+            # 9. Save the message in the Dead Letter Queue.
             try:
+
+                current_app.logger.info(
+                "DLQ DEBUG | message_id=%s | organization_id=%s | keys=%s",
+                message_id,
+                dead_message.get("organization_id"),
+                list(dead_message.keys())
+)
+
                 DeadLetterRepository.save_from_message(
                     message=dead_message,
                     error=error_message
@@ -174,6 +219,7 @@ def process_message(self, message_id):
                 )
 
             except Exception:
+
                 current_app.logger.exception(
                     f"Failed to store message {message_id} in DLQ"
                 )
@@ -195,7 +241,7 @@ def process_message(self, message_id):
                 "error": error_message
             }
 
-        # Retry is available.
+        # 10. Automatic retry is available.
         delay = retry_info["delay"]
         next_retry_count = retry_info["retry_count"]
 
@@ -204,7 +250,8 @@ def process_message(self, message_id):
             retry_count=next_retry_count,
             old_status="PROCESSING",
             new_status="RETRYING",
-            error=error_message
+            error=error_message,
+            organization_id=organization_id
         )
 
         if not saved:
@@ -242,6 +289,7 @@ def retry_test_task(self):
     )
 
     try:
+
         raise ConnectionError(
             "Simulated provider connection failure"
         )

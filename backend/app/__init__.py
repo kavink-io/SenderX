@@ -12,6 +12,7 @@ from app.modules.messages.routes import messages_bp
 from app.modules.validation.routes import validation_bp
 from app.modules.dead_letters.routes import dead_letters_bp
 from app.config.settings import Config
+from app.modules.organizations.routes import organizations_bp
 from app.extensions import (
     api,
     cors,
@@ -48,6 +49,10 @@ def create_app():
     app.register_blueprint(
     auth_bp,
     url_prefix="/api/v1/auth"
+    )
+    app.register_blueprint(
+    organizations_bp,
+    url_prefix="/api/v1/organizations"
     )
     app.register_blueprint(
     health_bp,

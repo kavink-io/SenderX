@@ -48,3 +48,16 @@ class AuthRepository:
                 }
             }
         ).modified_count > 0
+
+    @classmethod
+    def find_user_by_email(cls, email):
+        return current_app.mongo_db["users"].find_one({
+            "email": email.lower().strip()
+        })
+
+    @classmethod
+    def update_user_last_login(cls, user_id):
+        return current_app.mongo_db["users"].update_one(
+            {"user_id": user_id},
+            {"$set": {"last_login_at": cls._now()}}
+        ).modified_count > 0

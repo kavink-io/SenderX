@@ -92,26 +92,32 @@ class DeadLetterRepository:
         )
 
         snapshot_fields = [
-            "message_id",
-            "channel",
-            "provider",
-            "recipient",
-            "data",
-            "status",
-            "retry_count",
-            "last_error",
-            "status_history",
-            "created_at",
-            "updated_at",
-            "provider_message_id",
-            "manual_retry_count"
-        ]
+                "message_id",
+                "organization_id",
+                "channel",
+                "provider",
+                "recipient",
+                "data",
+                "status",
+                "retry_count",
+                "last_error",
+                "status_history",
+                "created_at",
+                "updated_at",
+                "provider_message_id",
+                "manual_retry_count"
+            ]
 
         snapshot = {
             field: message[field]
             for field in snapshot_fields
             if field in message
         }
+
+        organization_id = message.get("organization_id")
+
+        if organization_id:
+            snapshot["organization_id"] = organization_id
 
         snapshot["last_error"] = str(error)
         snapshot["dead_letter_status"] = "PENDING_REVIEW"
@@ -183,34 +189,44 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     @classmethod
-    def find_by_message_id(cls, message_id):
+    def find_by_message_id(cls, message_id, organization_id=None):
+
+        query = {
+            "message_id": message_id
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
 
         return cls._collection().find_one(
-            {"message_id": message_id},
+            query,
             {"_id": 0}
         )
 
     # --------------------------------------------------
     # FIND ALL DEAD LETTERS
     # --------------------------------------------------
-
+    
     @classmethod
     def find_all(
-        cls,
-        limit=50,
-        page=1,
-        status=None,
-        message_id=None,
-        recipient=None,
-        provider=None,
-        include_metadata=False
-    ):
+    cls,
+    limit=50,
+    page=1,
+    status=None,
+    message_id=None,
+    recipient=None,
+    provider=None,
+    include_metadata=False,
+    organization_id=None
+):
         """
         Retrieve dead letters with optional filtering
         and pagination.
         """
 
         query = {}
+        if organization_id is not None:
+            query["organization_id"] = organization_id
 
         if status:
             query["dead_letter_status"] = status.strip().upper()
@@ -268,12 +284,18 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     @classmethod
-    def get_statistics(cls):
+    def get_statistics(cls, organization_id=None):
         """
         Generate DLQ monitoring statistics.
         """
 
         pipeline = [
+            {
+                "$match": {
+                    "organization_id": organization_id
+                }
+                if organization_id is not None else {}
+            },
             {
                 "$facet": {
 
@@ -404,14 +426,20 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     @classmethod
-    def get_provider_analytics(cls):
+    def get_provider_analytics(cls, organization_id=None):
         """
         Generate provider-wise DLQ failure analytics.
         """
 
         collection = cls._collection()
 
-        total = collection.count_documents({})
+        match_criteria = {"organization_id": organization_id} if organization_id is not None else {}
+        query = {}
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
+        total = collection.count_documents(query)
 
         provider_pipeline = [
             {
@@ -444,7 +472,9 @@ class DeadLetterRepository:
         ]
 
         provider_results = list(
-            collection.aggregate(provider_pipeline)
+            collection.aggregate(
+                ([{"$match": query}] if query else []) + provider_pipeline
+            )
         )
 
         providers = []
@@ -527,7 +557,8 @@ class DeadLetterRepository:
         cls,
         start_date=None,
         end_date=None,
-        provider=None
+        provider=None,
+        organization_id=None
     ):
         """
         Generate:
@@ -605,6 +636,15 @@ class DeadLetterRepository:
         pipeline = [
 
             # Convert stored ISO timestamps into dates
+
+            {
+                "$match": (
+                    {"organization_id": organization_id}
+                    if organization_id is not None
+                    else {}
+                )
+            },
+
             {
                 "$addFields": {
                     "parsed_dead_lettered_at": {
@@ -895,10 +935,14 @@ class DeadLetterRepository:
     # MANUAL RETRY REQUEST
     # --------------------------------------------------
 
-    @classmethod
-    def mark_retry_requested(cls, message_id):
 
-        current = cls.find_by_message_id(message_id)
+    @classmethod
+    def mark_retry_requested(cls, message_id, organization_id=None):
+
+        current = cls.find_by_message_id(
+            message_id,
+            organization_id=organization_id
+        )
 
         if not current:
             return None
@@ -907,15 +951,19 @@ class DeadLetterRepository:
         next_count = current_count + 1
 
         now = cls._now()
-
         task_id = str(uuid.uuid4())
 
+        query = {
+            "message_id": message_id,
+            "dead_letter_status": "PENDING_REVIEW",
+            "manual_retry_count": current_count
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
         result = cls._collection().update_one(
-            {
-                "message_id": message_id,
-                "dead_letter_status": "PENDING_REVIEW",
-                "manual_retry_count": current_count
-            },
+            query,
             {
                 "$set": {
                     "dead_letter_status": "RETRY_REQUESTED",
@@ -946,21 +994,27 @@ class DeadLetterRepository:
             "task_id": task_id,
             "attempt": next_count
         }
+
     # --------------------------------------------------
     # RESTORE PENDING REVIEW
     # --------------------------------------------------
 
     @classmethod
-    def restore_pending_review(cls, message_id):
+    def restore_pending_review(cls, message_id, organization_id=None):
 
         now = cls._now()
 
+        query = {
+            "message_id": message_id,
+            "dead_letter_status": "RETRY_REQUESTED",
+            "manual_retry_dispatch_state": "DISPATCHING"
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
         result = cls._collection().update_one(
-            {
-                "message_id": message_id,
-                "dead_letter_status": "RETRY_REQUESTED",
-                "manual_retry_dispatch_state": "DISPATCHING"
-            },
+            query,
             {
                 "$set": {
                     "dead_letter_status": "PENDING_REVIEW",
@@ -991,17 +1045,27 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     @classmethod
-    def mark_retry_queued(cls, message_id, task_id):
+    def mark_retry_queued(
+        cls,
+        message_id,
+        task_id,
+        organization_id=None
+    ):
 
         now = cls._now()
 
+        query = {
+            "message_id": message_id,
+            "dead_letter_status": "RETRY_REQUESTED",
+            "manual_retry_dispatch_state": "DISPATCHING",
+            "manual_retry_task_id": task_id
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
         result = cls._collection().update_one(
-            {
-                "message_id": message_id,
-                "dead_letter_status": "RETRY_REQUESTED",
-                "manual_retry_dispatch_state": "DISPATCHING",
-                "manual_retry_task_id": task_id
-            },
+            query,
             {
                 "$set": {
                     "dead_letter_status": "RETRY_QUEUED",
@@ -1033,17 +1097,28 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     @classmethod
-    def mark_retry_dispatch_failed(cls, message_id, error, task_id):
+    def mark_retry_dispatch_failed(
+        cls,
+        message_id,
+        error,
+        task_id,
+        organization_id=None
+    ):
 
         now = cls._now()
 
+        query = {
+            "message_id": message_id,
+            "dead_letter_status": "RETRY_REQUESTED",
+            "manual_retry_dispatch_state": "DISPATCHING",
+            "manual_retry_task_id": task_id
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
         result = cls._collection().update_one(
-            {
-                "message_id": message_id,
-                "dead_letter_status": "RETRY_REQUESTED",
-                "manual_retry_dispatch_state": "DISPATCHING",
-                "manual_retry_task_id": task_id
-            },
+            query,
             {
                 "$set": {
                     "dead_letter_status": "PENDING_REVIEW",
@@ -1077,12 +1152,17 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     @classmethod
-    def delete_by_message_id(cls, message_id):
+    def delete_by_message_id(cls, message_id, organization_id=None):
 
-        result = cls._collection().delete_one({
+        query = {
             "message_id": message_id,
             "dead_letter_status": "PENDING_REVIEW"
-        })
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
+        result = cls._collection().delete_one(query)
 
         return result.deleted_count > 0
 

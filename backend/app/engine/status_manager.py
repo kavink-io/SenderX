@@ -19,7 +19,8 @@ class StatusManager:
         "CREATED": [
             "VALIDATED",
             "FAILED",
-            "CANCELLED"
+            "CANCELLED",
+            "QUEUED"
         ],
 
         "VALIDATED": [

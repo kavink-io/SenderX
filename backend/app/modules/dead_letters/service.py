@@ -14,7 +14,8 @@ class DeadLetterService:
         status=None,
         message_id=None,
         recipient=None,
-        provider=None
+        provider=None,
+        organization_id=None
     ):
         try:
             limit = int(limit)
@@ -39,7 +40,8 @@ class DeadLetterService:
                 message_id=message_id,
                 recipient=recipient,
                 provider=provider,
-                include_metadata=True
+                include_metadata=True,
+                organization_id=organization_id
             )
 
             return {
@@ -72,10 +74,13 @@ class DeadLetterService:
                 "message": "Failed to retrieve dead letters"
             }
 
+        
     @staticmethod
-    def get_statistics():
+    def get_statistics(organization_id=None):
         try:
-            statistics = DeadLetterRepository.get_statistics()
+            statistics = DeadLetterRepository.get_statistics(
+                organization_id=organization_id
+            )
 
             return {
                 "success": True,
@@ -91,11 +96,12 @@ class DeadLetterService:
                 "success": False,
                 "message": "Failed to retrieve DLQ statistics"
             }
-
     @staticmethod
-    def get_provider_analytics():
+    def get_provider_analytics(organization_id=None):
         try:
-            analytics = DeadLetterRepository.get_provider_analytics()
+            analytics = DeadLetterRepository.get_provider_analytics(
+                organization_id=organization_id
+            )
 
             return {
                 "success": True,
@@ -113,10 +119,11 @@ class DeadLetterService:
             }
 
     @staticmethod
-    def get_dead_letter(message_id):
+    def get_dead_letter(message_id, organization_id=None):
         try:
             dead_letter = DeadLetterRepository.find_by_message_id(
-                message_id
+                message_id,
+                organization_id=organization_id
             )
 
             if not dead_letter:
@@ -141,11 +148,13 @@ class DeadLetterService:
                 "message": "Failed to retrieve dead letter"
             }
 
+        
     @staticmethod
-    def get_retry_history(message_id):
+    def get_retry_history(message_id, organization_id=None):
         try:
             dead_letter = DeadLetterRepository.find_by_message_id(
-                message_id
+                message_id,
+                organization_id=organization_id
             )
 
             if not dead_letter:
@@ -176,12 +185,8 @@ class DeadLetterService:
                     "automatic_retry_count": dead_letter.get(
                         "retry_count", 0
                     ),
-                    "total_manual_attempts": len(
-                        manual_retry_history
-                    ),
-                    "total_failure_cycles": len(
-                        failure_cycles
-                    )
+                    "total_manual_attempts": len(manual_retry_history),
+                    "total_failure_cycles": len(failure_cycles)
                 },
                 "manual_retry_history": manual_retry_history,
                 "failure_cycles": failure_cycles,
@@ -198,9 +203,14 @@ class DeadLetterService:
                 "success": False,
                 "message": "Failed to retrieve retry history"
             }
-
+            
+    
     @staticmethod
-    def delete_dead_letter(message_id, confirm=False):
+    def delete_dead_letter(
+        message_id,
+        confirm=False,
+        organization_id=None
+    ):
         try:
             if confirm is not True:
                 return {
@@ -209,7 +219,8 @@ class DeadLetterService:
                 }
 
             dead_letter = DeadLetterRepository.find_by_message_id(
-                message_id
+                message_id,
+                organization_id=organization_id
             )
 
             if not dead_letter:
@@ -225,7 +236,8 @@ class DeadLetterService:
                 }
 
             deleted = DeadLetterRepository.delete_by_message_id(
-                message_id
+                message_id,
+                organization_id=organization_id
             )
 
             if not deleted:
@@ -257,8 +269,9 @@ class DeadLetterService:
                 "message": "Failed to delete dead letter"
             }
 
+    
     @staticmethod
-    def retry_dead_letter(message_id):
+    def retry_dead_letter(message_id, organization_id=None):
 
         reserved = False
         requeued = False
@@ -268,9 +281,10 @@ class DeadLetterService:
         previous_manual_retry_count = 0
 
         try:
-            # 1. Retrieve DLQ record.
+            # 1. Retrieve DLQ record within the tenant.
             dead_letter = DeadLetterRepository.find_by_message_id(
-                message_id
+                message_id,
+                organization_id=organization_id
             )
 
             if not dead_letter:
@@ -285,8 +299,11 @@ class DeadLetterService:
                     "message": "Dead letter is not available for retry"
                 }
 
-            # 2. Retrieve original message.
-            message = MessageRepository.find_by_id(message_id)
+            # 2. Retrieve original message within the same tenant.
+            message = MessageRepository.find_by_id(
+                message_id,
+                organization_id=organization_id
+            )
 
             if not message:
                 return {
@@ -300,14 +317,16 @@ class DeadLetterService:
                     "message": "Original message is not in DEAD status"
                 }
 
+            # 3. Preserve previous retry counters.
             previous_retry_count = message.get("retry_count", 0)
             previous_manual_retry_count = message.get(
                 "manual_retry_count", 0
             )
 
-            # 3. Reserve DLQ and persist dispatch intent.
+            # 4. Reserve DLQ record for retry.
             dispatch = DeadLetterRepository.mark_retry_requested(
-                message_id
+                message_id,
+                organization_id=organization_id
             )
 
             if not dispatch:
@@ -319,15 +338,17 @@ class DeadLetterService:
             reserved = True
             task_id = dispatch["task_id"]
 
-            # 4. Requeue original message.
+            # 5. Requeue the original message within the tenant.
             requeued = MessageRepository.requeue_dead_message(
                 message_id,
-                previous_retry_count
+                previous_retry_count,
+                organization_id=organization_id
             )
 
             if not requeued:
                 restored = DeadLetterRepository.restore_pending_review(
-                    message_id
+                    message_id,
+                    organization_id=organization_id
                 )
 
                 return {
@@ -336,7 +357,7 @@ class DeadLetterService:
                     "dlq_restored": restored
                 }
 
-            # 5. Publish using the pre-generated task ID.
+            # 6. Publish using the pre-generated task ID.
             try:
                 task = current_app.celery.send_task(
                     "senderx.process_message",
@@ -352,10 +373,8 @@ class DeadLetterService:
                     message_id
                 )
 
-                # Do NOT roll back here.
-                # The broker may have accepted the task before the
-                # publishing error was reported.
-
+                # Do not roll back. The broker may have accepted
+                # the task before the publishing error was reported.
                 return {
                     "success": False,
                     "message": "Dispatch outcome uncertain; recovery required",
@@ -365,10 +384,11 @@ class DeadLetterService:
                     "error": str(error)
                 }
 
-            # 6. Record successful dispatch.
+            # 7. Record successful dispatch within the tenant.
             audit_updated = DeadLetterRepository.mark_retry_queued(
                 message_id,
-                task.id
+                task.id,
+                organization_id=organization_id
             )
 
             if not audit_updated:
@@ -405,17 +425,19 @@ class DeadLetterService:
                 message_id
             )
 
-            # Only compensate before a dispatch has been attempted.
+            # Compensate only if dispatch has not been attempted.
             if reserved and requeued and not dispatched:
                 try:
                     rollback_success = MessageRepository.rollback_manual_retry(
                         message_id,
                         previous_retry_count,
-                        previous_manual_retry_count
+                        previous_manual_retry_count,
+                        organization_id=organization_id
                     )
 
                     restored = DeadLetterRepository.restore_pending_review(
-                        message_id
+                        message_id,
+                        organization_id=organization_id
                     )
 
                 except Exception:
@@ -439,17 +461,20 @@ class DeadLetterService:
                 "message": "Unexpected error; inspect dispatch state",
                 "message_id": message_id
             }
+
     @staticmethod
     def get_failure_trends(
         start_date=None,
         end_date=None,
-        provider=None
+        provider=None,
+        organization_id=None
     ):
         try:
             trends = DeadLetterRepository.get_daily_failure_trends(
                 start_date=start_date,
                 end_date=end_date,
-                provider=provider
+                provider=provider,
+                organization_id=organization_id
             )
 
             return {
