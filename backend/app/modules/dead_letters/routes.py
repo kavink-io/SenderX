@@ -364,6 +364,64 @@ def get_organization_failure_trends():
 
 
 
+@dead_letters_bp.route(
+    "/organization/<string:message_id>/payload",
+    methods=["PUT", "POST"]
+)
+@require_permissions("organization:payloads:edit")
+def edit_organization_dead_letter_payload(message_id):
+    """Edit payload directly from DLQ entry view."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"success": False, "message": "Valid JSON body is required"}), 400
+
+    if "payload" in data and isinstance(data["payload"], dict):
+        edited_json = data["payload"]
+        reason = data.get("reason", "Payload edited from DLQ")
+    else:
+        edited_json = dict(data)
+        reason = edited_json.pop("reason", "Payload edited from DLQ")
+
+    organization_id = g.current_organization["organization_id"]
+    user_id = g.current_user["user_id"]
+
+    from app.modules.payloads.service import PayloadService
+    result = PayloadService.edit_payload(
+        payload_id=message_id,
+        organization_id=organization_id,
+        edited_json=edited_json,
+        user_id=user_id,
+        reason=reason
+    )
+    return jsonify(result), result.get("status_code", 200)
+
+
+@dead_letters_bp.route(
+    "/organization/<string:message_id>/validate",
+    methods=["POST"]
+)
+@require_permissions("organization:payloads:validate")
+def validate_organization_dead_letter_payload(message_id):
+    """Validate payload directly from DLQ entry view."""
+    data = request.get_json(silent=True) or {}
+    version_num = data.get("version")
+    if version_num is not None:
+        try:
+            version_num = int(version_num)
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "message": "version must be an integer"}), 400
+
+    organization_id = g.current_organization["organization_id"]
+
+    from app.modules.payloads.service import PayloadService
+    result = PayloadService.validate_payload(
+        payload_id=message_id,
+        organization_id=organization_id,
+        version_num=version_num
+    )
+    return jsonify(result), result.get("status_code", 200)
+
+
 # --------------------------------------------------
 # ORGANIZATION DLQ MANAGEMENT ENDPOINTS
 # --------------------------------------------------

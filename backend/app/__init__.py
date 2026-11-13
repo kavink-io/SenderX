@@ -13,6 +13,13 @@ from app.modules.validation.routes import validation_bp
 from app.modules.dead_letters.routes import dead_letters_bp
 from app.config.settings import Config
 from app.modules.organizations.routes import organizations_bp
+from app.modules.users.routes import users_bp
+from app.modules.analytics.routes import analytics_bp
+from app.modules.templates.routes import templates_bp
+from app.modules.media.routes import media_bp
+from app.modules.payloads.routes import payloads_bp
+from app.modules.api_credentials.routes import api_credentials_bp
+from app.modules.applications.routes import applications_bp
 from app.extensions import (
     api,
     cors,
@@ -29,9 +36,18 @@ def create_app():
 
     cors.init_app(app)
 
+    mongo_kwargs = {
+        "serverSelectionTimeoutMS": 5000
+    }
+    try:
+        import certifi
+        mongo_kwargs["tlsCAFile"] = certifi.where()
+    except Exception:
+        pass
+
     app.mongo_client = MongoClient(
         app.config["MONGO_URI"],
-        serverSelectionTimeoutMS=3000
+        **mongo_kwargs
     )
 
     app.mongo_db = app.mongo_client[
@@ -53,6 +69,10 @@ def create_app():
     app.register_blueprint(
     organizations_bp,
     url_prefix="/api/v1/organizations"
+    )
+    app.register_blueprint(
+    users_bp,
+    url_prefix="/api/v1/users"
     )
     app.register_blueprint(
     health_bp,
@@ -86,7 +106,36 @@ def create_app():
     validation_bp,
     url_prefix="/api/v1/validation"
     )
+    app.register_blueprint(
+    analytics_bp,
+    url_prefix="/api/v1/analytics"
+    )
+    app.register_blueprint(
+    templates_bp,
+    url_prefix="/api/v1/templates"
+    )
+    app.register_blueprint(
+    media_bp,
+    url_prefix="/api/v1/media"
+    )
+    app.register_blueprint(
+    payloads_bp,
+    url_prefix="/api/v1/payloads"
+    )
+    app.register_blueprint(
+    api_credentials_bp,
+    url_prefix="/api/v1/api-credentials"
+    )
+    app.register_blueprint(
+    applications_bp,
+    url_prefix="/api/v1/applications"
+    )
     app.celery = create_celery(app)
-    
+
+    try:
+        from app.config.database_indexes import ensure_database_indexes
+        ensure_database_indexes(app)
+    except Exception as e:
+        app.logger.warning(f"Could not initialize database indexes: {e}")
 
     return app

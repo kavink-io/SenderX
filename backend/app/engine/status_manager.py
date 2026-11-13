@@ -49,11 +49,13 @@ class StatusManager:
 
         "SENT": [
             "DELIVERED",
+            "READ",
             "FAILED"
         ],
 
         "DELIVERED": [
-            "READ"
+            "READ",
+            "FAILED"
         ],
 
         "READ": [],
@@ -65,7 +67,9 @@ class StatusManager:
 
         "CANCELLED": [],
 
-        "DEAD": []
+        "DEAD": [
+            "QUEUED"
+        ]
     }
 
     @classmethod

@@ -25,7 +25,19 @@ class OrganizationService:
         "organization:providers:read",
         "organization:providers:manage",
         "organization:configuration:manage",
-        "organization:analytics:read"
+        "organization:analytics:read",
+        "organization:templates:read",
+        "organization:templates:manage",
+        "organization:templates:create",
+        "organization:media:upload",
+        "organization:media:read",
+        "organization:media:delete",
+        "organization:media:manage",
+        "organization:payloads:read",
+        "organization:payloads:edit",
+        "organization:payloads:validate",
+        "organization:dlq:read",
+        "organization:dlq:retry"
     ]
 
     @staticmethod
@@ -208,3 +220,48 @@ class OrganizationService:
                 "message": "Organization creation failed",
                 "error_type": type(error).__name__
             }
+
+    @staticmethod
+    def list_organizations(limit=50, page=1):
+        return OrganizationRepository.find_all(limit=limit, page=page)
+
+    @staticmethod
+    def get_organization(organization_id):
+        org = OrganizationRepository.find_by_id(organization_id)
+        if not org:
+            return {"success": False, "message": "Organization not found"}
+        return {
+            "success": True,
+            "data": {
+                "organization_id": org["organization_id"],
+                "name": org["name"],
+                "slug": org["slug"],
+                "status": org.get("status", "ACTIVE"),
+                "created_at": org.get("created_at"),
+                "created_by": org.get("created_by")
+            }
+        }
+
+    @staticmethod
+    def update_organization_status(organization_id, status):
+        status = str(status).upper().strip()
+        if status not in ("ACTIVE", "INACTIVE"):
+            return {"success": False, "message": "Status must be either ACTIVE or INACTIVE"}
+
+        org = OrganizationRepository.find_by_id(organization_id)
+        if not org:
+            return {"success": False, "message": "Organization not found"}
+
+        OrganizationRepository._collection().update_one(
+            {"organization_id": organization_id},
+            {"$set": {"status": status, "updated_at": OrganizationRepository._now()}}
+        )
+
+        return {
+            "success": True,
+            "message": f"Organization status updated to {status}",
+            "data": {
+                "organization_id": organization_id,
+                "status": status
+            }
+        }

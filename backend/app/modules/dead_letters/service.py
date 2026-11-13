@@ -44,6 +44,8 @@ class DeadLetterService:
                 organization_id=organization_id
             )
 
+            from app.modules.payloads.models import redact_sensitive_payload
+
             return {
                 "success": True,
                 "count": len(result["items"]),
@@ -55,7 +57,7 @@ class DeadLetterService:
                     "recipient": recipient,
                     "provider": provider
                 },
-                "data": result["items"]
+                "data": [redact_sensitive_payload(item) for item in result["items"]]
             }
 
         except (TypeError, ValueError):
@@ -132,9 +134,11 @@ class DeadLetterService:
                     "message": "Dead letter not found"
                 }
 
+            from app.modules.payloads.models import redact_sensitive_payload
+
             return {
                 "success": True,
-                "data": dead_letter
+                "data": redact_sensitive_payload(dead_letter)
             }
 
         except Exception:
@@ -298,6 +302,15 @@ class DeadLetterService:
                     "success": False,
                     "message": "Dead letter is not available for retry"
                 }
+
+            # If this DLQ entry was created from an unrouted or invalid ingested payload
+            if dead_letter.get("dead_letter_source") == "INGESTION_ROUTING":
+                from app.modules.payloads.service import PayloadService
+                return PayloadService.retry_payload(
+                    payload_id=dead_letter.get("payload_id", message_id),
+                    organization_id=organization_id,
+                    user_id=None
+                )
 
             # 2. Retrieve original message within the same tenant.
             message = MessageRepository.find_by_id(
@@ -891,4 +904,44 @@ class DeadLetterService:
             return {
                 "success": False,
                 "message": "Recovery resolution failed"
+            }
+
+    @staticmethod
+    def mark_retry_dispatch_failed(message_id, task_id, error="Dispatch failed", organization_id=None):
+        """Mark manual retry dispatch as failed (DISPATCH_FAILED) and return DLQ to PENDING_REVIEW."""
+        try:
+            success = DeadLetterRepository.mark_retry_dispatch_failed(
+                message_id=message_id,
+                error=error,
+                task_id=task_id,
+                organization_id=organization_id
+            )
+            return {
+                "success": success,
+                "message": "Dispatch marked as failed" if success else "Failed to update dispatch state"
+            }
+        except Exception:
+            current_app.logger.exception("Failed to mark dispatch failed for %s", message_id)
+            return {
+                "success": False,
+                "message": "Error updating dispatch failure state"
+            }
+
+    @staticmethod
+    def cancel_retry_dispatch(message_id, organization_id=None):
+        """Cancel an in-flight manual retry dispatch (CANCELLED) and restore DLQ to PENDING_REVIEW."""
+        try:
+            success = DeadLetterRepository.restore_pending_review(
+                message_id=message_id,
+                organization_id=organization_id
+            )
+            return {
+                "success": success,
+                "message": "Manual retry cancelled and restored to pending review" if success else "Could not cancel retry dispatch"
+            }
+        except Exception:
+            current_app.logger.exception("Failed to cancel retry dispatch for %s", message_id)
+            return {
+                "success": False,
+                "message": "Error cancelling retry dispatch"
             }

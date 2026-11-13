@@ -135,6 +135,15 @@ class AuthService:
         user_id = user["user_id"]
         organization_id = user["organization_id"]
 
+        # 3. Check organization status
+        from app.modules.organizations.repository import OrganizationRepository
+        organization = OrganizationRepository.find_by_id(organization_id)
+        if not organization or organization.get("status") != "ACTIVE":
+            return {
+                "success": False,
+                "message": "Organization is inactive or unavailable"
+            }
+
         claims = {
             "account_type": "ORGANIZATION_USER",
             "organization_id": organization_id,

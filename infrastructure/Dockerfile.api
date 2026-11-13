@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install python dependencies
+COPY backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt gunicorn pytest
+
+# Copy application source code
+COPY backend/ /app/
+
+# Expose API port
+EXPOSE 5000
+
+# Run API via Gunicorn WSGI server
+CMD ["gunicorn", "--config", "gunicorn_config.py", "run:app"]

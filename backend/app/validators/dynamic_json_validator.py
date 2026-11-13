@@ -13,6 +13,8 @@ class DynamicJSONValidator:
         "telegram",
         "slack",
         "microsoft_teams",
+        "teams",
+        "msteams",
         "webhook"
     }
 

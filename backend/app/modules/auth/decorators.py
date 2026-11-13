@@ -142,8 +142,19 @@ def require_permissions(*required_permissions):
                     "message": "Invalid wildcard permission configuration"
                 }), 403
 
+            # Expand granted permissions with aliases for backward/forward compatibility
+            effective_permissions = set(granted_permissions)
+            if "organization:dead_letters:read" in granted_permissions:
+                effective_permissions.add("organization:dlq:read")
+            if "organization:dlq:read" in granted_permissions:
+                effective_permissions.add("organization:dead_letters:read")
+            if "organization:dead_letters:manage" in granted_permissions:
+                effective_permissions.add("organization:dlq:retry")
+            if "organization:dlq:retry" in granted_permissions:
+                effective_permissions.add("organization:dead_letters:manage")
+
             missing_permissions = (
-                set(required_permissions) - granted_permissions
+                set(required_permissions) - effective_permissions
             )
 
             if missing_permissions:

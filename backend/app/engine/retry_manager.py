@@ -24,20 +24,27 @@ class RetryManager:
         return False
 
     @classmethod
-    def get_retry_delay(cls, retry_count):
-        delay = cls.BASE_DELAY_SECONDS * (2 ** retry_count)
+    def get_retry_delay(cls, retry_count, retry_after=None):
+        if retry_after is not None:
+            try:
+                val = int(retry_after)
+                if val > 0:
+                    return min(val, cls.MAX_DELAY_SECONDS)
+            except (ValueError, TypeError):
+                pass
 
+        delay = cls.BASE_DELAY_SECONDS * (2 ** retry_count)
         return min(delay, cls.MAX_DELAY_SECONDS)
 
     @classmethod
-    def get_retry_status(cls, retry_count):
+    def get_retry_status(cls, retry_count, retry_after=None):
 
         if cls.can_retry(retry_count):
             return {
                 "success": True,
                 "status": "RETRYING",
                 "retry_count": retry_count + 1,
-                "delay": cls.get_retry_delay(retry_count)
+                "delay": cls.get_retry_delay(retry_count, retry_after=retry_after)
             }
 
         return {

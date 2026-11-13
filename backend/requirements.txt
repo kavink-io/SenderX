@@ -12,3 +12,7 @@ flask-jwt-extended
 bcrypt
 gunicorn
 sendgrid
+certifi
+boto3
+jinja2
+twilio

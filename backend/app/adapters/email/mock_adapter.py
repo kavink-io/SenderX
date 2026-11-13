@@ -1,8 +1,8 @@
 
 import uuid
+from datetime import datetime, timezone
 
-from app.adapters.base_adapter import BaseChannelAdapter
-from app.adapters.email.sendgrid_adapter import ProviderError
+from app.adapters.base_adapter import BaseChannelAdapter, ProviderError
 
 
 class MockEmailAdapter(BaseChannelAdapter):
@@ -12,7 +12,7 @@ class MockEmailAdapter(BaseChannelAdapter):
         data = message.get("data", {})
 
         if not isinstance(recipient, str) or "@" not in recipient:
-            raise ValueError("Invalid email recipient")
+            raise ValueError("Invalid email recipient: missing '@'")
 
         if not isinstance(data, dict):
             raise ValueError("Email data must be an object")
@@ -20,19 +20,30 @@ class MockEmailAdapter(BaseChannelAdapter):
         if not data.get("subject"):
             raise ValueError("Email subject is required")
 
-        if not data.get("message") and not data.get("content"):
+        content = (
+            data.get("message")
+            or data.get("content")
+            or data.get("body")
+            or data.get("text")
+        )
+        if not content:
             raise ValueError("Email content is required")
 
         return True
 
     def format_message(self, message):
+        data = message.get("data", {})
+        content = (
+            data.get("message")
+            or data.get("content")
+            or data.get("body")
+            or data.get("text")
+        )
         return {
+            "channel": "email",
             "to_email": message["recipient"],
-            "subject": message["data"]["subject"],
-            "content": (
-                message["data"].get("message")
-                or message["data"].get("content")
-            )
+            "subject": data["subject"],
+            "content": content
         }
 
     def send(self, message):
@@ -43,19 +54,23 @@ class MockEmailAdapter(BaseChannelAdapter):
         retry_count = message.get("retry_count", 0)
 
         if scenario == "permanent_failure":
-            raise ValueError("Simulated permanent failure")
+            raise ProviderError(
+                "Simulated permanent failure: Mailbox does not exist",
+                status_code=550,
+                retryable=False
+            )
 
         if scenario == "temporary_failure":
             raise ProviderError(
-                "Simulated temporary network failure",
-                status_code=None,
+                "Simulated temporary failure: SMTP connection timeout",
+                status_code=421,
                 retryable=True
             )
 
         if scenario == "temporary_then_success" and retry_count < 2:
             raise ProviderError(
-                "Simulated temporary network failure",
-                status_code=None,
+                "Simulated temporary rate limit",
+                status_code=429,
                 retryable=True
             )
 
@@ -65,18 +80,23 @@ class MockEmailAdapter(BaseChannelAdapter):
             "temporary_failure",
             "temporary_then_success"
         ]:
-            raise ValueError("Unsupported mock scenario")
+            raise ValueError(f"Unsupported mock scenario: {scenario}")
 
         return {
             "success": True,
             "status": "SENT",
             "provider": "mock",
-            "provider_message_id": f"mock-{uuid.uuid4()}"
+            "channel": "email",
+            "provider_message_id": f"mock-email-{uuid.uuid4()}",
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     def get_status(self, provider_message_id):
         return {
             "success": True,
             "status": "DELIVERED",
-            "provider_message_id": provider_message_id
+            "provider_message_id": provider_message_id,
+            "channel": "email",
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
+

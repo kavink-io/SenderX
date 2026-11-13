@@ -32,3 +32,11 @@ def create_celery(app: Flask):
     celery.Task = FlaskTask
 
     return celery
+
+
+def __getattr__(name: str):
+    if name in ("celery", "celery_app"):
+        from app import create_app
+        flask_app = create_app()
+        return flask_app.celery
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

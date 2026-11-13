@@ -213,6 +213,88 @@ class DeadLetterRepository:
                 failure_cycle_id
             )
 
+        
+        # Complete the manual retry dispatch lifecycle.
+        # This executes even when the failure cycle already exists.
+        if manual_retry_count > 0:
+
+            completion_result = collection.update_one(
+                {
+                    "message_id": message_id,
+                    "organization_id": trusted_organization_id
+                },
+                {
+                    "$set": {
+                        "dead_letter_status": "PENDING_REVIEW",
+                        "manual_retry_dispatch_state": "COMPLETED",
+                        "manual_retry_completed_at": now,
+                        "dead_lettered_at": now,
+                        "manual_retry_history.$[entry].status": "FAILED",
+                        "manual_retry_history.$[entry].completed_at": now,
+                        "manual_retry_history.$[entry].error": str(error)
+                    },
+                    "$unset": {
+                        "manual_retry_requested_at": "",
+                        "manual_retry_queued_at": "",
+                        "manual_retry_task_id": ""
+                    },
+                    "$push": {
+                        "status_history": {
+                            "from": "RETRY_QUEUED",
+                            "to": "PENDING_REVIEW",
+                            "timestamp": now,
+                            "reason": f"Manual retry failed: {str(error)}"
+                        }
+                    }
+                },
+                array_filters=[
+                    {
+                        "entry.status": {"$in": ["QUEUED", "DISPATCHING"]}
+                    }
+                ]
+            )
+
+            # Fallback if array filter didn't match history entry
+            if completion_result.modified_count == 0:
+                completion_result = collection.update_one(
+                    {
+                        "message_id": message_id,
+                        "organization_id": trusted_organization_id
+                    },
+                    {
+                        "$set": {
+                            "dead_letter_status": "PENDING_REVIEW",
+                            "manual_retry_dispatch_state": "COMPLETED",
+                            "manual_retry_completed_at": now,
+                            "dead_lettered_at": now
+                        },
+                        "$unset": {
+                            "manual_retry_requested_at": "",
+                            "manual_retry_queued_at": "",
+                            "manual_retry_task_id": ""
+                        },
+                        "$push": {
+                            "status_history": {
+                                "from": "RETRY_QUEUED",
+                                "to": "PENDING_REVIEW",
+                                "timestamp": now,
+                                "reason": f"Manual retry failed: {str(error)}"
+                            }
+                        }
+                    }
+                )
+
+            if completion_result.matched_count == 0:
+                raise RuntimeError(
+                    f"Could not complete manual retry state for {message_id}"
+                )
+
+            current_app.logger.info(
+                "Manual retry completed (failed) for message %s",
+                message_id
+            )
+
+
         # Return the tenant-scoped saved document.
         saved_record = cls.find_by_message_id(
             message_id,
@@ -226,21 +308,211 @@ class DeadLetterRepository:
 
         return saved_record
 
+    @classmethod
+    def _decrypt_dlq_doc(cls, doc):
+        """Decrypt original_payload, current_payload, and data transparently."""
+        if not doc:
+            return None
+        from app.modules.payloads.encryption import PayloadEncryption
+        doc = dict(doc)
+        if "original_payload" in doc:
+            doc["original_payload"] = PayloadEncryption.decrypt_dict(doc["original_payload"])
+        if "current_payload" in doc:
+            doc["current_payload"] = PayloadEncryption.decrypt_dict(doc["current_payload"])
+        if "data" in doc:
+            doc["data"] = PayloadEncryption.decrypt_dict(doc["data"])
+        return doc
+
+    @classmethod
+    def save_from_payload(
+        cls,
+        payload_record: Dict[str, Any],
+        failure_code: str,
+        failure_reason: str,
+        organization_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Save an unrouted or invalid ingested JSON payload into the DLQ.
+        Preserves original immutable payload, latest version, failure code and reason.
+        Encrypts sensitive payload data at rest.
+        """
+        from app.modules.payloads.encryption import PayloadEncryption
+
+        now = cls._now()
+        trusted_organization_id = organization_id or payload_record.get("organization_id")
+        if not trusted_organization_id:
+            raise ValueError("Organization ID is required for DLQ insertion")
+
+        message_id = payload_record["payload_id"]
+        orig = payload_record.get("original_payload") or {}
+        curr = payload_record.get("current_payload") or orig
+        channel = payload_record.get("channel") or orig.get("channel") or "UNKNOWN"
+        recipient = orig.get("recipient") or "UNKNOWN"
+        data = orig.get("data") or orig
+
+        # Ensure encryption at rest
+        enc_orig = PayloadEncryption.encrypt_dict(orig)
+        enc_curr = PayloadEncryption.encrypt_dict(curr)
+        enc_data = PayloadEncryption.encrypt_dict(data)
+
+        dlq_entry = {
+            "message_id": message_id,
+            "payload_id": message_id,
+            "organization_id": trusted_organization_id,
+            "application_id": payload_record.get("application_id"),
+            "channel": channel,
+            "provider": orig.get("provider") or "UNKNOWN",
+            "recipient": recipient,
+            "data": enc_data,
+            "original_payload": enc_orig,
+            "current_payload": enc_curr,
+            "payload_version": payload_record.get("version", 1),
+            "status": "DEAD",
+            "dead_letter_status": "PENDING_REVIEW",
+            "dead_letter_source": "INGESTION_ROUTING",
+            "failure_code": failure_code,
+            "last_error": str(failure_reason),
+            "created_in_dlq_at": now,
+            "dead_lettered_at": now,
+            "retry_count": 0,
+            "manual_retry_count": 0,
+            "failure_cycles": [
+                {
+                    "failure_cycle_id": f"{message_id}:0:0",
+                    "cycle_type": "INGESTION_ROUTING",
+                    "failure_code": failure_code,
+                    "error": str(failure_reason),
+                    "dead_lettered_at": now
+                }
+            ],
+            "status_history": [
+                {
+                    "from": "INGESTED",
+                    "to": "DEAD",
+                    "timestamp": now,
+                    "reason": str(failure_reason)
+                }
+            ]
+        }
+
+        cls._collection().update_one(
+            {
+                "message_id": message_id,
+                "organization_id": trusted_organization_id
+            },
+            {"$set": dlq_entry},
+            upsert=True
+        )
+
+        return cls.find_by_message_id(message_id, organization_id=trusted_organization_id)
+
+    @classmethod
+    def update_payload_in_dlq(
+        cls,
+        payload_id: str,
+        organization_id: str,
+        current_payload: Dict[str, Any],
+        payload_version: int,
+        channel: Optional[str] = None,
+        recipient: Optional[str] = None
+    ) -> bool:
+        """Update the payload view in DLQ when an organization user edits the JSON, encrypted at rest."""
+        from app.modules.payloads.encryption import PayloadEncryption
+
+        now = cls._now()
+        enc_current = PayloadEncryption.encrypt_dict(current_payload)
+        update_fields: Dict[str, Any] = {
+            "current_payload": enc_current,
+            "payload_version": payload_version,
+            "updated_at": now
+        }
+        if channel:
+            update_fields["channel"] = channel
+        if recipient:
+            update_fields["recipient"] = recipient
+
+        res = cls._collection().update_one(
+            {
+                "$or": [{"message_id": payload_id}, {"payload_id": payload_id}],
+                "organization_id": organization_id
+            },
+            {
+                "$set": update_fields,
+                "$push": {
+                    "status_history": {
+                        "from": "DEAD",
+                        "to": "DEAD",
+                        "timestamp": now,
+                        "reason": f"Payload edited to version {payload_version}"
+                    }
+                }
+            }
+        )
+        return res.matched_count > 0
+
+    @classmethod
+    def resolve_routing_dlq(
+        cls,
+        payload_id: str,
+        organization_id: str,
+        message_id: Optional[str] = None
+    ) -> bool:
+        """
+        Transition a routing-ingestion DLQ record to RESOLVED status upon successful retry dispatch.
+        Matches by payload_id or message_id scoped strictly to organization_id.
+        """
+        now = cls._now()
+        query = {
+            "$or": [
+                {"payload_id": payload_id},
+                {"message_id": payload_id}
+            ],
+            "organization_id": organization_id,
+            "dead_letter_status": {"$in": ["PENDING_REVIEW", "INVESTIGATING", "RETRY_QUEUED"]}
+        }
+
+        update_fields = {
+            "dead_letter_status": "RESOLVED",
+            "resolved_at": now,
+            "updated_at": now
+        }
+        if message_id:
+            update_fields["resolved_message_id"] = message_id
+
+        result = cls._collection().update_one(
+            query,
+            {
+                "$set": update_fields,
+                "$push": {
+                    "status_history": {
+                        "from": "PENDING_REVIEW",
+                        "to": "RESOLVED",
+                        "timestamp": now,
+                        "reason": f"Routing payload successfully retried and dispatched as message {message_id}"
+                    }
+                }
+            }
+        )
+        return result.modified_count > 0
 
     @classmethod
     def find_by_message_id(cls, message_id, organization_id=None):
 
         query = {
-            "message_id": message_id
+            "$or": [
+                {"message_id": message_id},
+                {"payload_id": message_id}
+            ]
         }
 
         if organization_id is not None:
             query["organization_id"] = organization_id
 
-        return cls._collection().find_one(
+        doc = cls._collection().find_one(
             query,
             {"_id": 0}
         )
+        return cls._decrypt_dlq_doc(doc)
 
     # --------------------------------------------------
     # FIND ALL DEAD LETTERS
@@ -294,12 +566,13 @@ class DeadLetterRepository:
 
         total = collection.count_documents(query)
 
-        records = list(
+        raw_records = list(
             collection.find(query, {"_id": 0})
             .sort("dead_lettered_at", -1)
             .skip(skip)
             .limit(limit)
         )
+        records = [cls._decrypt_dlq_doc(r) for r in raw_records]
 
         if not include_metadata:
             return records
@@ -464,36 +737,50 @@ class DeadLetterRepository:
     # PROVIDER ANALYTICS
     # --------------------------------------------------
 
+        
     @classmethod
     def get_provider_analytics(cls, organization_id=None):
         """
         Generate provider-wise DLQ failure analytics.
+
+        All aggregation pipelines are tenant-scoped
+        when organization_id is provided.
         """
 
         collection = cls._collection()
 
-        match_criteria = {"organization_id": organization_id} if organization_id is not None else {}
+        # Shared tenant filter for every aggregation.
         query = {}
 
         if organization_id is not None:
             query["organization_id"] = organization_id
 
+        match_stage = (
+            [{"$match": query}]
+            if query
+            else []
+        )
+
         total = collection.count_documents(query)
 
-        provider_pipeline = [
+        # -----------------------------------------
+        # 1. Provider analytics
+        # -----------------------------------------
+
+        provider_pipeline = match_stage + [
             {
                 "$group": {
                     "_id": {
                         "$ifNull": ["$provider", "unknown"]
                     },
-                    "failure_count": {"$sum": 1},
-
+                    "failure_count": {
+                        "$sum": 1
+                    },
                     "manual_retry_count": {
                         "$sum": {
                             "$ifNull": ["$manual_retry_count", 0]
                         }
                     },
-
                     "failure_cycles": {
                         "$sum": {
                             "$size": {
@@ -507,23 +794,27 @@ class DeadLetterRepository:
                     }
                 }
             },
-            {"$sort": {"failure_count": -1}}
+            {
+                "$sort": {
+                    "failure_count": -1
+                }
+            }
         ]
 
         provider_results = list(
-            collection.aggregate(
-                ([{"$match": query}] if query else []) + provider_pipeline
-            )
+            collection.aggregate(provider_pipeline)
         )
 
         providers = []
 
         for item in provider_results:
+
             failure_count = item["failure_count"]
 
             percentage = (
                 round((failure_count / total) * 100, 2)
-                if total > 0 else 0
+                if total > 0
+                else 0
             )
 
             providers.append({
@@ -534,16 +825,26 @@ class DeadLetterRepository:
                 "failure_cycles": item["failure_cycles"]
             })
 
-        channel_pipeline = [
+        # -----------------------------------------
+        # 2. Channel analytics
+        # -----------------------------------------
+
+        channel_pipeline = match_stage + [
             {
                 "$group": {
                     "_id": {
                         "$ifNull": ["$channel", "unknown"]
                     },
-                    "failure_count": {"$sum": 1}
+                    "failure_count": {
+                        "$sum": 1
+                    }
                 }
             },
-            {"$sort": {"failure_count": -1}}
+            {
+                "$sort": {
+                    "failure_count": -1
+                }
+            }
         ]
 
         channel_results = list(
@@ -555,17 +856,29 @@ class DeadLetterRepository:
             for item in channel_results
         }
 
-        error_pipeline = [
+        # -----------------------------------------
+        # 3. Common error analytics
+        # -----------------------------------------
+
+        error_pipeline = match_stage + [
             {
                 "$group": {
                     "_id": {
                         "$ifNull": ["$last_error", "Unknown error"]
                     },
-                    "count": {"$sum": 1}
+                    "count": {
+                        "$sum": 1
+                    }
                 }
             },
-            {"$sort": {"count": -1}},
-            {"$limit": 10}
+            {
+                "$sort": {
+                    "count": -1
+                }
+            },
+            {
+                "$limit": 10
+            }
         ]
 
         error_results = list(
@@ -579,6 +892,10 @@ class DeadLetterRepository:
             }
             for item in error_results
         ]
+
+        # -----------------------------------------
+        # 4. Final response
+        # -----------------------------------------
 
         return {
             "total_dlq_records": total,
@@ -1057,17 +1374,26 @@ class DeadLetterRepository:
             {
                 "$set": {
                     "dead_letter_status": "PENDING_REVIEW",
+                    "manual_retry_dispatch_state": "CANCELLED",
+                    "manual_retry_cancelled_at": now,
                     "manual_retry_history.$[entry].status": "CANCELLED",
                     "manual_retry_history.$[entry].cancelled_at": now
                 },
                 "$unset": {
                     "manual_retry_requested_at": "",
-                    "manual_retry_dispatch_state": "",
                     "manual_retry_task_id": "",
                     "manual_retry_dispatch_started_at": ""
                 },
                 "$inc": {
                     "manual_retry_count": -1
+                },
+                "$push": {
+                    "status_history": {
+                        "from": "RETRY_REQUESTED",
+                        "to": "PENDING_REVIEW",
+                        "timestamp": now,
+                        "reason": "Manual retry cancelled / restored to review"
+                    }
                 }
             },
             array_filters=[
@@ -1076,6 +1402,34 @@ class DeadLetterRepository:
                 }
             ]
         )
+
+        if result.modified_count == 0:
+            result = cls._collection().update_one(
+                query,
+                {
+                    "$set": {
+                        "dead_letter_status": "PENDING_REVIEW",
+                        "manual_retry_dispatch_state": "CANCELLED",
+                        "manual_retry_cancelled_at": now
+                    },
+                    "$unset": {
+                        "manual_retry_requested_at": "",
+                        "manual_retry_task_id": "",
+                        "manual_retry_dispatch_started_at": ""
+                    },
+                    "$inc": {
+                        "manual_retry_count": -1
+                    },
+                    "$push": {
+                        "status_history": {
+                            "from": "RETRY_REQUESTED",
+                            "to": "PENDING_REVIEW",
+                            "timestamp": now,
+                            "reason": "Manual retry cancelled / restored to review"
+                        }
+                    }
+                }
+            )
 
         return result.modified_count > 0
 
@@ -1131,6 +1485,121 @@ class DeadLetterRepository:
 
         return result.modified_count > 0
 
+
+
+    
+    # --------------------------------------------------
+    # MARK MANUAL RETRY COMPLETED
+    # --------------------------------------------------
+
+    @classmethod
+    def mark_manual_retry_completed(
+        cls,
+        message_id,
+        task_id,
+        provider_message_id=None,
+        organization_id=None
+    ):
+        """
+        Mark a successfully delivered manual retry as resolved.
+        Preserve the complete manual retry and failure history.
+        """
+
+        now = cls._now()
+
+        query = {
+            "message_id": message_id,
+            "dead_letter_status": "RETRY_QUEUED",
+            "manual_retry_dispatch_state": "QUEUED",
+            "manual_retry_task_id": task_id
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
+        update_fields = {
+            "dead_letter_status": "RESOLVED",
+            "manual_retry_dispatch_state": "COMPLETED",
+            "manual_retry_completed_at": now,
+            "resolved_at": now,
+            "manual_retry_history.$[entry].status": "COMPLETED",
+            "manual_retry_history.$[entry].completed_at": now
+        }
+
+        if provider_message_id is not None:
+            update_fields["provider_message_id"] = provider_message_id
+
+        # First attempt: atomic update of DLQ status, dispatch state, AND history item
+        result = cls._collection().update_one(
+            query,
+            {
+                "$set": update_fields,
+                "$unset": {
+                    "manual_retry_requested_at": "",
+                    "manual_retry_queued_at": "",
+                    "manual_retry_task_id": ""
+                },
+                "$push": {
+                    "status_history": {
+                        "from": "RETRY_QUEUED",
+                        "to": "RESOLVED",
+                        "timestamp": now
+                    }
+                }
+            },
+            array_filters=[
+                {
+                    "entry.task_id": task_id,
+                    "entry.status": {"$in": ["QUEUED", "DISPATCHING"]}
+                }
+            ]
+        )
+
+        if result.modified_count == 0:
+            # Fallback if array filter didn't match history entry
+            fallback_set = {
+                "dead_letter_status": "RESOLVED",
+                "manual_retry_dispatch_state": "COMPLETED",
+                "manual_retry_completed_at": now,
+                "resolved_at": now
+            }
+            if provider_message_id is not None:
+                fallback_set["provider_message_id"] = provider_message_id
+
+            result = cls._collection().update_one(
+                query,
+                {
+                    "$set": fallback_set,
+                    "$unset": {
+                        "manual_retry_requested_at": "",
+                        "manual_retry_queued_at": "",
+                        "manual_retry_task_id": ""
+                    },
+                    "$push": {
+                        "status_history": {
+                            "from": "RETRY_QUEUED",
+                            "to": "RESOLVED",
+                            "timestamp": now
+                        }
+                    }
+                }
+            )
+
+        if result.modified_count == 0:
+            current_app.logger.warning(
+                "Could not resolve DLQ record for successful manual retry: %s",
+                message_id
+            )
+            return False
+
+        current_app.logger.info(
+            "Manual retry successfully resolved for message %s",
+            message_id
+        )
+
+        return True
+
+
     # --------------------------------------------------
     # MARK RETRY DISPATCH FAILED
     # --------------------------------------------------
@@ -1149,7 +1618,7 @@ class DeadLetterRepository:
         query = {
             "message_id": message_id,
             "dead_letter_status": "RETRY_REQUESTED",
-            "manual_retry_dispatch_state": "DISPATCHING",
+            "manual_retry_dispatch_state": {"$in": ["DISPATCHING", "RECOVERY_REQUIRED"]},
             "manual_retry_task_id": task_id
         }
 
@@ -1161,6 +1630,7 @@ class DeadLetterRepository:
             {
                 "$set": {
                     "dead_letter_status": "PENDING_REVIEW",
+                    "manual_retry_dispatch_state": "DISPATCH_FAILED",
                     "manual_retry_dispatch_failed_at": now,
                     "manual_retry_history.$[entry].status": "DISPATCH_FAILED",
                     "manual_retry_history.$[entry].error": str(error),
@@ -1168,21 +1638,56 @@ class DeadLetterRepository:
                 },
                 "$unset": {
                     "manual_retry_requested_at": "",
-                    "manual_retry_dispatch_state": "",
                     "manual_retry_task_id": "",
                     "manual_retry_dispatch_started_at": ""
                 },
                 "$inc": {
                     "manual_retry_count": -1
+                },
+                "$push": {
+                    "status_history": {
+                        "from": "RETRY_REQUESTED",
+                        "to": "PENDING_REVIEW",
+                        "timestamp": now,
+                        "reason": f"Dispatch failed: {str(error)}"
+                    }
                 }
             },
             array_filters=[
                 {
                     "entry.task_id": task_id,
-                    "entry.status": "DISPATCHING"
+                    "entry.status": {"$in": ["DISPATCHING", "RECOVERY_REQUIRED"]}
                 }
             ]
         )
+
+        if result.modified_count == 0:
+            result = cls._collection().update_one(
+                query,
+                {
+                    "$set": {
+                        "dead_letter_status": "PENDING_REVIEW",
+                        "manual_retry_dispatch_state": "DISPATCH_FAILED",
+                        "manual_retry_dispatch_failed_at": now
+                    },
+                    "$unset": {
+                        "manual_retry_requested_at": "",
+                        "manual_retry_task_id": "",
+                        "manual_retry_dispatch_started_at": ""
+                    },
+                    "$inc": {
+                        "manual_retry_count": -1
+                    },
+                    "$push": {
+                        "status_history": {
+                            "from": "RETRY_REQUESTED",
+                            "to": "PENDING_REVIEW",
+                            "timestamp": now,
+                            "reason": f"Dispatch failed: {str(error)}"
+                        }
+                    }
+                }
+            )
 
         return result.modified_count > 0
 
@@ -1269,6 +1774,22 @@ class DeadLetterRepository:
             ]
         )
 
+        if result.modified_count == 0:
+            result = cls._collection().update_one(
+                {
+                    "message_id": message_id,
+                    "dead_letter_status": "RETRY_REQUESTED",
+                    "manual_retry_dispatch_state": "DISPATCHING",
+                    "manual_retry_task_id": task_id
+                },
+                {
+                    "$set": {
+                        "manual_retry_dispatch_state": "RECOVERY_REQUIRED",
+                        "manual_retry_recovery_required_at": now
+                    }
+                }
+            )
+
         return result.modified_count > 0
 
     @classmethod
@@ -1277,7 +1798,8 @@ class DeadLetterRepository:
         message_id,
         task_id,
         resolved_by,
-        notes=None
+        notes=None,
+        dispatch_state="COMPLETED"
     ):
 
         now = cls._now()
@@ -1292,7 +1814,7 @@ class DeadLetterRepository:
             {
                 "$set": {
                     "dead_letter_status": "RESOLVED",
-                    "manual_retry_dispatch_state": "RESOLVED",
+                    "manual_retry_dispatch_state": dispatch_state,
                     "manual_retry_resolved_at": now,
                     "manual_retry_resolution": {
                         "type": "MESSAGE_COMPLETED",

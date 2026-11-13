@@ -56,23 +56,60 @@ class MessageRepository:
     # --------------------------------------------------
 
     @classmethod
-    def find_all(cls, limit=50, organization_id=None):
-
+    def find_all(
+        cls,
+        organization_id=None,
+        limit=50,
+        page=1,
+        status=None,
+        channel=None,
+        provider=None,
+        recipient=None
+    ):
         query = {}
 
         if organization_id is not None:
             query["organization_id"] = organization_id
 
-        limit = max(1, min(int(limit), 100))
+        if status:
+            query["status"] = status
+        if channel:
+            query["channel"] = channel
+        if provider:
+            query["provider"] = provider
+        if recipient:
+            query["recipient"] = recipient
 
-        return list(
+        try:
+            limit = max(1, min(int(limit), 100))
+        except (ValueError, TypeError):
+            limit = 50
+
+        try:
+            page = max(1, int(page))
+        except (ValueError, TypeError):
+            page = 1
+
+        total = cls._collection().count_documents(query)
+
+        items = list(
             cls._collection().find(
                 query,
                 {"_id": 0}
             ).sort(
                 "created_at", -1
-            ).limit(limit)
+            ).skip((page - 1) * limit).limit(limit)
         )
+
+        return {
+            "items": items,
+            "pagination": {
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "total_pages": (total + limit - 1) // limit if total > 0 else 0
+            }
+        }
 
     # --------------------------------------------------
     # UPDATE MESSAGE STATUS
@@ -229,6 +266,76 @@ class MessageRepository:
         )
 
         return result.modified_count > 0
+
+    # --------------------------------------------------
+    # FIND BY PROVIDER MESSAGE ID
+    # --------------------------------------------------
+
+    @classmethod
+    def find_by_provider_message_id(cls, provider_message_id, organization_id=None):
+        if not provider_message_id:
+            return None
+        query = {"provider_message_id": provider_message_id}
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+        return cls._collection().find_one(query, {"_id": 0})
+
+    # --------------------------------------------------
+    # UPDATE DELIVERY STATUS (CALLBACK / WEBHOOK)
+    # --------------------------------------------------
+
+    @classmethod
+    def update_delivery_status(
+        cls,
+        provider_message_id,
+        new_status,
+        raw_status=None,
+        error_code=None,
+        error_message=None,
+        organization_id=None
+    ):
+        now = cls._now()
+        query = {"provider_message_id": provider_message_id}
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
+        doc = cls._collection().find_one(query)
+        if not doc:
+            return False
+
+        old_status = doc.get("status")
+
+        update_fields = {
+            "status": new_status,
+            "updated_at": now
+        }
+        if raw_status:
+            update_fields["provider_status"] = raw_status
+        if error_code is not None:
+            update_fields["delivery_error_code"] = str(error_code)
+        if error_message is not None:
+            update_fields["delivery_error_message"] = str(error_message)
+
+        history_entry = {
+            "from": old_status,
+            "to": new_status,
+            "timestamp": now,
+            "source": "provider_callback"
+        }
+        if raw_status:
+            history_entry["raw_status"] = raw_status
+        if error_message:
+            history_entry["reason"] = str(error_message)
+
+        res = cls._collection().update_one(
+            query,
+            {
+                "$set": update_fields,
+                "$push": {"status_history": history_entry}
+            }
+        )
+        return res.modified_count > 0
+
     # --------------------------------------------------
     # MANUAL RETRY
     # --------------------------------------------------
