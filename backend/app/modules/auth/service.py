@@ -158,17 +158,29 @@ class AuthService:
 
         AuthRepository.update_user_last_login(user_id)
 
+        account_data = {
+            "id": user_id,
+            "email": email,
+            "account_type": "ORGANIZATION_USER",
+            "organization_id": organization_id,
+            "role_ids": user.get("role_ids", [])
+        }
+
+        try:
+            from app.modules.users.service import UserService
+            ctx = UserService.get_dashboard_context(user_id, organization_id)
+            if ctx.get("success") and ctx.get("data"):
+                account_data.update(ctx["data"])
+                account_data["id"] = user_id
+                account_data["role_ids"] = user.get("role_ids", [])
+        except Exception:
+            pass
+
         return {
             "success": True,
             "message": "Login successful",
             "data": {
-                "account": {
-                    "id": user_id,
-                    "email": email,
-                    "account_type": "ORGANIZATION_USER",
-                    "organization_id": organization_id,
-                    "role_ids": user.get("role_ids", [])
-                },
+                "account": account_data,
                 **tokens
             }
         }

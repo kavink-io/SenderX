@@ -24,6 +24,11 @@ def ensure_database_indexes(app=None):
     db["users"].create_index([("user_id", pymongo.ASCENDING)], unique=True)
     db["users"].create_index([("email", pymongo.ASCENDING)], unique=True)
     db["users"].create_index([("organization_id", pymongo.ASCENDING)])
+    db["users"].create_index(
+        [("organization_id", pymongo.ASCENDING), ("employee_code", pymongo.ASCENDING)],
+        unique=True,
+        partialFilterExpression={"employee_code": {"$type": "string"}}
+    )
     db["users"].create_index([("organization_id", pymongo.ASCENDING), ("is_active", pymongo.ASCENDING)])
     db["users"].create_index([("organization_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
 
@@ -116,6 +121,18 @@ def ensure_database_indexes(app=None):
     )
     db["connected_applications"].create_index([("organization_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
     db["connected_applications"].create_index([("organization_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
+
+    # 15. Security & Role Audit Logs
+    db["security_audit_logs"].create_index([("audit_id", pymongo.ASCENDING)], unique=True)
+    db["security_audit_logs"].create_index([("organization_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
+    db["security_audit_logs"].create_index([("target_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
+    db["security_audit_logs"].create_index([("organization_id", pymongo.ASCENDING), ("event_type", pymongo.ASCENDING)])
+
+    # 16. Organization Sequences
+    db["organization_sequences"].create_index(
+        [("organization_id", pymongo.ASCENDING), ("sequence_type", pymongo.ASCENDING)],
+        unique=True
+    )
 
 
 

@@ -44,3 +44,27 @@ class RoleRepository:
                 {"_id": 0}
             )
         )
+
+    @classmethod
+    def find_by_name(cls, name, organization_id):
+        return cls._collection().find_one({
+            "name": name,
+            "organization_id": organization_id
+        }, {"_id": 0})
+
+    @classmethod
+    def find_by_ids(cls, role_ids, organization_id):
+        if not role_ids:
+            return []
+        return list(cls._collection().find({
+            "role_id": {"$in": list(role_ids)},
+            "organization_id": organization_id
+        }, {"_id": 0}))
+
+    @classmethod
+    def delete(cls, role_id, organization_id):
+        result = cls._collection().delete_one({
+            "role_id": role_id,
+            "organization_id": organization_id
+        })
+        return result.deleted_count > 0

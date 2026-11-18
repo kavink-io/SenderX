@@ -56,6 +56,19 @@ const ApiClient = {
     localStorage.removeItem("sx_access_token");
     localStorage.removeItem("sx_refresh_token");
     localStorage.removeItem("sx_account");
+    localStorage.removeItem("sx_active_app_id");
+  },
+
+  getActiveApplicationId() {
+    return localStorage.getItem("sx_active_app_id") || null;
+  },
+
+  setActiveApplicationId(appId) {
+    if (appId && appId !== "all" && appId !== "null") {
+      localStorage.setItem("sx_active_app_id", appId);
+    } else {
+      localStorage.removeItem("sx_active_app_id");
+    }
   },
 
   getStoredAccount() {
@@ -81,6 +94,11 @@ const ApiClient = {
     const token = this.getAccessToken();
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const activeApp = this.getActiveApplicationId();
+    if (activeApp && !headers["X-Application-ID"]) {
+      headers["X-Application-ID"] = activeApp;
     }
 
     try {
@@ -144,6 +162,14 @@ const ApiClient = {
     return res;
   },
 
+  async getCurrentAccount() {
+    return await this.request("/auth/me", { method: "GET" });
+  },
+
+  async getDashboardContext() {
+    return await this.request("/users/me/dashboard-context", { method: "GET" });
+  },
+
   // Organizations
   async createOrganization(data) {
     return await this.request("/organizations/", {
@@ -152,8 +178,15 @@ const ApiClient = {
     });
   },
 
-  async listOrganizations(page = 1, limit = 50) {
-    return await this.request(`/organizations/?page=${page}&limit=${limit}`);
+  async listOrganizations(page = 1, limit = 50, filters = {}) {
+    let query = `?page=${page}&limit=${limit}`;
+    if (filters.search) query += `&search=${encodeURIComponent(filters.search)}`;
+    if (filters.status && filters.status !== "ALL") query += `&status=${encodeURIComponent(filters.status)}`;
+    return await this.request(`/organizations/${query}`);
+  },
+
+  async getOrganizationDetails(orgId) {
+    return await this.request(`/organizations/${orgId}`);
   },
 
   async updateOrganizationStatus(orgId, status) {
@@ -167,15 +200,60 @@ const ApiClient = {
     return await this.request("/organizations/current");
   },
 
+  async getOrganizationIdentity() {
+    return await this.request("/organizations/identity");
+  },
+
+  async updateOrganizationIdentity(data) {
+    return await this.request("/organizations/identity", {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+  },
+
   // Users & Roles
-  async listUsers(page = 1, limit = 50) {
-    return await this.request(`/users/?page=${page}&limit=${limit}`);
+  async listUsers(page = 1, limit = 50, filters = {}) {
+    let query = `?page=${page}&limit=${limit}`;
+    if (filters.search) query += `&search=${encodeURIComponent(filters.search)}`;
+    if (filters.status) query += `&status=${encodeURIComponent(filters.status)}`;
+    if (filters.role_id) query += `&role_id=${encodeURIComponent(filters.role_id)}`;
+    if (filters.application_id) query += `&application_id=${encodeURIComponent(filters.application_id)}`;
+    if (filters.employee_code) query += `&employee_code=${encodeURIComponent(filters.employee_code)}`;
+    return await this.request(`/users/${query}`);
+  },
+
+  async getNextEmployeeCode() {
+    return await this.request("/users/next-employee-code");
+  },
+
+  async getUser(userId) {
+    return await this.request(`/users/${userId}`);
   },
 
   async createUser(data) {
     return await this.request("/users/", {
       method: "POST",
       body: JSON.stringify(data)
+    });
+  },
+
+  async updateUser(userId, data) {
+    return await this.request(`/users/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+  },
+
+  async assignUserRoles(userId, payload) {
+    return await this.request(`/users/${userId}/roles`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async activateUser(userId) {
+    return await this.request(`/users/${userId}/activate`, {
+      method: "POST"
     });
   },
 
@@ -189,6 +267,10 @@ const ApiClient = {
     return await this.request("/users/roles");
   },
 
+  async getRole(roleId) {
+    return await this.request(`/users/roles/${roleId}`);
+  },
+
   async createRole(data) {
     return await this.request("/users/roles", {
       method: "POST",
@@ -196,8 +278,28 @@ const ApiClient = {
     });
   },
 
+  async updateRole(roleId, data) {
+    return await this.request(`/users/roles/${roleId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+  },
+
+  async deleteRole(roleId) {
+    return await this.request(`/users/roles/${roleId}`, {
+      method: "DELETE"
+    });
+  },
+
   async listPermissions() {
     return await this.request("/users/permissions");
+  },
+
+  async listSecurityAuditLogs(page = 1, limit = 50, filters = {}) {
+    let query = `?page=${page}&limit=${limit}`;
+    if (filters.target_id) query += `&target_id=${encodeURIComponent(filters.target_id)}`;
+    if (filters.event_type) query += `&event_type=${encodeURIComponent(filters.event_type)}`;
+    return await this.request(`/users/audit-logs${query}`);
   },
 
   // Connected Applications (Phase 5 Task 1)

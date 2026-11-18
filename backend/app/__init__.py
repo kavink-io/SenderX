@@ -138,4 +138,39 @@ def create_app():
     except Exception as e:
         app.logger.warning(f"Could not initialize database indexes: {e}")
 
+    # Serve static frontend application and assets
+    import os
+    from flask import send_from_directory, request
+    frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend"))
+
+    @app.after_request
+    def set_cache_headers(response):
+        # Prevent browser disk caching of root SPA index page and assets to avoid stale script cache
+        if request.path in ["/", "/index.html"] or request.path.startswith("/js/") or request.path.startswith("/css/"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+    @app.route("/")
+    def index():
+        return send_from_directory(frontend_dir, "index.html")
+
+    @app.route("/css/<path:filename>")
+    def serve_css(filename):
+        return send_from_directory(os.path.join(frontend_dir, "css"), filename)
+
+    @app.route("/js/<path:filename>")
+    def serve_js(filename):
+        return send_from_directory(os.path.join(frontend_dir, "js"), filename)
+
+    @app.route("/<path:path>")
+    def serve_static_or_spa(path):
+        if path.startswith("api/") or path == "docs" or path.startswith("docs/") or path == "swagger.json" or path.startswith("swaggerui/"):
+            return {"error": "Resource not found"}, 404
+        file_path = os.path.join(frontend_dir, path)
+        if os.path.isfile(file_path):
+            return send_from_directory(frontend_dir, path)
+        return send_from_directory(frontend_dir, "index.html")
+
     return app

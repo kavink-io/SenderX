@@ -54,6 +54,14 @@ def resolve_account(identity, claims):
         if not organization or organization.get("status") != "ACTIVE":
             return None, "Organization is inactive or unavailable"
 
+        from app.modules.users.service import UserService
+        ctx = UserService.get_dashboard_context(identity, organization_id)
+        if ctx.get("success") and ctx.get("data"):
+            account_data = dict(ctx["data"])
+            account_data["id"] = user["user_id"]
+            account_data["role_ids"] = user.get("role_ids", [])
+            return account_data, None
+
         return {
             "account_type": "ORGANIZATION_USER",
             "id": user["user_id"],

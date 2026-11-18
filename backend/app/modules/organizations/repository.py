@@ -1,4 +1,5 @@
 
+import re
 from datetime import datetime, timezone
 from flask import current_app
 
@@ -40,17 +41,50 @@ class OrganizationRepository:
         })
 
     @classmethod
-    def find_all(cls, limit=50, page=1):
-        limit = max(1, min(int(limit), 100))
-        page = max(1, int(page))
+    def update(cls, organization_id, update_fields, session=None):
+        update_fields = dict(update_fields)
+        update_fields["updated_at"] = cls._now()
+        cls._collection().update_one(
+            {"organization_id": organization_id},
+            {"$set": update_fields},
+            session=session
+        )
+        return cls.find_by_id(organization_id)
+
+    @classmethod
+    def find_all(cls, limit=50, page=1, search=None, status=None):
+        try:
+            limit = max(1, min(int(limit), 100))
+        except (ValueError, TypeError):
+            limit = 50
+
+        try:
+            page = max(1, int(page))
+        except (ValueError, TypeError):
+            page = 1
 
         collection = cls._collection()
 
-        total = collection.count_documents({})
+        query = {}
+        if status:
+            status_clean = str(status).strip().upper()
+            if status_clean in ("ACTIVE", "INACTIVE"):
+                query["status"] = status_clean
+
+        if search:
+            search_clean = str(search).strip()
+            if search_clean:
+                escaped_search = re.escape(search_clean)
+                query["$or"] = [
+                    {"name": {"$regex": escaped_search, "$options": "i"}},
+                    {"slug": {"$regex": escaped_search, "$options": "i"}}
+                ]
+
+        total = collection.count_documents(query)
 
         items = list(
             collection.find(
-                {},
+                query,
                 {"_id": 0}
             )
             .sort("created_at", -1)
@@ -58,13 +92,15 @@ class OrganizationRepository:
             .limit(limit)
         )
 
+        total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
+
         return {
             "items": items,
             "pagination": {
                 "total": total,
                 "page": page,
                 "limit": limit,
-                "total_pages": (total + limit - 1) // limit
+                "total_pages": total_pages
             }
         }
 
