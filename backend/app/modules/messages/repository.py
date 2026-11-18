@@ -1,4 +1,5 @@
 
+import re
 from flask import current_app
 from datetime import datetime, timezone
 
@@ -27,6 +28,7 @@ class MessageRepository:
 
         db_document.setdefault("retry_count", 0)
         db_document.setdefault("manual_retry_count", 0)
+        db_document.setdefault("application_id", None)
 
         cls._collection().insert_one(db_document)
 
@@ -37,7 +39,7 @@ class MessageRepository:
     # --------------------------------------------------
 
     @classmethod
-    def find_by_id(cls, message_id, organization_id=None):
+    def find_by_id(cls, message_id, organization_id=None, application_ids=None):
 
         query = {
             "message_id": message_id
@@ -45,6 +47,12 @@ class MessageRepository:
 
         if organization_id is not None:
             query["organization_id"] = organization_id
+
+        if application_ids is not None:
+            if isinstance(application_ids, (list, set, tuple)):
+                query["application_id"] = {"$in": list(application_ids)}
+            elif isinstance(application_ids, str):
+                query["application_id"] = application_ids
 
         return cls._collection().find_one(
             query,
@@ -64,7 +72,11 @@ class MessageRepository:
         status=None,
         channel=None,
         provider=None,
-        recipient=None
+        recipient=None,
+        application_id=None,
+        search=None,
+        start_date=None,
+        end_date=None
     ):
         query = {}
 
@@ -79,6 +91,32 @@ class MessageRepository:
             query["provider"] = provider
         if recipient:
             query["recipient"] = recipient
+
+        if application_id is not None:
+            if isinstance(application_id, (list, set, tuple)):
+                query["application_id"] = {"$in": list(application_id)}
+            elif isinstance(application_id, str) and application_id.strip():
+                query["application_id"] = application_id.strip()
+
+        if search:
+            search_clean = str(search).strip()
+            if search_clean:
+                escaped = re.escape(search_clean)
+                query["$or"] = [
+                    {"recipient": {"$regex": escaped, "$options": "i"}},
+                    {"message_id": {"$regex": escaped, "$options": "i"}},
+                    {"provider_message_id": {"$regex": escaped, "$options": "i"}},
+                    {"data.subject": {"$regex": escaped, "$options": "i"}}
+                ]
+
+        if start_date or end_date:
+            date_filter = {}
+            if start_date:
+                date_filter["$gte"] = str(start_date).strip()
+            if end_date:
+                date_filter["$lte"] = str(end_date).strip()
+            if date_filter:
+                query["created_at"] = date_filter
 
         try:
             limit = max(1, min(int(limit), 100))
@@ -428,6 +466,54 @@ class MessageRepository:
                         "to": "DEAD",
                         "timestamp": now,
                         "reason": "Manual retry dispatch failed"
+                    }
+                }
+            }
+        )
+
+        return result.modified_count > 0
+
+    # --------------------------------------------------
+    # REQUEUE FAILED MESSAGE (MANUAL RETRY)
+    # --------------------------------------------------
+
+    @classmethod
+    def requeue_failed_message(
+        cls,
+        message_id,
+        organization_id=None
+    ):
+        now = cls._now()
+
+        query = {
+            "message_id": message_id,
+            "status": "FAILED"
+        }
+
+        if organization_id is not None:
+            query["organization_id"] = organization_id
+
+        result = cls._collection().update_one(
+            query,
+            {
+                "$set": {
+                    "status": "QUEUED",
+                    "retry_count": 0,
+                    "updated_at": now
+                },
+                "$unset": {
+                    "last_error": "",
+                    "provider_message_id": ""
+                },
+                "$inc": {
+                    "manual_retry_count": 1
+                },
+                "$push": {
+                    "status_history": {
+                        "from": "FAILED",
+                        "to": "QUEUED",
+                        "timestamp": now,
+                        "reason": "Manual retry requested from dashboard"
                     }
                 }
             }

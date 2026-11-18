@@ -74,14 +74,6 @@ def get_my_dashboard_context():
     return jsonify(result), result.get("status_code", 200 if result.get("success") else 400)
 
 
-@users_bp.route("/next-employee-code", methods=["GET"])
-@require_permissions("organization:users:manage")
-def get_next_employee_code():
-    organization_id = g.current_organization["organization_id"]
-    result = UserService.get_next_employee_code(organization_id)
-    return jsonify(result), result.get("status_code", 200 if result.get("success") else 400)
-
-
 @users_bp.route("/<string:user_id>", methods=["GET"])
 @require_permissions("organization:users:manage")
 def get_user(user_id):

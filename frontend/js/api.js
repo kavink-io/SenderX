@@ -91,6 +91,10 @@ const ApiClient = {
       ...(options.headers || {})
     };
 
+    if (options.body instanceof FormData) {
+      delete headers["Content-Type"];
+    }
+
     const token = this.getAccessToken();
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
@@ -139,8 +143,9 @@ const ApiClient = {
         }
       });
       const data = await res.json();
-      if (data.success && data.data?.access_token) {
-        this.setTokens(data.data.access_token, null);
+      const token = data.access_token || data.data?.access_token;
+      if (data.success && token) {
+        this.setTokens(token, null);
         return true;
       }
       return false;
@@ -402,8 +407,43 @@ const ApiClient = {
     });
   },
 
-  async listMessages(page = 1, limit = 50) {
-    return await this.request(`/messages/?page=${page}&limit=${limit}`);
+  async listMessages(page = 1, limit = 50, filters = {}) {
+    let query = `?page=${page}&limit=${limit}`;
+    if (filters.search) query += `&search=${encodeURIComponent(filters.search)}`;
+    if (filters.status) query += `&status=${encodeURIComponent(filters.status)}`;
+    if (filters.channel) query += `&channel=${encodeURIComponent(filters.channel)}`;
+    if (filters.provider) query += `&provider=${encodeURIComponent(filters.provider)}`;
+    if (filters.recipient) query += `&recipient=${encodeURIComponent(filters.recipient)}`;
+    if (filters.application_id) query += `&application_id=${encodeURIComponent(filters.application_id)}`;
+    if (filters.start_date) query += `&start_date=${encodeURIComponent(filters.start_date)}`;
+    if (filters.end_date) query += `&end_date=${encodeURIComponent(filters.end_date)}`;
+    return await this.request(`/messages/${query}`);
+  },
+
+  async getMessage(messageId) {
+    return await this.request(`/messages/${messageId}`);
+  },
+
+  async retryMessage(messageId) {
+    return await this.request(`/messages/${messageId}/retry`, {
+      method: "POST"
+    });
+  },
+
+  // Media / Attachments
+  async uploadMedia(formData) {
+    return await this.request("/media/upload", {
+      method: "POST",
+      body: formData
+    });
+  },
+
+  async listMedia(page = 1, limit = 50, filters = {}) {
+    let query = `?page=${page}&limit=${limit}`;
+    if (filters.search) query += `&search=${encodeURIComponent(filters.search)}`;
+    if (filters.mime_type) query += `&mime_type=${encodeURIComponent(filters.mime_type)}`;
+    if (filters.channel) query += `&channel=${encodeURIComponent(filters.channel)}`;
+    return await this.request(`/media/${query}`);
   },
 
   // DLQ

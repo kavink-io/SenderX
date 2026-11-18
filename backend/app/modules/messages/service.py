@@ -12,7 +12,7 @@ from flask import current_app
 class MessageService:
 
     @classmethod
-    def create_message(cls, payload, organization_id):
+    def create_message(cls, payload, organization_id, application_id=None):
 
         # Handle multiple recipients if a list is provided
         recipients = payload.get("recipient")
@@ -21,7 +21,7 @@ class MessageService:
             for single_recip in recipients:
                 sub_payload = dict(payload)
                 sub_payload["recipient"] = single_recip
-                sub_res = cls.create_message(sub_payload, organization_id)
+                sub_res = cls.create_message(sub_payload, organization_id, application_id=application_id)
                 if not sub_res["success"]:
                     return sub_res
                 created_messages.append(sub_res["message"])
@@ -190,6 +190,11 @@ class MessageService:
         # Never trust organization_id supplied by the client.
         message["organization_id"] = organization_id
 
+        # Associate application_id if supplied
+        app_id = application_id or payload.get("application_id")
+        if app_id:
+            message["application_id"] = str(app_id).strip()
+
         if template_metadata:
             message.update(template_metadata)
 
@@ -202,12 +207,26 @@ class MessageService:
         }
 
     @staticmethod
-    def get_message(message_id, organization_id):
+    def get_message(message_id, organization_id, user_application_ids=None):
 
-        return MessageRepository.find_by_id(
+        message = MessageRepository.find_by_id(
             message_id,
             organization_id=organization_id
         )
+
+        if not message:
+            return None
+
+        # Enforce application scope for employees
+        if user_application_ids:
+            msg_app = message.get("application_id")
+            if not msg_app or msg_app not in user_application_ids:
+                return {
+                    "_error": "FORBIDDEN",
+                    "message": "Access denied for this application scope"
+                }
+
+        return message
 
     @staticmethod
     def get_all_messages(
@@ -217,8 +236,32 @@ class MessageService:
         status=None,
         channel=None,
         provider=None,
-        recipient=None
+        recipient=None,
+        application_id=None,
+        search=None,
+        start_date=None,
+        end_date=None,
+        user_application_ids=None
     ):
+        effective_app_id = application_id
+
+        # Application scope enforcement for employees
+        if user_application_ids:
+            if application_id:
+                if application_id not in user_application_ids:
+                    return {
+                        "items": [],
+                        "pagination": {
+                            "total": 0,
+                            "page": page,
+                            "limit": limit,
+                            "total_pages": 0
+                        }
+                    }
+                effective_app_id = application_id
+            else:
+                effective_app_id = list(user_application_ids)
+
         return MessageRepository.find_all(
             organization_id=organization_id,
             limit=limit,
@@ -226,8 +269,115 @@ class MessageService:
             status=status,
             channel=channel,
             provider=provider,
-            recipient=recipient
+            recipient=recipient,
+            application_id=effective_app_id,
+            search=search,
+            start_date=start_date,
+            end_date=end_date
         )
+
+    @classmethod
+    def retry_message(cls, message_id, organization_id, user_application_ids=None):
+        """
+        Manually retry an eligible failed or dead message.
+        - Verifies organization ownership and employee application scope.
+        - Rejects retry if message is currently processing, queued, sent, or delivered.
+        - For DEAD messages in DLQ, delegates to DeadLetterService.retry_dead_letter.
+        - For FAILED messages, updates status to QUEUED and dispatches Celery task.
+        """
+        message = MessageRepository.find_by_id(
+            message_id,
+            organization_id=organization_id
+        )
+
+        if not message:
+            return {
+                "success": False,
+                "status_code": 404,
+                "message": "Message not found"
+            }
+
+        # Check employee application scope
+        if user_application_ids:
+            msg_app = message.get("application_id")
+            if not msg_app or msg_app not in user_application_ids:
+                return {
+                    "success": False,
+                    "status_code": 403,
+                    "message": "You do not have permission to retry messages for this application scope"
+                }
+
+        current_status = message.get("status")
+
+        if current_status in ("SENT", "DELIVERED", "READ"):
+            return {
+                "success": False,
+                "status_code": 400,
+                "message": f"Cannot retry already delivered or sent message in status '{current_status}'"
+            }
+
+        if current_status in ("QUEUED", "PROCESSING"):
+            return {
+                "success": False,
+                "status_code": 409,
+                "message": f"Message is currently being processed ({current_status})"
+            }
+
+        if current_status == "DEAD":
+            try:
+                from app.modules.dead_letters.service import DeadLetterService
+                dlq_res = DeadLetterService.retry_dead_letter(
+                    message_id=message_id,
+                    organization_id=organization_id
+                )
+                if dlq_res.get("success"):
+                    return dlq_res
+            except Exception as dlq_err:
+                current_app.logger.warning("DLQ retry failed, trying direct requeue: %s", dlq_err)
+
+        # Transition status to QUEUED
+        requeued = MessageRepository.requeue_failed_message(
+            message_id=message_id,
+            organization_id=organization_id
+        )
+
+        if not requeued:
+            if current_status == "DEAD":
+                requeued = MessageRepository.requeue_dead_message(
+                    message_id=message_id,
+                    previous_retry_count=message.get("retry_count", 0),
+                    organization_id=organization_id
+                )
+
+        if not requeued:
+            return {
+                "success": False,
+                "status_code": 400,
+                "message": f"Could not transition message from status '{current_status}' to QUEUED for retry"
+            }
+
+        try:
+            task = current_app.celery.send_task(
+                "senderx.process_message",
+                args=[message_id]
+            )
+            return {
+                "success": True,
+                "status_code": 200,
+                "message": "Message successfully requeued for retry",
+                "message_id": message_id,
+                "status": "QUEUED",
+                "task_id": task.id
+            }
+        except Exception as e:
+            current_app.logger.exception("Failed to dispatch Celery retry task: %s", e)
+            return {
+                "success": True,
+                "status_code": 200,
+                "message": "Message status marked QUEUED for retry (dispatch pending)",
+                "message_id": message_id,
+                "status": "QUEUED"
+            }
 
     @classmethod
     def queue_message(cls, message_id, organization_id):

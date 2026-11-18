@@ -100,9 +100,16 @@ class AuthService:
                 "data": {
                     "account": {
                         "id": admin_id,
+                        "admin_id": admin_id,
+                        "name": admin.get("name") or "Platform Administrator",
                         "email": email,
                         "account_type": "PLATFORM_ADMIN",
-                        "role": role
+                        "role": role,
+                        "status": "ACTIVE" if admin.get("is_active", True) else "INACTIVE",
+                        "is_active": admin.get("is_active", True),
+                        "created_at": admin.get("created_at"),
+                        "last_login_at": admin.get("last_login_at"),
+                        "last_login": admin.get("last_login_at")
                     },
                     **tokens
                 }
@@ -160,9 +167,16 @@ class AuthService:
 
         account_data = {
             "id": user_id,
+            "name": user.get("name", email),
             "email": email,
             "account_type": "ORGANIZATION_USER",
             "organization_id": organization_id,
+            "employee_code": user.get("employee_code"),
+            "status": "ACTIVE" if user.get("is_active", True) else "INACTIVE",
+            "is_active": user.get("is_active", True),
+            "created_at": user.get("created_at"),
+            "last_login_at": user.get("last_login_at"),
+            "last_login": user.get("last_login_at"),
             "role_ids": user.get("role_ids", [])
         }
 

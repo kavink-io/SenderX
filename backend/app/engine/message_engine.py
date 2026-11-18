@@ -27,6 +27,7 @@ class MessageEngine:
             "recipient": payload["recipient"],
             "data": payload["data"],
             "provider": payload.get("provider"),
+            "application_id": payload.get("application_id"),
             "status": "CREATED",
             "created_at": datetime.now(
                 timezone.utc

@@ -169,75 +169,33 @@ def identity_test_context(app):
 
 class TestOrganizationIdentityConfiguration:
 
-    def test_get_identity_config(self, client, identity_test_context):
+    def test_get_identity_config_removed(self, client, identity_test_context):
+        """Per Task 5.2, organization identity prefix endpoints have been removed."""
         headers = {"Authorization": f"Bearer {identity_test_context['token_admin_a']}"}
         res = client.get("/api/v1/organizations/identity", headers=headers)
-        assert res.status_code == 200
-        data = res.get_json()["data"]
-        assert "employee_id_prefix" in data
-        assert "preview_next_code" in data
-        assert "next_employee_sequence" in data
+        assert res.status_code in (403, 404, 405)
 
-    def test_configure_prefix_validation(self, client, identity_test_context):
+    def test_configure_prefix_removed(self, client, identity_test_context):
+        """Per Task 5.2, organization identity prefix endpoints have been removed."""
         headers = {"Authorization": f"Bearer {identity_test_context['token_admin_a']}"}
-
-        # Too short (< 2 chars)
-        res = client.patch("/api/v1/organizations/identity", json={"employee_id_prefix": "A"}, headers=headers)
-        assert res.status_code == 400
-        assert "between 2 and 20 characters" in res.get_json()["message"]
-
-        # Invalid characters (lowercase or symbols)
-        res = client.patch("/api/v1/organizations/identity", json={"employee_id_prefix": "abc_prefix!"}, headers=headers)
-        assert res.status_code == 400
-        assert "uppercase letters, numbers, and hyphens" in res.get_json()["message"]
-
-    def test_configure_prefix_success(self, client, identity_test_context):
-        headers = {"Authorization": f"Bearer {identity_test_context['token_admin_a']}"}
-        suffix = identity_test_context["suffix"].upper()
-        prefix = f"ALPHA-{suffix}"
-
-        res = client.patch(
-            "/api/v1/organizations/identity",
-            json={
-                "employee_id_prefix": prefix
-            },
-            headers=headers
-        )
-        assert res.status_code == 200
-        data = res.get_json()["data"]
-        assert data["employee_id_prefix"] == prefix
-        assert data["preview_next_code"].startswith(prefix)
-
-    def test_employee_prefix_update_allowed(self, client, identity_test_context):
-        headers = {"Authorization": f"Bearer {identity_test_context['token_admin_a']}"}
-
-        res = client.patch(
-            "/api/v1/organizations/identity",
-            json={"employee_id_prefix": "ALPHA-STAFF"},
-            headers=headers
-        )
-        assert res.status_code == 200
-        data = res.get_json()["data"]
-        assert data["employee_id_prefix"] == "ALPHA-STAFF"
-        assert data["preview_next_code"] == "ALPHA-STAFF-001"
+        res = client.patch("/api/v1/organizations/identity", json={"employee_id_prefix": "ALPHA"}, headers=headers)
+        assert res.status_code in (404, 405)
 
 
 class TestEmployeeBusinessIdManagement:
 
-    def test_preview_next_employee_code(self, client, identity_test_context):
+    def test_preview_next_employee_code_removed(self, client, identity_test_context):
+        """Per Task 5.2, next-employee-code sequence preview has been removed."""
         headers = {"Authorization": f"Bearer {identity_test_context['token_admin_a']}"}
         res = client.get("/api/v1/users/next-employee-code", headers=headers)
-        assert res.status_code == 200
-        data = res.get_json()["data"]
-        assert data["next_code"] == "ALPHA-STAFF-001"
-        assert data["prefix"] == "ALPHA-STAFF"
-        assert data["next_value"] == 1
+        assert res.status_code == 404
 
-    def test_create_employee_auto_sequence_allocation(self, client, identity_test_context):
+    def test_create_employee_auto_sequence_allocation_disallowed(self, client, identity_test_context):
+        """Per Task 5.2, employee_code is required and auto sequence allocation is removed."""
         headers = {"Authorization": f"Bearer {identity_test_context['token_admin_a']}"}
         suffix = identity_test_context["suffix"]
 
-        # 1. Create first auto-allocated employee
+        # Missing employee_code -> returns 400
         res1 = client.post(
             "/api/v1/users/",
             json={
@@ -248,24 +206,8 @@ class TestEmployeeBusinessIdManagement:
             },
             headers=headers
         )
-        assert res1.status_code == 201
-        data1 = res1.get_json()["data"]
-        assert data1["employee_code"] == "ALPHA-STAFF-001"
-
-        # 2. Create second auto-allocated employee -> monotonic sequence
-        res2 = client.post(
-            "/api/v1/users/",
-            json={
-                "name": "Auto User Two",
-                "email": f"auto2_{suffix}@test.io",
-                "password": "Password123456!",
-                "role_ids": [identity_test_context["role_a_dev"]]
-            },
-            headers=headers
-        )
-        assert res2.status_code == 201
-        data2 = res2.get_json()["data"]
-        assert data2["employee_code"] == "ALPHA-STAFF-002"
+        assert res1.status_code == 400
+        assert "Employee ID is required" in res1.get_json()["message"]
 
     def test_create_employee_manual_code_assignment(self, client, identity_test_context):
         headers = {"Authorization": f"Bearer {identity_test_context['token_admin_a']}"}
@@ -374,7 +316,7 @@ class TestEmployeeBusinessIdManagement:
         ctx = res.get_json()["data"]
         assert "employee_code" in ctx
         assert "organization_code" not in ctx or ctx.get("organization_code") is None
-        assert ctx["employee_id_prefix"] == "ALPHA-STAFF"
+        assert "employee_id_prefix" not in ctx or ctx.get("employee_id_prefix") is None
 
 
 class TestMigrationUtility:

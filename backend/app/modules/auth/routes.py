@@ -35,8 +35,15 @@ def resolve_account(identity, claims):
         return {
             "account_type": "PLATFORM_ADMIN",
             "id": admin["admin_id"],
+            "admin_id": admin["admin_id"],
+            "name": admin.get("name") or "Platform Administrator",
             "email": admin["email"],
-            "role": admin.get("role", "VIEWER")
+            "role": admin.get("role", "SUPER_ADMIN"),
+            "status": "ACTIVE" if admin.get("is_active", True) else "INACTIVE",
+            "is_active": admin.get("is_active", True),
+            "created_at": admin.get("created_at"),
+            "last_login_at": admin.get("last_login_at"),
+            "last_login": admin.get("last_login_at")
         }, None
 
     if account_type == "ORGANIZATION_USER":
@@ -59,15 +66,34 @@ def resolve_account(identity, claims):
         if ctx.get("success") and ctx.get("data"):
             account_data = dict(ctx["data"])
             account_data["id"] = user["user_id"]
+            account_data["name"] = user.get("name", user["email"])
+            account_data["email"] = user["email"]
+            account_data["employee_code"] = user.get("employee_code")
+            account_data["status"] = "ACTIVE" if user.get("is_active", True) else "INACTIVE"
+            account_data["is_active"] = user.get("is_active", True)
+            account_data["created_at"] = user.get("created_at")
+            account_data["last_login_at"] = user.get("last_login_at")
+            account_data["last_login"] = user.get("last_login_at")
             account_data["role_ids"] = user.get("role_ids", [])
+            account_data["role"] = "ORG_ADMIN" if account_data.get("is_org_admin") else (
+                account_data.get("roles", [{}])[0].get("name") if account_data.get("roles") else "EMPLOYEE"
+            )
             return account_data, None
 
         return {
             "account_type": "ORGANIZATION_USER",
             "id": user["user_id"],
+            "name": user.get("name", user["email"]),
             "email": user["email"],
+            "employee_code": user.get("employee_code"),
             "organization_id": organization_id,
-            "role_ids": user.get("role_ids", [])
+            "status": "ACTIVE" if user.get("is_active", True) else "INACTIVE",
+            "is_active": user.get("is_active", True),
+            "created_at": user.get("created_at"),
+            "last_login_at": user.get("last_login_at"),
+            "last_login": user.get("last_login_at"),
+            "role_ids": user.get("role_ids", []),
+            "role": "EMPLOYEE"
         }, None
 
     # Backward compatibility for older platform-admin tokens.
@@ -77,8 +103,15 @@ def resolve_account(identity, claims):
         return {
             "account_type": "PLATFORM_ADMIN",
             "id": admin["admin_id"],
+            "admin_id": admin["admin_id"],
+            "name": admin.get("name") or "Platform Administrator",
             "email": admin["email"],
-            "role": admin.get("role", "VIEWER")
+            "role": admin.get("role", "SUPER_ADMIN"),
+            "status": "ACTIVE" if admin.get("is_active", True) else "INACTIVE",
+            "is_active": admin.get("is_active", True),
+            "created_at": admin.get("created_at"),
+            "last_login_at": admin.get("last_login_at"),
+            "last_login": admin.get("last_login_at")
         }, None
 
     return None, "Account not found or inactive"

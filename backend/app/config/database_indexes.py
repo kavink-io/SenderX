@@ -128,11 +128,5 @@ def ensure_database_indexes(app=None):
     db["security_audit_logs"].create_index([("target_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
     db["security_audit_logs"].create_index([("organization_id", pymongo.ASCENDING), ("event_type", pymongo.ASCENDING)])
 
-    # 16. Organization Sequences
-    db["organization_sequences"].create_index(
-        [("organization_id", pymongo.ASCENDING), ("sequence_type", pymongo.ASCENDING)],
-        unique=True
-    )
-
 
 

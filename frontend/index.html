@@ -908,40 +908,6 @@
           </div>
 
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
-            <!-- Employee ID Configuration Card (Phase 5 Task 4) -->
-            <div class="card-panel" style="grid-column: span 2;">
-              <div class="card-panel-header">
-                <div>
-                  <span class="card-panel-title">Employee ID Configuration</span>
-                  <p class="subtitle" style="margin: 4px 0 0 0; font-size: 0.8rem;">Configure your organizational employee ID prefix and sequence formatting</p>
-                </div>
-              </div>
-
-              <form id="form-org-identity" onsubmit="saveOrganizationIdentity(event)" style="margin-top: 14px;">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                  <div class="form-group">
-                    <label>Employee ID Prefix</label>
-                    <input type="text" id="identity-emp-prefix" placeholder="e.g. ACME-EMP, DEV, or EMP" style="text-transform: uppercase; font-family: var(--font-mono);" />
-                    <span class="subtitle" style="font-size: 0.725rem; margin-top: 4px; display: block;">
-                      Prefix prepended to sequentially allocated employee business IDs (e.g. PREFIX-001). Default is EMP.
-                    </span>
-                  </div>
-
-                  <div class="form-group">
-                    <label>Sequence Preview</label>
-                    <div style="padding: 10px 14px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.85rem;">
-                      <div>Next Generated ID: <strong id="identity-preview-code" style="color: #38bdf8; font-family: var(--font-mono);">-</strong></div>
-                      <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Current Sequence Counter: <span id="identity-next-seq">-</span></div>
-                    </div>
-                  </div>
-                </div>
-
-                <div style="display: flex; justify-content: flex-end; align-items: center; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-color);">
-                  <button type="submit" class="btn btn-primary" id="btn-save-identity" data-perm="organization:users:manage">Save Employee ID Prefix</button>
-                </div>
-              </form>
-            </div>
-
             <!-- Profile Card -->
             <div class="card-panel">
               <div class="card-panel-header">
@@ -1012,29 +978,349 @@
           </div>
         </section>
 
-        <!-- PRESERVED FUNCTIONALITY: MESSAGES & TEMPLATES (Available for Platform / Internal Direct Use) -->
+        <!-- 4. MESSAGE MANAGEMENT DASHBOARD (Phase 5 Task 5.1) -->
         <section id="tab-org-messages" class="tab-pane">
           <div class="section-toolbar">
-            <h3>Direct Messages</h3>
-            <button class="btn btn-secondary" onclick="loadOrgMessages()">Refresh</button>
+            <div>
+              <h3>Message Management Dashboard</h3>
+              <p class="subtitle" style="margin: 0;">Multi-channel message dispatch, lifecycle tracking, delivery events, manual retry, and real-time analytics</p>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-secondary" onclick="loadOrgMessages(msgCurrentPage, msgLimit)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                Refresh
+              </button>
+              <button class="btn btn-primary" onclick="switchMessageSubtab('composer')">
+                + Compose Message
+              </button>
+            </div>
           </div>
-          <div class="table-container">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Message ID</th>
-                  <th>Recipient</th>
-                  <th>Channel</th>
-                  <th>Provider</th>
-                  <th>Status</th>
-                  <th>Retries</th>
-                  <th>Created At</th>
-                </tr>
-              </thead>
-              <tbody id="messages-table-body">
-                <tr><td colspan="7" class="loading-cell">Loading messages...</td></tr>
-              </tbody>
-            </table>
+
+          <!-- Sub-navigation Pills -->
+          <div class="subnav-pills">
+            <button class="subnav-pill active" id="pill-msg-history" onclick="switchMessageSubtab('history')">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              Message History
+            </button>
+            <button class="subnav-pill" id="pill-msg-composer" onclick="switchMessageSubtab('composer')">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              Message Composer
+            </button>
+            <button class="subnav-pill" id="pill-msg-scheduled" onclick="switchMessageSubtab('scheduled')">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              Scheduled Messages
+            </button>
+            <button class="subnav-pill" id="pill-msg-analytics" onclick="switchMessageSubtab('analytics')">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              Message Analytics
+            </button>
+          </div>
+
+          <!-- SUB-VIEW 1: MESSAGE HISTORY -->
+          <div id="subview-msg-history">
+            <!-- Analytics Summary Bar -->
+            <div class="metrics-grid" style="margin-bottom: 20px;">
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">Total Messages</span></div>
+                <div class="metric-value" id="msg-stat-total">0</div>
+                <div class="subtitle" style="font-size: 0.72rem; margin-top: 4px;">Lifetime across channels</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">Accepted by Provider</span></div>
+                <div class="metric-value" id="msg-stat-sent" style="color: #38bdf8;">0</div>
+                <div class="subtitle" style="font-size: 0.72rem; margin-top: 4px;">SENT state (Dispatched)</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">Confirmed Delivered</span></div>
+                <div class="metric-value success" id="msg-stat-delivered">0</div>
+                <div class="subtitle" style="font-size: 0.72rem; margin-top: 4px;">Verified by webhook/carrier</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">Delivery Rate</span></div>
+                <div class="metric-value" id="msg-stat-rate">0%</div>
+                <div class="subtitle" style="font-size: 0.72rem; margin-top: 4px;">Sent + Delivered ratio</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">Failed / Dead</span></div>
+                <div class="metric-value danger" id="msg-stat-failed">0</div>
+                <div class="subtitle" style="font-size: 0.72rem; margin-top: 4px;">Failed attempts</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">DLQ Unresolved</span></div>
+                <div class="metric-value warning" id="msg-stat-dlq">0</div>
+                <div class="subtitle" style="font-size: 0.72rem; margin-top: 4px;">Dead Letter Queue</div>
+              </div>
+            </div>
+
+            <!-- Filter Toolbar -->
+            <div class="filter-toolbar">
+              <div class="filter-search-box">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="msg-search" placeholder="Search recipient, message ID, provider ID..." oninput="debounceFilterMessages()" />
+              </div>
+              <select id="msg-filter-app" class="filter-select" onchange="handleMessageFilterChange()">
+                <option value="">All Applications</option>
+              </select>
+              <select id="msg-filter-channel" class="filter-select" onchange="handleMessageFilterChange()">
+                <option value="">All Channels</option>
+                <option value="email">Email</option>
+                <option value="sms">SMS</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="microsoft_teams">Microsoft Teams</option>
+              </select>
+              <select id="msg-filter-status" class="filter-select" onchange="handleMessageFilterChange()">
+                <option value="">All Statuses</option>
+                <option value="DELIVERED">DELIVERED (Confirmed)</option>
+                <option value="SENT">SENT (Accepted)</option>
+                <option value="QUEUED">QUEUED</option>
+                <option value="PROCESSING">PROCESSING</option>
+                <option value="RETRYING">RETRYING</option>
+                <option value="FAILED">FAILED</option>
+                <option value="DEAD">DEAD (DLQ)</option>
+                <option value="CREATED">CREATED (Draft)</option>
+              </select>
+              <input type="date" id="msg-filter-start-date" class="filter-select" style="max-width: 140px;" title="Start Date" onchange="handleMessageFilterChange()" />
+              <input type="date" id="msg-filter-end-date" class="filter-select" style="max-width: 140px;" title="End Date" onchange="handleMessageFilterChange()" />
+              <select id="msg-limit-select" class="filter-select" style="max-width: 90px;" onchange="handleMessageLimitChange()">
+                <option value="10">10 / pg</option>
+                <option value="25">25 / pg</option>
+                <option value="50" selected>50 / pg</option>
+                <option value="100">100 / pg</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" id="btn-msg-reset" onclick="resetMessageFilters()" title="Reset Filters">Reset</button>
+            </div>
+
+            <!-- Table Container -->
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Message ID</th>
+                    <th>Application</th>
+                    <th>Channel</th>
+                    <th>Recipient</th>
+                    <th>Lifecycle Status</th>
+                    <th>Retries</th>
+                    <th>Dispatched At</th>
+                    <th style="text-align: right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="messages-table-body">
+                  <tr><td colspan="8" class="loading-cell">Loading messages...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Pagination Bar -->
+            <div class="pagination-bar" id="msg-pagination-bar" style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; padding: 10px 16px; background: var(--glass-card); border-radius: 10px; border: 1px solid var(--glass-border);">
+              <span id="msg-pagination-info" style="font-size: 0.85rem; color: var(--text-secondary);">Showing 0 of 0 messages</span>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <button class="btn btn-secondary btn-sm" id="msg-prev-btn" onclick="navigateMessagePage(-1)" disabled>&laquo; Prev</button>
+                <span id="msg-page-indicator" style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary);">Page 1 of 1</span>
+                <button class="btn btn-secondary btn-sm" id="msg-next-btn" onclick="navigateMessagePage(1)" disabled>Next &raquo;</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- SUB-VIEW 2: MESSAGE COMPOSER -->
+          <div id="subview-msg-composer" style="display: none;">
+            <div class="composer-grid">
+              <!-- Left Form Card -->
+              <div class="composer-card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                  <div>
+                    <h4 style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">Compose Message</h4>
+                    <p class="subtitle" style="margin: 4px 0 0 0; font-size: 0.8rem;">Explicit channel selection, dynamic templates, media, and immediate validation</p>
+                  </div>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="switchMessageSubtab('history')">Cancel</button>
+                </div>
+
+                <form id="composer-form" onsubmit="handleComposerSubmit(event)">
+                  <!-- 1. Connected Application Selection -->
+                  <div class="form-group">
+                    <label for="composer-app">Connected Application <span style="color: var(--status-error);">*</span></label>
+                    <select id="composer-app" class="form-control" required onchange="handleComposerInputChange()">
+                      <option value="" disabled selected>-- Select Connected Application --</option>
+                    </select>
+                    <small class="form-text" style="color: var(--text-muted); font-size: 0.75rem;">Messages are securely scoped and attributed to your application.</small>
+                  </div>
+
+                  <!-- 2. Explicit Channel Selection -->
+                  <div class="form-group">
+                    <label for="composer-channel">Communication Channel <span style="color: var(--status-error);">*</span></label>
+                    <select id="composer-channel" class="form-control" required onchange="handleComposerChannelChange()">
+                      <option value="" disabled selected>-- Select Channel (Explicit) --</option>
+                      <option value="email">Email</option>
+                      <option value="sms">SMS</option>
+                      <option value="whatsapp">WhatsApp</option>
+                      <option value="microsoft_teams">Microsoft Teams</option>
+                    </select>
+                    <small class="form-text" style="color: var(--text-muted); font-size: 0.75rem;">Channels are never guessed. Supported: Email, SMS, WhatsApp, Microsoft Teams.</small>
+                  </div>
+
+                  <!-- 3. Recipient -->
+                  <div class="form-group">
+                    <label for="composer-recipient">Recipient <span style="color: var(--status-error);">*</span></label>
+                    <input type="text" id="composer-recipient" class="form-control" placeholder="Select a channel first" required oninput="handleComposerInputChange()" />
+                    <small id="composer-recipient-hint" class="form-text" style="color: var(--text-muted); font-size: 0.75rem;">Enter recipient address or identifier.</small>
+                  </div>
+
+                  <!-- 4. Template Selection (Optional) -->
+                  <div class="form-group">
+                    <label for="composer-template">Message Template <span style="color: var(--text-muted); font-weight: normal;">(Optional)</span></label>
+                    <select id="composer-template" class="form-control" onchange="handleComposerTemplateChange()">
+                      <option value="">-- None: Direct Plain Text / HTML Message --</option>
+                    </select>
+                    <small class="form-text" style="color: var(--text-muted); font-size: 0.75rem;">Select an active template to auto-populate content and variables.</small>
+                  </div>
+
+                  <!-- Dynamic Template Variables Container -->
+                  <div id="composer-template-vars-box" style="display: none; background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                      <label style="font-size: 0.8rem; font-weight: 600; color: var(--accent-cyan); margin: 0;">Template Variables (Key-Value JSON)</label>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="previewComposerTemplate()">Preview Render</button>
+                    </div>
+                    <textarea id="composer-template-vars" class="form-control" rows="3" style="font-family: var(--font-mono); font-size: 0.8rem;" placeholder='{"name": "John Doe", "code": "12345"}' oninput="handleComposerInputChange()"></textarea>
+                    <div id="composer-template-preview-output" style="margin-top: 8px; font-size: 0.8rem; display: none;"></div>
+                  </div>
+
+                  <!-- 5. Subject (Email / Teams) -->
+                  <div class="form-group" id="composer-subject-group">
+                    <label for="composer-subject">Subject <span id="composer-subject-req" style="color: var(--status-error); display: none;">*</span></label>
+                    <input type="text" id="composer-subject" class="form-control" placeholder="Message Subject Line..." oninput="handleComposerInputChange()" />
+                  </div>
+
+                  <!-- 6. Body Content -->
+                  <div class="form-group" id="composer-body-group">
+                    <label for="composer-body">Message Content / Body</label>
+                    <textarea id="composer-body" class="form-control" rows="4" placeholder="Enter message plain text or HTML..." oninput="handleComposerInputChange()"></textarea>
+                  </div>
+
+                  <!-- 7. Attachment Management -->
+                  <div class="form-group">
+                    <label>Attachments & Media</label>
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                      <label class="btn btn-secondary btn-sm" style="cursor: pointer; margin: 0; display: inline-flex; align-items: center; gap: 6px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                        Upload File
+                        <input type="file" id="composer-file-input" style="display: none;" onchange="handleComposerFileUpload(event)" />
+                      </label>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="openMediaSelectorModal()">
+                        Select from Media Library
+                      </button>
+                    </div>
+                    <div id="composer-attachments-list" style="min-height: 28px;"></div>
+                  </div>
+
+                  <!-- Form Action Buttons -->
+                  <div style="display: flex; gap: 12px; margin-top: 24px;">
+                    <button type="submit" class="btn btn-primary" id="btn-composer-send">
+                      Queue for Dispatch
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="handleComposerSaveDraft()">
+                      Save as Draft (CREATED)
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="resetComposerForm()">
+                      Reset
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <!-- Right Preview Card -->
+              <div class="composer-preview-card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                  <h5 style="margin: 0; color: var(--text-primary); font-size: 0.95rem;">Live Payload Preview</h5>
+                  <span class="badge" style="font-size: 0.7rem; background: rgba(56, 217, 245, 0.1); color: var(--accent-cyan);">JSON Spec</span>
+                </div>
+                <div class="payload-inspector-box" id="composer-payload-preview">{}</div>
+
+                <div style="margin-top: 20px;">
+                  <h6 style="margin: 0 0 8px 0; font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em;">Validation Checklist</h6>
+                  <ul class="validation-checklist">
+                    <li class="validation-item" id="val-app">&#9675; Connected Application Selected</li>
+                    <li class="validation-item" id="val-channel">&#9675; Explicit Channel Chosen</li>
+                    <li class="validation-item" id="val-recipient">&#9675; Recipient Format Valid</li>
+                    <li class="validation-item" id="val-content">&#9675; Message Content or Template Provided</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SUB-VIEW 3: SCHEDULED MESSAGES -->
+          <div id="subview-msg-scheduled" style="display: none;">
+            <div class="composer-card" style="max-width: 800px; margin: 0 auto; text-align: center; padding: 48px 32px;">
+              <div style="width: 56px; height: 56px; border-radius: 50%; background: rgba(245, 185, 76, 0.15); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px auto; color: var(--status-warning);">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </div>
+              <span class="badge" style="background: rgba(245, 185, 76, 0.15); color: #f5b94c; border: 1px solid rgba(245, 185, 76, 0.35); font-size: 0.75rem; margin-bottom: 12px;">CAPABILITY STATUS: SCHEDULED FOR SEPARATE PHASE</span>
+              <h3 style="color: var(--text-primary); margin-bottom: 10px;">Message Scheduling Engine</h3>
+              <p class="subtitle" style="font-size: 0.9rem; line-height: 1.6; max-width: 620px; margin: 0 auto 24px auto;">
+                The existing SenderX core architecture is engineered for immediate, real-time message ingestion, asynchronous Celery task execution, and multi-tenant delivery tracking. Native time-delayed scheduling is documented as a backend architectural gap.
+              </p>
+              
+              <div style="background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 20px; text-align: left; margin-bottom: 24px;">
+                <h5 style="color: var(--accent-cyan); margin: 0 0 8px 0; font-size: 0.85rem; text-transform: uppercase;">Proposed Implementation Specification (Phase 6 Task)</h5>
+                <ul style="color: var(--text-secondary); font-size: 0.85rem; line-height: 1.7; margin: 0; padding-left: 20px;">
+                  <li><strong>Target Schema</strong>: Support for <code>scheduled_at</code> ISO-8601 UTC timestamp in message payload.</li>
+                  <li><strong>Broker Dispatch</strong>: Celery Beat periodic scheduler / Redis sorted sets (ZADD by timestamp).</li>
+                  <li><strong>Lifecycle State</strong>: <code>SCHEDULED</code> status preceding <code>QUEUED</code> with worker pick-up.</li>
+                  <li><strong>Cancellation API</strong>: <code>DELETE /api/v1/messages/&lt;id&gt;/schedule</code> prior to queue transition.</li>
+                </ul>
+              </div>
+
+              <div style="display: flex; justify-content: center; gap: 12px;">
+                <button class="btn btn-secondary" onclick="switchMessageSubtab('history')">Return to Message History</button>
+                <button class="btn btn-primary" onclick="switchMessageSubtab('composer')">Send Immediate Message</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- SUB-VIEW 4: MESSAGE ANALYTICS -->
+          <div id="subview-msg-analytics" style="display: none;">
+            <div class="section-toolbar" style="margin-bottom: 16px;">
+              <div>
+                <h4 style="margin: 0; color: var(--text-primary);">Organization Messaging Analytics</h4>
+                <p class="subtitle" style="margin: 0; font-size: 0.8rem;">Live metrics aggregated directly from messages and dead letter collections</p>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="loadMessageAnalytics()">Refresh Analytics</button>
+            </div>
+
+            <div class="metrics-grid" style="margin-bottom: 24px;">
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">Total Messages</span><div class="metric-icon-box cyan"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></div></div>
+                <div class="metric-value" id="analytics-total">-</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">Delivery Success Rate</span><div class="metric-icon-box success"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div></div>
+                <div class="metric-value success" id="analytics-rate">-%</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">Failed & Dead</span><div class="metric-icon-box danger"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div></div>
+                <div class="metric-value danger" id="analytics-failed">-</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-header-row"><span class="metric-label">Queued & Processing</span><div class="metric-icon-box warning"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div></div>
+                <div class="metric-value warning" id="analytics-queued">-</div>
+              </div>
+            </div>
+
+            <!-- Two-column charts / breakdown -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+              <div class="composer-card">
+                <h5 style="color: var(--text-primary); margin: 0 0 16px 0;">Volume by Communication Channel</h5>
+                <div id="analytics-channel-breakdown" style="display: flex; flex-direction: column; gap: 12px;">
+                  <div style="color: var(--text-muted); font-size: 0.85rem;">Loading channel distribution...</div>
+                </div>
+              </div>
+              <div class="composer-card">
+                <h5 style="color: var(--text-primary); margin: 0 0 16px 0;">Recent 14-Day Dispatch Volume</h5>
+                <div id="analytics-trend-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto;">
+                  <div style="color: var(--text-muted); font-size: 0.85rem;">Loading daily volume trends...</div>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -1173,12 +1459,9 @@
           <input type="email" id="new-user-email" required placeholder="jane@company.com" />
         </div>
         <div class="form-group">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <label style="margin: 0;">Employee ID (Business Code)</label>
-            <button type="button" class="btn btn-outline btn-sm" style="padding: 2px 8px; font-size: 0.725rem;" onclick="generateNextEmployeeId()">Generate ID</button>
-          </div>
-          <input type="text" id="new-user-employee-code" placeholder="e.g. ABC-EMP-001 (leave blank to auto-allocate)" style="text-transform: uppercase; font-family: var(--font-mono);" />
-          <span style="font-size: 0.725rem; color: var(--text-muted); margin-top: 3px; display: block;">Immutable once created. Unique within your organization.</span>
+          <label>Employee ID *</label>
+          <input type="text" id="new-user-employee-code" required placeholder="e.g. EMP-101, ENG-402, or CORP-009" style="text-transform: uppercase; font-family: var(--font-mono);" />
+          <span style="font-size: 0.725rem; color: var(--text-muted); margin-top: 3px; display: block;">Required. Custom employee ID unique within your organization.</span>
         </div>
         <div class="form-group">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
@@ -1769,21 +2052,44 @@
 
   <!-- 7. User Profile & Scopes Modal -->
   <div id="modal-user-profile" class="modal">
-    <div class="modal-card">
+    <div class="modal-card" style="max-width: 580px;">
       <div class="modal-header">
-        <h4>User Profile & Access Scopes</h4>
+        <h4 id="profile-modal-title">User Profile & Access Scopes</h4>
         <button class="btn-close" onclick="closeModal('modal-user-profile')">&times;</button>
       </div>
       <div>
-        <div style="margin-bottom: 16px;">
-          <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+        <!-- Profile Overview Card -->
+        <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px; margin-bottom: 18px;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
             <div>
-              <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Authenticated Account</div>
-              <div style="font-size: 1.05rem; font-weight: 600; color: var(--text-primary); margin-top: 3px;" id="profile-modal-email">-</div>
-              <div style="font-size: 0.8rem; color: var(--accent-cyan); margin-top: 2px;" id="profile-modal-org">-</div>
+              <div style="font-size: 0.725rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Authenticated Account</div>
+              <div style="font-size: 1.15rem; font-weight: 600; color: var(--text-primary); margin-top: 2px;" id="profile-modal-name">-</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 1px;" id="profile-modal-email">-</div>
             </div>
-            <div style="text-align: right;">
-              <span class="badge" id="profile-modal-emp-id" style="font-family: var(--font-mono); font-size: 0.8rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); display: none;">-</span>
+            <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+              <span class="badge badge-success" id="profile-modal-status">ACTIVE</span>
+              <span class="badge" id="profile-modal-emp-id" style="font-family: var(--font-mono); font-size: 0.75rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); display: none;">-</span>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); font-size: 0.8rem;">
+            <div>
+              <span style="color: var(--text-secondary);">Account Type / Role:</span>
+              <div style="margin-top: 2px;">
+                <span class="badge badge-primary" id="profile-modal-role" style="font-size: 0.75rem;">-</span>
+              </div>
+            </div>
+            <div>
+              <span style="color: var(--text-secondary);">Organization / Domain:</span>
+              <div style="color: var(--accent-cyan); font-weight: 500; margin-top: 2px; word-break: break-all;" id="profile-modal-org">-</div>
+            </div>
+            <div>
+              <span style="color: var(--text-secondary);">Account Created:</span>
+              <div style="color: var(--text-primary); font-family: var(--font-mono); margin-top: 2px;" id="profile-modal-created">-</div>
+            </div>
+            <div>
+              <span style="color: var(--text-secondary);">Last Login:</span>
+              <div style="color: var(--text-primary); font-family: var(--font-mono); margin-top: 2px;" id="profile-modal-last-login">-</div>
             </div>
           </div>
         </div>
@@ -1805,6 +2111,134 @@
 
         <div class="modal-actions" style="margin-top: 20px;">
           <button type="button" class="btn btn-secondary" onclick="closeModal('modal-user-profile')">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. Message Details & Delivery Tracking Modal (Phase 5 Task 5.1) -->
+  <div id="modal-msg-details" class="modal">
+    <div class="modal-card" style="max-width: 720px; max-height: 90vh; overflow-y: auto;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <h4 style="margin: 0;">Message Lifecycle & Delivery Details</h4>
+          <span class="badge" id="modal-msg-status-badge">-</span>
+        </div>
+        <button class="btn-close" onclick="closeModal('modal-msg-details')">&times;</button>
+      </div>
+
+      <div>
+        <!-- Key Metadata Grid -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; background: rgba(0,0,0,0.2); padding: 14px; border-radius: 10px; border: 1px solid var(--border-color);">
+          <div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Message ID</div>
+            <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-primary); word-break: break-all;" id="modal-msg-id">-</div>
+          </div>
+          <div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Application</div>
+            <div style="font-size: 0.85rem; color: var(--accent-cyan); font-weight: 600;" id="modal-msg-app">-</div>
+          </div>
+          <div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Channel & Provider</div>
+            <div style="font-size: 0.85rem; color: var(--text-primary);" id="modal-msg-channel-provider">-</div>
+          </div>
+          <div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Recipient</div>
+            <div style="font-size: 0.85rem; color: var(--text-primary); word-break: break-all;" id="modal-msg-recipient">-</div>
+          </div>
+          <div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Dispatched At</div>
+            <div style="font-size: 0.8rem; color: var(--text-secondary);" id="modal-msg-created">-</div>
+          </div>
+          <div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Retries / Manual</div>
+            <div style="font-size: 0.85rem; color: var(--text-primary);" id="modal-msg-retries">0 / 0</div>
+          </div>
+        </div>
+
+        <!-- Provider Message ID & Callback Info -->
+        <div id="modal-msg-provider-info" style="display: none; margin-bottom: 16px; padding: 10px 14px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 8px;">
+          <div style="font-size: 0.72rem; color: #38bdf8; text-transform: uppercase; font-weight: 600;">Provider Message Reference</div>
+          <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-primary); margin-top: 2px;" id="modal-msg-provider-id">-</div>
+        </div>
+
+        <!-- Delivery Tracking & Status History Stepper -->
+        <div style="margin-bottom: 20px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <label style="font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; letter-spacing: 0.04em;">Delivery Tracking Events</label>
+            <span style="font-size: 0.72rem; color: var(--text-muted);">Audit Trail</span>
+          </div>
+          <div class="delivery-timeline" id="modal-msg-timeline">
+            <!-- Timeline items rendered dynamically -->
+          </div>
+          <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 6px;">
+            <em>Note: <strong>SENT</strong> indicates successful provider acceptance. <strong>DELIVERED</strong> indicates verified delivery confirmed by carrier or provider webhook.</em>
+          </div>
+        </div>
+
+        <!-- Provider Error Details (if failed) -->
+        <div id="modal-msg-errors-box" style="display: none; margin-bottom: 20px; background: rgba(255, 100, 124, 0.08); border: 1px solid rgba(255, 100, 124, 0.25); border-radius: 8px; padding: 12px 14px;">
+          <label style="font-size: 0.75rem; color: var(--status-error); text-transform: uppercase; font-weight: 600; margin-bottom: 4px; display: block;">Failure Diagnostics</label>
+          <div id="modal-msg-error-text" style="font-size: 0.825rem; color: #ff8a9e; font-family: var(--font-mono); word-break: break-all;">-</div>
+        </div>
+
+        <!-- Original Message Data / Payload Inspection -->
+        <div style="margin-bottom: 20px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 0.78rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600;">Message Data & Payload</label>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="copyMessagePayloadJson()" style="font-size: 0.72rem; padding: 2px 8px;">Copy JSON</button>
+          </div>
+          <pre class="payload-inspector-box" id="modal-msg-payload-json">{}</pre>
+        </div>
+
+        <!-- Modal Actions -->
+        <div class="modal-actions" style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <button type="button" class="btn btn-primary" id="btn-modal-msg-retry" style="display: none;" onclick="triggerManualRetryFromModal()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              Manual Retry Message
+            </button>
+          </div>
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-msg-details')">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9. Manual Retry Confirmation Modal -->
+  <div id="modal-confirm-retry" class="modal">
+    <div class="modal-card" style="max-width: 440px;">
+      <div class="modal-header">
+        <h4>Confirm Manual Retry</h4>
+        <button class="btn-close" onclick="closeModal('modal-confirm-retry')">&times;</button>
+      </div>
+      <div>
+        <p style="font-size: 0.9rem; line-height: 1.5; color: var(--text-primary); margin-bottom: 12px;">
+          Are you sure you want to retry sending message <code id="confirm-retry-msg-id" style="color: var(--accent-cyan);">-</code>?
+        </p>
+        <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 20px;">
+          This will reset the retry count, transition the message status to <strong>QUEUED</strong>, and dispatch a new processing task to the message broker.
+        </p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-confirm-retry')">Cancel</button>
+          <button type="button" class="btn btn-primary" id="btn-confirm-retry-execute" onclick="executeConfirmedRetry()">Confirm & Requeue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10. Media Library Selector Modal -->
+  <div id="modal-media-selector" class="modal">
+    <div class="modal-card" style="max-width: 600px;">
+      <div class="modal-header">
+        <h4>Select from Media Library</h4>
+        <button class="btn-close" onclick="closeModal('modal-media-selector')">&times;</button>
+      </div>
+      <div>
+        <div id="media-selector-loading" style="font-size: 0.85rem; color: var(--text-muted); padding: 20px 0; text-align: center;">Loading media files...</div>
+        <div id="media-selector-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto;"></div>
+        <div class="modal-actions" style="margin-top: 16px;">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-media-selector')">Close</button>
         </div>
       </div>
     </div>

@@ -167,7 +167,7 @@ class UserRepository:
             query,
             {"$set": update_fields}
         )
-        return result.modified_count > 0
+        return result.matched_count > 0
 
     @classmethod
     def create(cls, user_data, session=None):

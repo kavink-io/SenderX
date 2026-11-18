@@ -206,6 +206,7 @@ def test_employee_creation_and_listing(client, setup_org_context):
     emp_res = client.post("/api/v1/users/", json={
         "name": "Alice Support",
         "email": "alice.support@orga.com",
+        "employee_code": "ALICE-001",
         "password": "StrongPassword123!",
         "role_ids": [support_role_id],
         "role_assignments": [{"role_id": support_role_id, "application_id": ctx["app_crm"]}]
@@ -268,6 +269,7 @@ def test_custom_role_lifecycle_and_safe_deletion(client, setup_org_context):
     emp_res = client.post("/api/v1/users/", json={
         "name": "Bob Analyst",
         "email": "bob.analyst@orga.com",
+        "employee_code": "BOB-001",
         "password": "StrongPassword123!",
         "role_ids": [temp_role_id]
     }, headers=headers)
@@ -324,6 +326,7 @@ def test_application_scoped_permissions_enforcement(client, setup_org_context, a
     emp_res = client.post("/api/v1/users/", json={
         "name": "Scoped Specialist Charlie",
         "email": "charlie.crm@orga.com",
+        "employee_code": "CHARLIE-001",
         "password": "StrongPassword123!",
         "role_assignments": [{"role_id": crm_role_id, "application_id": ctx["app_crm"]}]
     }, headers=headers_admin)

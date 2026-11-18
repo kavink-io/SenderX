@@ -212,15 +212,11 @@ def test_automatic_employee_id_generation(client, emp_test_context):
     role_id = emp_test_context["role_a_dev"]
     suffix = emp_test_context["suffix"]
 
-    # Preview next code
+    # In Task 5.2: Preview next code route is removed
     preview_res = client.get("/api/v1/users/next-employee-code", headers=headers)
-    assert preview_res.status_code == 200
-    preview_data = preview_res.get_json()["data"]
-    assert preview_data["prefix"] == "ALPHA-EMP"
-    expected_code = preview_data["next_code"]
-    assert expected_code == f"ALPHA-EMP-{preview_data['next_value']:03d}"
+    assert preview_res.status_code in (404, 405)
 
-    # Create without providing employee_code
+    # Creating without providing employee_code must be rejected with 400
     payload = {
         "name": "Auto Employee 1",
         "email": f"auto1_{suffix}@test.io",
@@ -229,10 +225,8 @@ def test_automatic_employee_id_generation(client, emp_test_context):
     }
 
     res = client.post("/api/v1/users/", json=payload, headers=headers)
-    assert res.status_code == 201
-    body = res.get_json()
-    assert body["success"] is True
-    assert body["data"]["employee_code"] == expected_code
+    assert res.status_code == 400
+    assert "Employee ID is required" in res.get_json()["message"]
 
 
 # ============================================================================
@@ -318,10 +312,11 @@ def test_non_reuse_of_deactivated_ids(client, emp_test_context):
     role_id = emp_test_context["role_a_dev"]
     suffix = emp_test_context["suffix"]
 
-    # Create an auto-allocated employee
+    # Create employee with custom ID
     res1 = client.post("/api/v1/users/", json={
         "name": "Deactivate Me",
         "email": f"deact_{suffix}@test.io",
+        "employee_code": f"DEACT-{suffix}",
         "password": "Password123!@#",
         "role_ids": [role_id]
     }, headers=headers)
@@ -333,10 +328,11 @@ def test_non_reuse_of_deactivated_ids(client, emp_test_context):
     deact_res = client.patch(f"/api/v1/users/{user_id1}", json={"is_active": False}, headers=headers)
     assert deact_res.status_code == 200
 
-    # Allocate the next employee -> sequence must NOT reuse code1
+    # Allocate the next employee -> distinct custom code
     res2 = client.post("/api/v1/users/", json={
         "name": "Next Employee",
         "email": f"next_{suffix}@test.io",
+        "employee_code": f"NEXT-{suffix}",
         "password": "Password123!@#",
         "role_ids": [role_id]
     }, headers=headers)
@@ -440,34 +436,20 @@ def test_prefix_configuration(client, emp_test_context):
     role_id = emp_test_context["role_a_dev"]
     suffix = emp_test_context["suffix"]
 
-    # Dev forbidden
-    dev_forbidden = client.patch(
+    # In Task 5.2: prefix configuration endpoint is removed
+    dev_res = client.patch(
         "/api/v1/organizations/employee-prefix",
         json={"employee_id_prefix": "NEW-DEV-PREFIX"},
         headers=headers_dev
     )
-    assert dev_forbidden.status_code == 403
+    assert dev_res.status_code in (404, 405)
 
-    # Admin updates prefix
-    res = client.patch(
+    admin_res = client.patch(
         "/api/v1/organizations/employee-prefix",
         json={"employee_id_prefix": "ALPHA-DEV"},
         headers=headers_admin
     )
-    assert res.status_code == 200
-    body = res.get_json()
-    assert body["success"] is True
-    assert body["data"]["employee_id_prefix"] == "ALPHA-DEV"
-
-    # Subsequent user created uses ALPHA-DEV prefix
-    new_user = client.post("/api/v1/users/", json={
-        "name": "Prefix Test User",
-        "email": f"prefix_test_{suffix}@test.io",
-        "password": "Password123!@#",
-        "role_ids": [role_id]
-    }, headers=headers_admin)
-    assert new_user.status_code == 201
-    assert new_user.get_json()["data"]["employee_code"].startswith("ALPHA-DEV-")
+    assert admin_res.status_code in (404, 405)
 
 
 # ============================================================================

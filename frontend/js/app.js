@@ -147,12 +147,26 @@ function closeModal(id) {
   if (m) m.classList.remove("active");
 }
 
-function initApp() {
+async function initApp() {
   const storedAccount = ApiClient.getStoredAccount();
   const token = ApiClient.getAccessToken();
 
   if (token && storedAccount) {
     showDashboard(storedAccount);
+    // Refresh authoritative user profile details from backend /api/v1/auth/me
+    try {
+      const res = await ApiClient.getCurrentAccount();
+      if (res && res.success && res.data) {
+        ApiClient.setStoredAccount(res.data);
+        if (res.data.account_type === "PLATFORM_ADMIN") {
+          updatePlatformAdminProfileDisplay(res.data);
+        } else {
+          updateUserProfileDisplay(res.data);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not refresh account from /auth/me on init:", e);
+    }
   } else {
     showAuth();
   }
@@ -231,6 +245,34 @@ function showAuth() {
   document.getElementById("app-shell").classList.remove("active");
 }
 
+function updatePlatformAdminProfileDisplay(account) {
+  const emailEl = document.getElementById("header-user-email");
+  const roleEl = document.getElementById("header-user-role");
+  const scopeBadgeEl = document.getElementById("header-user-scope-badge");
+  const empCodeEl = document.getElementById("header-user-emp-code");
+  const avatarEl = document.getElementById("user-avatar-initial");
+  const bottomRoleEl = document.getElementById("current-account-type");
+  const bottomNameEl = document.getElementById("current-account-name");
+  const envTextEl = document.getElementById("header-env-text");
+
+  const displayName = account?.name || account?.email || "Platform Admin";
+  if (emailEl) emailEl.textContent = account?.email || "admin@senderx.io";
+  if (bottomNameEl) bottomNameEl.textContent = displayName;
+  if (bottomRoleEl) bottomRoleEl.textContent = "SUPER_ADMIN";
+  if (avatarEl) avatarEl.textContent = (displayName.charAt(0) || "A").toUpperCase();
+  if (roleEl) {
+    roleEl.textContent = account?.role || "SUPER_ADMIN";
+    roleEl.className = "user-role badge-primary";
+  }
+  if (scopeBadgeEl) {
+    scopeBadgeEl.textContent = "Platform Root";
+    scopeBadgeEl.className = "badge badge-scope";
+    scopeBadgeEl.style.display = "inline-block";
+  }
+  if (empCodeEl) empCodeEl.style.display = "none";
+  if (envTextEl) envTextEl.textContent = "Platform Console";
+}
+
 async function showDashboard(account) {
   document.getElementById("auth-view").classList.remove("active");
   document.getElementById("app-shell").classList.add("active");
@@ -260,6 +302,7 @@ async function showDashboard(account) {
   if (accountType === "PLATFORM_ADMIN") {
     if (navPlatform) navPlatform.style.display = "block";
     if (navOrg) navOrg.style.display = "none";
+    updatePlatformAdminProfileDisplay(account);
     switchTab("tab-platform-overview");
   } else {
     if (navPlatform) navPlatform.style.display = "none";
@@ -564,114 +607,216 @@ async function showUserProfile() {
   const modal = document.getElementById("modal-user-profile");
   if (!modal) return;
 
-  let ctx = currentUserDashboardContext;
-  if (!ctx) {
-    ctx = await loadDashboardContext();
-  }
-  if (!ctx) {
-    const stored = ApiClient.getStoredAccount();
-    if (stored) {
-      ctx = {
-        email: stored.email,
-        name: stored.name || stored.email,
-        organization_id: stored.organization_id,
-        employee_code: stored.employee_code,
-        organization_name: stored.organization_name || "Organization Workspace",
-        is_org_admin: stored.is_org_admin === true,
-        roles: stored.roles || [],
-        role_assignments: stored.role_assignments || [],
-        assigned_applications: stored.assigned_applications || [],
-        effective_permissions: stored.effective_permissions || []
-      };
+  // 1. Fetch fresh authoritative account data from backend /api/v1/auth/me
+  let account = ApiClient.getStoredAccount();
+  try {
+    const meRes = await ApiClient.getCurrentAccount();
+    if (meRes && meRes.success && meRes.data) {
+      account = meRes.data;
+      ApiClient.setStoredAccount(account);
     }
+  } catch (err) {
+    console.warn("Could not fetch current account from /auth/me for profile modal:", err);
   }
-  if (!ctx) return;
 
+  if (!account) return;
+
+  const isPlatformAdmin = account.account_type === "PLATFORM_ADMIN";
+
+  const titleEl = document.getElementById("profile-modal-title");
+  const nameEl = document.getElementById("profile-modal-name");
   const emailEl = document.getElementById("profile-modal-email") || document.getElementById("modal-profile-email");
+  const statusEl = document.getElementById("profile-modal-status");
+  const roleBadgeEl = document.getElementById("profile-modal-role");
   const orgEl = document.getElementById("profile-modal-org") || document.getElementById("modal-profile-org");
+  const createdEl = document.getElementById("profile-modal-created");
+  const lastLoginEl = document.getElementById("profile-modal-last-login");
   const empIdEl = document.getElementById("profile-modal-emp-id");
   const rolesListEl = document.getElementById("profile-modal-roles") || document.getElementById("modal-profile-roles-list");
   const appsListEl = document.getElementById("profile-modal-apps") || document.getElementById("modal-profile-apps-list");
   const permsCountEl = document.getElementById("profile-modal-perm-count");
   const permsListEl = document.getElementById("profile-modal-perms") || document.getElementById("modal-profile-perms-list");
 
-  if (emailEl) {
-    emailEl.textContent = ctx.name ? `${ctx.name} (${ctx.email})` : ctx.email;
-  }
-  if (orgEl) {
-    orgEl.textContent = `${ctx.organization_name || "Organization Workspace"} • ID: ${ctx.organization_id || "N/A"}`;
-  }
-  if (empIdEl) {
-    if (ctx.employee_code) {
-      empIdEl.textContent = ctx.employee_code;
-      empIdEl.style.display = "inline-block";
-    } else {
-      empIdEl.style.display = "none";
+  if (isPlatformAdmin) {
+    // ----------------------------------------------------
+    // SUPER_ADMIN / PLATFORM_ADMIN PROFILE
+    // ----------------------------------------------------
+    if (titleEl) titleEl.textContent = "Platform Administrator Profile";
+    const displayName = account.name || "Platform Super Administrator";
+    if (nameEl) nameEl.textContent = displayName;
+    if (emailEl) emailEl.textContent = account.email || "admin@senderx.io";
+    if (statusEl) {
+      const isAct = account.status === "ACTIVE" || account.is_active !== false;
+      statusEl.textContent = isAct ? "ACTIVE" : "INACTIVE";
+      statusEl.className = isAct ? "badge badge-success" : "badge badge-danger";
     }
-  }
+    if (roleBadgeEl) {
+      roleBadgeEl.textContent = account.role || "SUPER_ADMIN";
+      roleBadgeEl.className = "badge badge-primary";
+    }
+    if (orgEl) orgEl.textContent = "Platform Root (Multi-Tenant System)";
+    if (createdEl) {
+      createdEl.textContent = account.created_at ? new Date(account.created_at).toLocaleString() : "System Inception";
+    }
+    if (lastLoginEl) {
+      const loginTime = account.last_login || account.last_login_at;
+      lastLoginEl.textContent = loginTime ? new Date(loginTime).toLocaleString() : "Active Session";
+    }
+    if (empIdEl) empIdEl.style.display = "none";
 
-  if (rolesListEl) {
-    const roles = ctx.roles || [];
-    const assignments = ctx.role_assignments || [];
-    if (ctx.is_org_admin) {
+    if (rolesListEl) {
       rolesListEl.innerHTML = `
-        <div style="background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.35); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
-          <strong style="color: #818cf8;">ORG_ADMIN (Predefined Organization Admin)</strong>
-          <span class="badge badge-primary" style="font-size: 0.75rem;">Organization-Wide</span>
+        <div style="background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.35); border-radius: 6px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong style="color: #818cf8;">${escapeHtml(account.role || "SUPER_ADMIN")} (Root Platform Administrator)</strong>
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Full administrative authority across all platform tenants, organizations, and monitoring subsystems</div>
+          </div>
+          <span class="badge badge-primary" style="font-size: 0.75rem;">Platform-Wide Scope</span>
         </div>
       `;
-    } else if (assignments.length > 0) {
-      rolesListEl.innerHTML = assignments.map((a) => `
-        <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <strong style="color: var(--accent-cyan);">${escapeHtml(a.role_name || "Custom Role")}</strong>
-            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 6px;">(${a.permissions ? a.permissions.length : 0} perms)</span>
+    }
+
+    if (appsListEl) {
+      appsListEl.innerHTML = `
+        <span class="badge badge-success" style="padding: 4px 10px; font-size: 0.8rem;">All Tenant Connected Applications (Global Scope)</span>
+      `;
+    }
+
+    if (permsCountEl) permsCountEl.textContent = "5+ (Full Platform Access)";
+    if (permsListEl) {
+      const platformPerms = [
+        "platform:organizations:read",
+        "platform:organizations:manage",
+        "platform:analytics:read",
+        "platform:health:read",
+        "platform:providers:manage"
+      ];
+      permsListEl.innerHTML = `<div style="width: 100%; color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 6px;"><strong>Unrestricted Platform Privileges</strong></div>` +
+        platformPerms.map((p) => `<span class="badge badge-secondary" style="margin: 2px 4px 2px 0; font-size: 0.72rem;">${escapeHtml(p)}</span>`).join("");
+    }
+  } else {
+    // ----------------------------------------------------
+    // ORGANIZATION USER / ORG_ADMIN / EMPLOYEE PROFILE
+    // ----------------------------------------------------
+    if (titleEl) titleEl.textContent = "User Profile & Access Scopes";
+
+    let ctx = currentUserDashboardContext;
+    if (!ctx) {
+      ctx = await loadDashboardContext();
+    }
+    if (!ctx) ctx = account;
+
+    const displayName = ctx.name || ctx.email || "Organization User";
+    if (nameEl) nameEl.textContent = displayName;
+    if (emailEl) emailEl.textContent = ctx.email || account.email;
+
+    if (statusEl) {
+      const isAct = ctx.is_active !== false && ctx.status !== "INACTIVE";
+      statusEl.textContent = isAct ? "ACTIVE" : "INACTIVE";
+      statusEl.className = isAct ? "badge badge-success" : "badge badge-danger";
+    }
+
+    const isOrgAdmin = ctx.is_org_admin === true;
+    const roles = ctx.roles || [];
+    if (roleBadgeEl) {
+      if (isOrgAdmin) {
+        roleBadgeEl.textContent = "ORG_ADMIN";
+        roleBadgeEl.className = "badge badge-primary";
+      } else if (roles.length > 0) {
+        roleBadgeEl.textContent = roles.map(r => r.name || r.role_id).join(", ");
+        roleBadgeEl.className = "badge badge-info";
+      } else {
+        roleBadgeEl.textContent = "EMPLOYEE";
+        roleBadgeEl.className = "badge badge-secondary";
+      }
+    }
+
+    if (orgEl) {
+      orgEl.textContent = `${ctx.organization_name || account.organization_name || "Organization Workspace"} • ID: ${ctx.organization_id || account.organization_id || "N/A"}`;
+    }
+
+    if (createdEl) {
+      const cDate = ctx.created_at || account.created_at;
+      createdEl.textContent = cDate ? new Date(cDate).toLocaleString() : "-";
+    }
+
+    if (lastLoginEl) {
+      const lDate = ctx.last_login || ctx.last_login_at || account.last_login || account.last_login_at;
+      lastLoginEl.textContent = lDate ? new Date(lDate).toLocaleString() : "Active Session";
+    }
+
+    if (empIdEl) {
+      const code = ctx.employee_code || account.employee_code;
+      if (code) {
+        empIdEl.textContent = code;
+        empIdEl.style.display = "inline-block";
+      } else {
+        empIdEl.style.display = "none";
+      }
+    }
+
+    if (rolesListEl) {
+      const assignments = ctx.role_assignments || [];
+      if (isOrgAdmin) {
+        rolesListEl.innerHTML = `
+          <div style="background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.35); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
+            <strong style="color: #818cf8;">ORG_ADMIN (Predefined Organization Admin)</strong>
+            <span class="badge badge-primary" style="font-size: 0.75rem;">Organization-Wide</span>
           </div>
-          <span class="badge ${a.application_id ? 'badge-scope' : 'badge-primary'}" style="font-size: 0.75rem;">
-            ${escapeHtml(a.application_name || (a.application_id ? 'App-scoped' : 'Org-wide'))}
+        `;
+      } else if (assignments.length > 0) {
+        rolesListEl.innerHTML = assignments.map((a) => `
+          <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <strong style="color: var(--accent-cyan);">${escapeHtml(a.role_name || "Custom Role")}</strong>
+              <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 6px;">(${a.permissions ? a.permissions.length : 0} perms)</span>
+            </div>
+            <span class="badge ${a.application_id ? 'badge-scope' : 'badge-primary'}" style="font-size: 0.75rem;">
+              ${escapeHtml(a.application_name || (a.application_id ? 'App-scoped' : 'Org-wide'))}
+            </span>
+          </div>
+        `).join("");
+      } else if (roles.length > 0) {
+        rolesListEl.innerHTML = roles.map((r) => `
+          <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
+            <strong style="color: var(--accent-cyan);">${escapeHtml(r.name || r.role_id)}</strong>
+            <span class="badge badge-scope" style="font-size: 0.75rem;">${r.application_id ? escapeHtml(r.application_id) : 'Org-wide'}</span>
+          </div>
+        `).join("");
+      } else {
+        rolesListEl.innerHTML = `<div style="color: var(--text-muted); font-size: 0.85rem; padding: 6px 0;">No roles assigned yet. Contact your administrator.</div>`;
+      }
+    }
+
+    if (appsListEl) {
+      const apps = ctx.assigned_applications || [];
+      if (isOrgAdmin) {
+        appsListEl.innerHTML = `<span class="badge badge-success" style="padding: 4px 10px;">All Connected Applications (Unrestricted Org Scope)</span>`;
+      } else if (apps.length === 0) {
+        appsListEl.innerHTML = `<span style="color: var(--text-muted); font-size: 0.85rem;">No application scopes assigned.</span>`;
+      } else {
+        appsListEl.innerHTML = apps.map((a) => `
+          <span class="badge badge-scope" style="padding: 4px 10px; font-size: 0.8rem;">
+            ${escapeHtml(a.name || a.application_id)}
           </span>
-        </div>
-      `).join("");
-    } else if (roles.length > 0) {
-      rolesListEl.innerHTML = roles.map((r) => `
-        <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
-          <strong style="color: var(--accent-cyan);">${escapeHtml(r.name || r.role_id)}</strong>
-          <span class="badge badge-scope" style="font-size: 0.75rem;">${r.application_id ? escapeHtml(r.application_id) : 'Org-wide'}</span>
-        </div>
-      `).join("");
-    } else {
-      rolesListEl.innerHTML = `<div style="color: var(--text-muted); font-size: 0.85rem; padding: 6px 0;">No roles assigned yet. Contact your administrator.</div>`;
+        `).join("");
+      }
     }
-  }
 
-  if (appsListEl) {
-    const apps = ctx.assigned_applications || [];
-    if (ctx.is_org_admin) {
-      appsListEl.innerHTML = `<span class="badge badge-success" style="padding: 4px 10px;">All Connected Applications (Unrestricted Org Scope)</span>`;
-    } else if (apps.length === 0) {
-      appsListEl.innerHTML = `<span style="color: var(--text-muted); font-size: 0.85rem;">No application scopes assigned.</span>`;
-    } else {
-      appsListEl.innerHTML = apps.map((a) => `
-        <span class="badge badge-scope" style="padding: 4px 10px; font-size: 0.8rem;">
-          ${escapeHtml(a.name || a.application_id)}
-        </span>
-      `).join("");
-    }
-  }
+    const perms = ctx.effective_permissions || [];
+    if (permsCountEl) permsCountEl.textContent = perms.length;
 
-  const perms = ctx.effective_permissions || [];
-  if (permsCountEl) permsCountEl.textContent = perms.length;
-
-  if (permsListEl) {
-    if (ctx.is_org_admin) {
-      permsListEl.innerHTML = `<div style="width: 100%; color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 6px;"><strong>Full Organization Admin Privileges (${ALL_ORG_PERMISSIONS.length} Permissions)</strong></div>` +
-        ALL_ORG_PERMISSIONS.map((p) => `<span class="badge badge-secondary" style="margin: 2px 4px 2px 0; font-size: 0.72rem;">${escapeHtml(p)}</span>`).join("");
-    } else if (perms.length === 0) {
-      permsListEl.innerHTML = `<span style="color: var(--text-muted); font-size: 0.85rem;">No active permissions. Module access is restricted.</span>`;
-    } else {
-      permsListEl.innerHTML = perms.map((p) => `
-        <span class="badge badge-secondary" style="margin: 2px 4px 2px 0; font-size: 0.72rem;">${escapeHtml(p)}</span>
-      `).join("");
+    if (permsListEl) {
+      if (isOrgAdmin) {
+        permsListEl.innerHTML = `<div style="width: 100%; color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 6px;"><strong>Full Organization Admin Privileges (${ALL_ORG_PERMISSIONS.length} Permissions)</strong></div>` +
+          ALL_ORG_PERMISSIONS.map((p) => `<span class="badge badge-secondary" style="margin: 2px 4px 2px 0; font-size: 0.72rem;">${escapeHtml(p)}</span>`).join("");
+      } else if (perms.length === 0) {
+        permsListEl.innerHTML = `<span style="color: var(--text-muted); font-size: 0.85rem;">No active permissions. Module access is restricted.</span>`;
+      } else {
+        permsListEl.innerHTML = perms.map((p) => `
+          <span class="badge badge-secondary" style="margin: 2px 4px 2px 0; font-size: 0.72rem;">${escapeHtml(p)}</span>
+        `).join("");
+      }
     }
   }
 
@@ -1142,69 +1287,963 @@ async function loadSystemHealth() {
 // ----------------------------------------------------
 // ORGANIZATION OPERATIONS
 // ----------------------------------------------------
-async function loadOrgMessages() {
-  const tbody = document.getElementById("messages-table-body");
-  tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading messages...</td></tr>';
+// ----------------------------------------------------
+// MESSAGE MANAGEMENT DASHBOARD STATE & CONTROLLER (Phase 5 Task 5.1)
+// ----------------------------------------------------
+let msgCurrentPage = 1;
+let msgLimit = 50;
+let msgSearch = "";
+let msgStatus = "";
+let msgChannel = "";
+let msgAppId = "";
+let msgStartDate = "";
+let msgEndDate = "";
+let msgDebounceTimer = null;
+let msgActiveSubtab = "history";
+let msgCurrentRetryingId = null;
+let msgCurrentViewingMessage = null;
+let msgComposerAttachments = [];
+let msgCachedApps = [];
+let msgCachedTemplates = [];
 
+function getAuthorizedAppIds() {
+  const account = ApiClient.getStoredAccount();
+  if (account?.account_type === "PLATFORM_ADMIN" || currentUserDashboardContext?.is_org_admin) {
+    return null; // Organization admin or platform admin has full org-wide scope
+  }
+  if (Array.isArray(currentUserDashboardContext?.authorized_applications)) {
+    return currentUserDashboardContext.authorized_applications.map(a => typeof a === "object" ? a.application_id : a);
+  }
+  if (Array.isArray(account?.application_ids)) {
+    return account.application_ids;
+  }
+  return null;
+}
+
+function switchMessageSubtab(subtab) {
+  msgActiveSubtab = subtab;
+  const pills = {
+    history: document.getElementById("pill-msg-history"),
+    composer: document.getElementById("pill-msg-composer"),
+    scheduled: document.getElementById("pill-msg-scheduled"),
+    analytics: document.getElementById("pill-msg-analytics")
+  };
+  const views = {
+    history: document.getElementById("subview-msg-history"),
+    composer: document.getElementById("subview-msg-composer"),
+    scheduled: document.getElementById("subview-msg-scheduled"),
+    analytics: document.getElementById("subview-msg-analytics")
+  };
+
+  Object.keys(pills).forEach((k) => {
+    if (pills[k]) pills[k].classList.toggle("active", k === subtab);
+  });
+  Object.keys(views).forEach((k) => {
+    if (views[k]) views[k].style.display = k === subtab ? "block" : "none";
+  });
+
+  if (subtab === "history") {
+    loadOrgMessages(msgCurrentPage, msgLimit);
+  } else if (subtab === "composer") {
+    initMessageComposer();
+  } else if (subtab === "analytics") {
+    loadMessageAnalytics();
+  }
+}
+
+async function populateMessageFilterApps() {
   try {
-    const res = await ApiClient.listMessages();
+    const res = await ApiClient.listApplications(1, 100);
     if (res.success && res.data) {
-      if (res.data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">No messages dispatched yet.</td></tr>';
-        return;
+      msgCachedApps = res.data;
+      const select = document.getElementById("msg-filter-app");
+      if (select) {
+        const authorizedScopes = getAuthorizedAppIds();
+        const availableApps = authorizedScopes 
+          ? msgCachedApps.filter(a => authorizedScopes.includes(a.application_id))
+          : msgCachedApps;
+
+        select.innerHTML = '<option value="">All Applications</option>' +
+          availableApps.map(a => `<option value="${escapeHtml(a.application_id)}">${escapeHtml(a.name)} (${escapeHtml(a.environment || "live")})</option>`).join("");
       }
-      tbody.innerHTML = res.data
-        .map(
-          (m) => `
-        <tr>
-          <td><code>${escapeHtml(m.message_id.substring(0, 8))}...</code></td>
-          <td>${escapeHtml(m.recipient)}</td>
-          <td><span class="badge">${m.channel}</span></td>
-          <td>${m.provider || "unassigned"}</td>
-          <td><span class="badge badge-${(m.status || "").toLowerCase()}">${m.status}</span></td>
-          <td>${m.retry_count || 0}</td>
-          <td>${new Date(m.created_at).toLocaleTimeString()}</td>
-        </tr>
-      `
-        )
-        .join("");
     }
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="7" class="loading-cell error">${err.message}</td></tr>`;
+    console.warn("Failed to load connected applications:", err);
+  }
+}
+
+async function updateMessageSummaryMetrics() {
+  try {
+    const res = await ApiClient.getOrganizationAnalytics();
+    if (res.success || res.overview) {
+      const d = res.data || res;
+      const total = d.overview?.total_messages ?? (d.total_messages || 0);
+      const statusCounts = d.status_breakdown || {};
+      const sent = d.overview?.sent ?? (statusCounts.SENT || 0);
+      const delivered = statusCounts.DELIVERED || 0;
+      const failed = d.overview?.failed ?? ((statusCounts.FAILED || 0) + (statusCounts.DEAD || 0));
+      const queued = d.overview?.queued ?? ((statusCounts.QUEUED || 0) + (statusCounts.PROCESSING || 0));
+      const dlqTotal = d.dead_letter_queue?.total_records ?? (d.dead_letters?.total || 0);
+      const rate = d.overview?.delivery_rate_percent ?? (d.delivery_success_rate || 0);
+
+      const setEl = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+      };
+
+      setEl("msg-stat-total", total.toLocaleString());
+      setEl("msg-stat-sent", sent.toLocaleString());
+      setEl("msg-stat-delivered", delivered.toLocaleString());
+      setEl("msg-stat-rate", `${rate}%`);
+      setEl("msg-stat-failed", failed.toLocaleString());
+      setEl("msg-stat-queued", queued.toLocaleString());
+      setEl("msg-stat-dlq", dlqTotal.toLocaleString());
+    }
+  } catch (err) {
+    console.warn("Failed to update message summary metrics:", err);
+  }
+}
+
+async function loadOrgMessages(page = 1, limit = 50) {
+  msgCurrentPage = page;
+  msgLimit = limit;
+  const tbody = document.getElementById("messages-table-body");
+  if (!tbody) return;
+
+  tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Loading messages...</td></tr>';
+
+  if (msgCachedApps.length === 0) {
+    await populateMessageFilterApps();
+  }
+
+  const filters = {
+    search: msgSearch,
+    status: msgStatus,
+    channel: msgChannel,
+    application_id: msgAppId,
+    start_date: msgStartDate,
+    end_date: msgEndDate
+  };
+
+  try {
+    const res = await ApiClient.listMessages(page, limit, filters);
+    if (res.success && res.data) {
+      updateMessageSummaryMetrics();
+
+      if (res.data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="loading-cell" style="padding: 30px 10px; color: var(--text-muted);">No messages found matching your criteria.</td></tr>';
+        updateMessagePaginationBar({ total: 0, page: 1, limit, total_pages: 1 });
+        return;
+      }
+
+      tbody.innerHTML = res.data
+        .map((m) => {
+          const appObj = msgCachedApps.find((a) => a.application_id === m.application_id);
+          const appLabel = appObj
+            ? `<span class="app-scope-badge" title="${escapeHtml(appObj.application_id)}">${escapeHtml(appObj.name)}</span>`
+            : m.application_id
+            ? `<code style="font-size: 0.72rem;">${escapeHtml(m.application_id.substring(0, 10))}...</code>`
+            : '<span style="color: var(--text-muted); font-size: 0.75rem;">Global</span>';
+
+          const status = (m.status || "UNKNOWN").toUpperCase();
+          let badgeClass = "badge-created";
+          let statusDisplay = status;
+          if (status === "DELIVERED") {
+            badgeClass = "badge-delivered";
+            statusDisplay = "DELIVERED &#10003;";
+          } else if (status === "SENT") {
+            badgeClass = "badge-sent";
+            statusDisplay = "SENT (Accepted)";
+          } else if (status === "QUEUED" || status === "RETRYING") {
+            badgeClass = "badge-queued";
+          } else if (status === "PROCESSING") {
+            badgeClass = "badge-processing";
+          } else if (status === "FAILED" || status === "DEAD") {
+            badgeClass = "badge-failed";
+          }
+
+          const canRetry = status === "FAILED" || status === "DEAD";
+          const formattedTime = m.created_at ? new Date(m.created_at).toLocaleString() : "-";
+
+          return `
+            <tr>
+              <td><code>${escapeHtml((m.message_id || "").substring(0, 8))}...</code></td>
+              <td>${appLabel}</td>
+              <td><span class="badge" style="background: rgba(255,255,255,0.06); font-family: var(--font-mono); font-size: 0.72rem;">${escapeHtml(m.channel || "")}</span></td>
+              <td><span title="${escapeHtml(m.recipient || "")}" style="max-width: 170px; display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem;">${escapeHtml(m.recipient || "")}</span></td>
+              <td><span class="badge ${badgeClass}">${statusDisplay}</span></td>
+              <td><span style="font-family: var(--font-mono); font-size: 0.8rem;">${m.retry_count || 0}</span></td>
+              <td style="font-size: 0.78rem; color: var(--text-secondary);">${formattedTime}</td>
+              <td style="text-align: right; white-space: nowrap;">
+                <button class="btn btn-secondary btn-sm" onclick="openMessageDetailsModal('${escapeHtml(m.message_id)}')">Details</button>
+                ${canRetry ? `<button class="btn btn-secondary btn-sm" style="color: var(--accent-cyan); margin-left: 4px;" onclick="promptManualRetry('${escapeHtml(m.message_id)}')">Retry</button>` : ""}
+              </td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      updateMessagePaginationBar(res.pagination || { total: res.data.length, page, limit, total_pages: 1 });
+    } else {
+      tbody.innerHTML = `<tr><td colspan="8" class="loading-cell error">${escapeHtml(res.message || "Failed to load messages")}</td></tr>`;
+    }
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="8" class="loading-cell error">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function debounceFilterMessages() {
+  clearTimeout(msgDebounceTimer);
+  msgDebounceTimer = setTimeout(() => {
+    msgSearch = (document.getElementById("msg-search")?.value || "").trim();
+    loadOrgMessages(1, msgLimit);
+  }, 300);
+}
+
+function handleMessageFilterChange() {
+  msgAppId = document.getElementById("msg-filter-app")?.value || "";
+  msgChannel = document.getElementById("msg-filter-channel")?.value || "";
+  msgStatus = document.getElementById("msg-filter-status")?.value || "";
+  msgStartDate = document.getElementById("msg-filter-start-date")?.value || "";
+  msgEndDate = document.getElementById("msg-filter-end-date")?.value || "";
+  loadOrgMessages(1, msgLimit);
+}
+
+function handleMessageLimitChange() {
+  const select = document.getElementById("msg-limit-select");
+  if (select) {
+    msgLimit = parseInt(select.value, 10) || 50;
+    loadOrgMessages(1, msgLimit);
+  }
+}
+
+function resetMessageFilters() {
+  msgSearch = "";
+  msgStatus = "";
+  msgChannel = "";
+  msgAppId = "";
+  msgStartDate = "";
+  msgEndDate = "";
+
+  const setVal = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.value = v;
+  };
+
+  setVal("msg-search", "");
+  setVal("msg-filter-app", "");
+  setVal("msg-filter-channel", "");
+  setVal("msg-filter-status", "");
+  setVal("msg-filter-start-date", "");
+  setVal("msg-filter-end-date", "");
+
+  loadOrgMessages(1, msgLimit);
+}
+
+function navigateMessagePage(delta) {
+  const target = msgCurrentPage + delta;
+  if (target >= 1) {
+    loadOrgMessages(target, msgLimit);
+  }
+}
+
+function updateMessagePaginationBar(pagination) {
+  const total = pagination.total || 0;
+  const page = pagination.page || 1;
+  const limit = pagination.limit || 50;
+  const totalPages = pagination.total_pages || Math.ceil(total / limit) || 1;
+
+  const start = total === 0 ? 0 : (page - 1) * limit + 1;
+  const end = Math.min(page * limit, total);
+
+  const infoEl = document.getElementById("msg-pagination-info");
+  if (infoEl) infoEl.textContent = `Showing ${start} to ${end} of ${total.toLocaleString()} messages`;
+
+  const indEl = document.getElementById("msg-page-indicator");
+  if (indEl) indEl.textContent = `Page ${page} of ${totalPages}`;
+
+  const prevBtn = document.getElementById("msg-prev-btn");
+  if (prevBtn) prevBtn.disabled = page <= 1;
+
+  const nextBtn = document.getElementById("msg-next-btn");
+  if (nextBtn) nextBtn.disabled = page >= totalPages;
+}
+
+// ----------------------------------------------------
+// MESSAGE DETAILS MODAL & DELIVERY TRACKING
+// ----------------------------------------------------
+async function openMessageDetailsModal(messageId) {
+  try {
+    const res = await ApiClient.getMessage(messageId);
+    if (!res.success || !res.data) {
+      showToast(res.message || "Failed to retrieve message details", "danger");
+      return;
+    }
+
+    const m = res.data;
+    msgCurrentViewingMessage = m;
+
+    const setVal = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = v;
+    };
+
+    setVal("modal-msg-id", m.message_id || "-");
+
+    const appObj = msgCachedApps.find((a) => a.application_id === m.application_id);
+    setVal("modal-msg-app", appObj ? `${appObj.name} (${appObj.environment || "live"})` : m.application_id || "Global / Unassigned");
+
+    setVal("modal-msg-channel-provider", `${(m.channel || "").toUpperCase()} / ${(m.provider || "unassigned").toUpperCase()}`);
+    setVal("modal-msg-recipient", m.recipient || "-");
+    setVal("modal-msg-created", m.created_at ? new Date(m.created_at).toLocaleString() : "-");
+    setVal("modal-msg-retries", `${m.retry_count || 0} auto / ${m.manual_retry_count || 0} manual`);
+
+    // Status badge
+    const status = (m.status || "UNKNOWN").toUpperCase();
+    let badgeClass = "badge-created";
+    let statusText = status;
+    if (status === "DELIVERED") {
+      badgeClass = "badge-delivered";
+      statusText = "DELIVERED (Confirmed)";
+    } else if (status === "SENT") {
+      badgeClass = "badge-sent";
+      statusText = "SENT (Provider Accepted)";
+    } else if (status === "QUEUED" || status === "RETRYING") {
+      badgeClass = "badge-queued";
+    } else if (status === "PROCESSING") {
+      badgeClass = "badge-processing";
+    } else if (status === "FAILED" || status === "DEAD") {
+      badgeClass = "badge-failed";
+    }
+
+    const badgeEl = document.getElementById("modal-msg-status-badge");
+    if (badgeEl) {
+      badgeEl.className = `badge ${badgeClass}`;
+      badgeEl.innerHTML = statusText;
+    }
+
+    // Provider info
+    const provInfoBox = document.getElementById("modal-msg-provider-info");
+    const provIdEl = document.getElementById("modal-msg-provider-id");
+    if (m.provider_message_id) {
+      if (provIdEl) provIdEl.textContent = m.provider_message_id;
+      if (provInfoBox) provInfoBox.style.display = "block";
+    } else {
+      if (provInfoBox) provInfoBox.style.display = "none";
+    }
+
+    // Error details
+    const errBox = document.getElementById("modal-msg-errors-box");
+    const errText = document.getElementById("modal-msg-error-text");
+    const failureMsg = m.last_error || m.delivery_error_message || (m.delivery_error_code ? `Code: ${m.delivery_error_code}` : null);
+    if (failureMsg) {
+      if (errText) errText.textContent = failureMsg;
+      if (errBox) errBox.style.display = "block";
+    } else {
+      if (errBox) errBox.style.display = "none";
+    }
+
+    // Timeline rendering (Audit Trail)
+    const timelineEl = document.getElementById("modal-msg-timeline");
+    if (timelineEl) {
+      const history = Array.isArray(m.status_history) && m.status_history.length > 0
+        ? m.status_history
+        : [{ to: m.status || "CREATED", timestamp: m.created_at, reason: "Initial ingestion" }];
+
+      timelineEl.innerHTML = history.map((h, idx) => {
+        const toStatus = (h.to || "").toUpperCase();
+        let dotClass = "";
+        if (toStatus === "DELIVERED") dotClass = "delivered";
+        else if (toStatus === "FAILED" || toStatus === "DEAD") dotClass = "failed";
+        else if (toStatus === "SENT") dotClass = "sent";
+
+        const timeStr = h.timestamp ? new Date(h.timestamp).toLocaleTimeString() : "";
+        const fromStr = h.from ? `<span style="color: var(--text-muted); font-size: 0.75rem;">(${escapeHtml(h.from)} &rarr;)</span> ` : "";
+        const reasonStr = h.reason ? `<div class="timeline-step-body">${escapeHtml(h.reason)}</div>` : "";
+        const sourceStr = h.source ? `<span style="font-size: 0.7rem; color: var(--accent-cyan); margin-left: 6px;">[${escapeHtml(h.source)}]</span>` : "";
+
+        return `
+          <div class="timeline-step">
+            <div class="timeline-step-dot ${dotClass}"></div>
+            <div class="timeline-step-header">
+              <span>${fromStr}<strong>${escapeHtml(toStatus)}</strong>${sourceStr}</span>
+              <span class="timeline-step-time">${timeStr}</span>
+            </div>
+            ${reasonStr}
+          </div>
+        `;
+      }).join("");
+    }
+
+    // Payload display
+    const payloadPre = document.getElementById("modal-msg-payload-json");
+    if (payloadPre) {
+      payloadPre.textContent = JSON.stringify(m.data || m, null, 2);
+    }
+
+    // Retry button visibility
+    const retryBtn = document.getElementById("btn-modal-msg-retry");
+    if (retryBtn) {
+      retryBtn.style.display = (status === "FAILED" || status === "DEAD") ? "inline-flex" : "none";
+    }
+
+    openModal("modal-msg-details");
+  } catch (err) {
+    showToast(err.message, "danger");
+  }
+}
+
+function copyMessagePayloadJson() {
+  if (msgCurrentViewingMessage) {
+    const text = JSON.stringify(msgCurrentViewingMessage.data || msgCurrentViewingMessage, null, 2);
+    navigator.clipboard.writeText(text).then(() => {
+      showToast("Payload JSON copied to clipboard", "success");
+    });
+  }
+}
+
+// ----------------------------------------------------
+// MANUAL RETRY CONFIRMATION & EXECUTION
+// ----------------------------------------------------
+function promptManualRetry(messageId) {
+  msgCurrentRetryingId = messageId;
+  const idEl = document.getElementById("confirm-retry-msg-id");
+  if (idEl) idEl.textContent = messageId;
+  openModal("modal-confirm-retry");
+}
+
+function triggerManualRetryFromModal() {
+  if (msgCurrentViewingMessage) {
+    closeModal("modal-msg-details");
+    promptManualRetry(msgCurrentViewingMessage.message_id);
+  }
+}
+
+async function executeConfirmedRetry() {
+  if (!msgCurrentRetryingId) return;
+  const btn = document.getElementById("btn-confirm-retry-execute");
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await ApiClient.retryMessage(msgCurrentRetryingId);
+    closeModal("modal-confirm-retry");
+    if (res.success) {
+      showToast("Message successfully requeued for retry!", "success");
+      loadOrgMessages(msgCurrentPage, msgLimit);
+    } else {
+      showToast(res.message || "Failed to retry message", "danger");
+    }
+  } catch (err) {
+    closeModal("modal-confirm-retry");
+    showToast(err.message, "danger");
+  } finally {
+    if (btn) btn.disabled = false;
+    msgCurrentRetryingId = null;
+  }
+}
+
+// ----------------------------------------------------
+// MESSAGE COMPOSER LOGIC
+// ----------------------------------------------------
+async function initMessageComposer() {
+  const appSelect = document.getElementById("composer-app");
+  const tplSelect = document.getElementById("composer-template");
+
+  // Load connected applications
+  try {
+    const res = await ApiClient.listApplications(1, 100);
+    if (res.success && res.data) {
+      msgCachedApps = res.data;
+      const authorizedScopes = getAuthorizedAppIds();
+      const availableApps = authorizedScopes 
+        ? msgCachedApps.filter(a => authorizedScopes.includes(a.application_id))
+        : msgCachedApps;
+
+      if (appSelect) {
+        appSelect.innerHTML = '<option value="" disabled selected>-- Select Connected Application --</option>' +
+          availableApps.map(a => `<option value="${escapeHtml(a.application_id)}">${escapeHtml(a.name)} (${escapeHtml(a.environment || "live")})</option>`).join("");
+
+        // If only 1 authorized app, auto-select it
+        if (availableApps.length === 1) {
+          appSelect.value = availableApps[0].application_id;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to load applications for composer:", err);
+  }
+
+  // Load templates
+  try {
+    const res = await ApiClient.listTemplates(1, 100, { status: "ACTIVE" });
+    if (res.success && res.data) {
+      msgCachedTemplates = res.data;
+      if (tplSelect) {
+        tplSelect.innerHTML = '<option value="">-- None: Direct Plain Text / HTML Message --</option>' +
+          msgCachedTemplates.map(t => `<option value="${escapeHtml(t.template_id)}">${escapeHtml(t.name)} (v${t.version || 1}) - ${escapeHtml(t.channel || "email")}</option>`).join("");
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to load templates for composer:", err);
+  }
+
+  updateComposerPayloadPreview();
+}
+
+function handleComposerChannelChange() {
+  const channel = document.getElementById("composer-channel")?.value || "";
+  const recipInput = document.getElementById("composer-recipient");
+  const recipHint = document.getElementById("composer-recipient-hint");
+  const subjectGroup = document.getElementById("composer-subject-group");
+  const subjectReq = document.getElementById("composer-subject-req");
+
+  if (channel === "email") {
+    if (recipInput) recipInput.placeholder = "e.g. user@company.com";
+    if (recipHint) recipHint.textContent = "Valid recipient email address";
+    if (subjectGroup) subjectGroup.style.display = "block";
+    if (subjectReq) subjectReq.style.display = "inline";
+  } else if (channel === "sms") {
+    if (recipInput) recipInput.placeholder = "e.g. +14155552671";
+    if (recipHint) recipHint.textContent = "E.164 formatted telephone number";
+    if (subjectGroup) subjectGroup.style.display = "none";
+    if (subjectReq) subjectReq.style.display = "none";
+  } else if (channel === "whatsapp") {
+    if (recipInput) recipInput.placeholder = "e.g. +14155552671";
+    if (recipHint) recipHint.textContent = "E.164 formatted WhatsApp number";
+    if (subjectGroup) subjectGroup.style.display = "none";
+    if (subjectReq) subjectReq.style.display = "none";
+  } else if (channel === "microsoft_teams") {
+    if (recipInput) recipInput.placeholder = "e.g. https://outlook.office.com/webhook/... or user@org.com";
+    if (recipHint) recipHint.textContent = "Incoming webhook URL, channel email, or user principal";
+    if (subjectGroup) subjectGroup.style.display = "block";
+    if (subjectReq) subjectReq.style.display = "none";
+  } else {
+    if (recipInput) recipInput.placeholder = "Select a channel first";
+  }
+
+  handleComposerInputChange();
+}
+
+async function handleComposerTemplateChange() {
+  const tplId = document.getElementById("composer-template")?.value || "";
+  const varsBox = document.getElementById("composer-template-vars-box");
+  const previewOut = document.getElementById("composer-template-preview-output");
+
+  if (!tplId) {
+    if (varsBox) varsBox.style.display = "none";
+    if (previewOut) previewOut.style.display = "none";
+    updateComposerPayloadPreview();
+    return;
+  }
+
+  const tpl = msgCachedTemplates.find(t => t.template_id === tplId);
+  if (tpl) {
+    // If template has a channel, set channel
+    const channelSelect = document.getElementById("composer-channel");
+    if (channelSelect && tpl.channel && ["email", "sms", "whatsapp", "microsoft_teams"].includes(tpl.channel)) {
+      channelSelect.value = tpl.channel;
+      handleComposerChannelChange();
+    }
+
+    if (tpl.subject && document.getElementById("composer-subject")) {
+      document.getElementById("composer-subject").value = tpl.subject;
+    }
+
+    // Populate default variables sample if required_variables defined
+    const varsTextarea = document.getElementById("composer-template-vars");
+    if (varsTextarea && tpl.required_variables && Array.isArray(tpl.required_variables)) {
+      const sample = {};
+      tpl.required_variables.forEach(v => { sample[v] = `Sample ${v}`; });
+      varsTextarea.value = JSON.stringify(sample, null, 2);
+    }
+  }
+
+  if (varsBox) varsBox.style.display = "block";
+  updateComposerPayloadPreview();
+}
+
+async function previewComposerTemplate() {
+  const tplId = document.getElementById("composer-template")?.value;
+  if (!tplId) return;
+
+  const varsRaw = document.getElementById("composer-template-vars")?.value || "{}";
+  let sampleData = {};
+  try {
+    sampleData = JSON.parse(varsRaw);
+  } catch {
+    showToast("Invalid JSON in template variables", "danger");
+    return;
+  }
+
+  const outEl = document.getElementById("composer-template-preview-output");
+  if (outEl) {
+    outEl.style.display = "block";
+    outEl.innerHTML = '<span style="color: var(--text-muted);">Rendering preview...</span>';
+  }
+
+  try {
+    const res = await ApiClient.previewTemplate(tplId, sampleData);
+    if (res.success && res.data) {
+      if (outEl) {
+        outEl.innerHTML = `
+          <div style="background: rgba(0,0,0,0.4); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px;">
+            <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">Subject: ${escapeHtml(res.data.subject || "-")}</div>
+            <div style="color: var(--text-secondary); font-size: 0.78rem; max-height: 120px; overflow-y: auto;">${escapeHtml(res.data.plain_text_body || "")}</div>
+          </div>
+        `;
+      }
+    } else {
+      if (outEl) outEl.innerHTML = `<span style="color: var(--status-error);">${escapeHtml(res.message || "Preview failed")}</span>`;
+    }
+  } catch (err) {
+    if (outEl) outEl.innerHTML = `<span style="color: var(--status-error);">${escapeHtml(err.message)}</span>`;
+  }
+}
+
+async function handleComposerFileUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  const channel = document.getElementById("composer-channel")?.value || "email";
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("channel", channel);
+  formData.append("purpose", `Message attachment: ${file.name}`);
+
+  showToast(`Uploading ${file.name}...`, "info");
+
+  try {
+    const res = await ApiClient.uploadMedia(formData);
+    if (res.success && res.data) {
+      msgComposerAttachments.push({
+        media_id: res.data.media_id,
+        filename: res.data.filename || file.name,
+        mime_type: res.data.mime_type || file.type,
+        size_bytes: res.data.size_bytes || file.size
+      });
+      renderComposerAttachments();
+      updateComposerPayloadPreview();
+      showToast(`Attachment ${file.name} uploaded successfully!`, "success");
+    } else {
+      showToast(res.message || "Failed to upload file", "danger");
+    }
+  } catch (err) {
+    showToast(err.message, "danger");
+  } finally {
+    event.target.value = "";
+  }
+}
+
+async function openMediaSelectorModal() {
+  const listEl = document.getElementById("media-selector-list");
+  const loadingEl = document.getElementById("media-selector-loading");
+  if (loadingEl) loadingEl.style.display = "block";
+  if (listEl) listEl.innerHTML = "";
+
+  openModal("modal-media-selector");
+
+  try {
+    const res = await ApiClient.listMedia(1, 50);
+    if (loadingEl) loadingEl.style.display = "none";
+    if (res.success && res.data) {
+      if (res.data.length === 0) {
+        if (listEl) listEl.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 20px;">No media files uploaded yet.</div>';
+        return;
+      }
+      if (listEl) {
+        listEl.innerHTML = res.data.map(m => `
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px;">
+            <div>
+              <div style="font-size: 0.825rem; font-weight: 600; color: var(--text-primary);">${escapeHtml(m.filename)}</div>
+              <div style="font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(m.mime_type || "")} &bull; ${(m.size_bytes / 1024).toFixed(1)} KB</div>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="attachMediaItem('${escapeHtml(m.media_id)}', '${escapeHtml(m.filename)}', '${escapeHtml(m.mime_type || "")}', ${m.size_bytes || 0})">Attach</button>
+          </div>
+        `).join("");
+      }
+    }
+  } catch (err) {
+    if (loadingEl) loadingEl.style.display = "none";
+    if (listEl) listEl.innerHTML = `<div style="color: var(--status-error);">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function attachMediaItem(mediaId, filename, mimeType, sizeBytes) {
+  if (!msgComposerAttachments.some(a => a.media_id === mediaId)) {
+    msgComposerAttachments.push({ media_id: mediaId, filename, mime_type: mimeType, size_bytes: sizeBytes });
+    renderComposerAttachments();
+    updateComposerPayloadPreview();
+    showToast(`Attached ${filename}`, "success");
+  }
+  closeModal("modal-media-selector");
+}
+
+function removeComposerAttachment(idx) {
+  msgComposerAttachments.splice(idx, 1);
+  renderComposerAttachments();
+  updateComposerPayloadPreview();
+}
+
+function renderComposerAttachments() {
+  const container = document.getElementById("composer-attachments-list");
+  if (!container) return;
+  if (msgComposerAttachments.length === 0) {
+    container.innerHTML = '<span style="color: var(--text-muted); font-size: 0.75rem;">No files attached</span>';
+    return;
+  }
+  container.innerHTML = msgComposerAttachments.map((a, i) => `
+    <span class="attachment-pill">
+      <span>${escapeHtml(a.filename)}</span>
+      <button type="button" onclick="removeComposerAttachment(${i})" title="Remove attachment">&times;</button>
+    </span>
+  `).join("");
+}
+
+function handleComposerInputChange() {
+  updateComposerPayloadPreview();
+}
+
+function buildComposerPayload() {
+  const appId = document.getElementById("composer-app")?.value || "";
+  const channel = document.getElementById("composer-channel")?.value || "";
+  const recipient = (document.getElementById("composer-recipient")?.value || "").trim();
+  const templateId = document.getElementById("composer-template")?.value || "";
+  const subject = (document.getElementById("composer-subject")?.value || "").trim();
+  const body = (document.getElementById("composer-body")?.value || "").trim();
+
+  let templateVars = {};
+  if (templateId) {
+    try {
+      templateVars = JSON.parse(document.getElementById("composer-template-vars")?.value || "{}");
+    } catch {
+      templateVars = {};
+    }
+  }
+
+  const dataBlock = {};
+  if (subject) dataBlock.subject = subject;
+  if (body) {
+    dataBlock.body = body;
+    dataBlock.message = body;
+  }
+  if (templateId) {
+    dataBlock.template_id = templateId;
+    dataBlock.template_variables = templateVars;
+  }
+  if (msgComposerAttachments.length > 0) {
+    dataBlock.media_ids = msgComposerAttachments.map(a => a.media_id);
+    dataBlock.attachments = msgComposerAttachments.map(a => ({
+      media_id: a.media_id,
+      filename: a.filename,
+      mime_type: a.mime_type
+    }));
+  }
+
+  const payload = {
+    channel: channel,
+    recipient: recipient,
+    application_id: appId,
+    data: dataBlock
+  };
+
+  return payload;
+}
+
+function updateComposerPayloadPreview() {
+  const payload = buildComposerPayload();
+  const previewBox = document.getElementById("composer-payload-preview");
+  if (previewBox) {
+    previewBox.textContent = JSON.stringify(payload, null, 2);
+  }
+
+  // Update Validation Checklist
+  const updateVal = (id, isValid) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle("valid", isValid);
+    el.classList.toggle("invalid", !isValid && el.dataset.touched === "true");
+    el.innerHTML = isValid
+      ? `&#10003; ${el.textContent.replace(/^[\u25CB\u2713\u2717]\s*/, "")}`
+      : `&#9675; ${el.textContent.replace(/^[\u25CB\u2713\u2717]\s*/, "")}`;
+  };
+
+  updateVal("val-app", Boolean(payload.application_id));
+  updateVal("val-channel", Boolean(payload.channel));
+  updateVal("val-recipient", Boolean(payload.recipient && payload.recipient.length >= 3));
+
+  const hasContent = Boolean(
+    payload.data?.body || 
+    payload.data?.message || 
+    payload.data?.template_id || 
+    (payload.data?.media_ids && payload.data.media_ids.length > 0)
+  );
+  updateVal("val-content", hasContent);
+}
+
+async function handleComposerSubmit(event) {
+  event.preventDefault();
+  const payload = buildComposerPayload();
+
+  if (!payload.application_id) {
+    showToast("Please select a connected application", "danger");
+    return;
+  }
+  if (!payload.channel) {
+    showToast("Please select an explicit communication channel", "danger");
+    return;
+  }
+  if (!payload.recipient) {
+    showToast("Recipient is required", "danger");
+    return;
+  }
+  if (!payload.data?.body && !payload.data?.template_id && (!payload.data?.media_ids || payload.data.media_ids.length === 0)) {
+    showToast("Please provide message content or select a template", "danger");
+    return;
+  }
+
+  const sendBtn = document.getElementById("btn-composer-send");
+  if (sendBtn) sendBtn.disabled = true;
+
+  try {
+    // 1. Create message
+    const res = await ApiClient.createMessage(payload);
+    if (res.success && res.data?.message?.message_id) {
+      const msgId = res.data.message.message_id;
+      // 2. Queue for immediate worker processing
+      await ApiClient.queueMessage(msgId);
+      showToast("Message created and queued for processing successfully!", "success");
+      resetComposerForm();
+      switchMessageSubtab("history");
+    } else {
+      showToast(res.message || "Failed to create message", "danger");
+    }
+  } catch (err) {
+    showToast(err.message, "danger");
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+  }
+}
+
+async function handleComposerSaveDraft() {
+  const payload = buildComposerPayload();
+
+  if (!payload.application_id) {
+    showToast("Please select a connected application", "danger");
+    return;
+  }
+  if (!payload.channel) {
+    showToast("Please select an explicit communication channel", "danger");
+    return;
+  }
+  if (!payload.recipient) {
+    showToast("Recipient is required", "danger");
+    return;
+  }
+
+  try {
+    const res = await ApiClient.createMessage(payload);
+    if (res.success && res.data?.message?.message_id) {
+      showToast("Message draft saved in CREATED status!", "success");
+      resetComposerForm();
+      switchMessageSubtab("history");
+    } else {
+      showToast(res.message || "Failed to save message draft", "danger");
+    }
+  } catch (err) {
+    showToast(err.message, "danger");
+  }
+}
+
+function resetComposerForm() {
+  const form = document.getElementById("composer-form");
+  if (form) form.reset();
+  msgComposerAttachments = [];
+  renderComposerAttachments();
+  document.getElementById("composer-template-vars-box")?.style && (document.getElementById("composer-template-vars-box").style.display = "none");
+  document.getElementById("composer-template-preview-output")?.style && (document.getElementById("composer-template-preview-output").style.display = "none");
+  handleComposerChannelChange();
+  updateComposerPayloadPreview();
+}
+
+// ----------------------------------------------------
+// MESSAGE ANALYTICS TAB CONTROLLER
+// ----------------------------------------------------
+async function loadMessageAnalytics() {
+  try {
+    const res = await ApiClient.getOrganizationAnalytics();
+    if (res.success || res.overview) {
+      const d = res.data || res;
+      const total = d.overview?.total_messages ?? (d.total_messages || 0);
+      const statusCounts = d.status_breakdown || {};
+      const rate = d.overview?.delivery_rate_percent ?? (d.delivery_success_rate || 0);
+      const failed = d.overview?.failed ?? ((statusCounts.FAILED || 0) + (statusCounts.DEAD || 0));
+      const queued = d.overview?.queued ?? ((statusCounts.QUEUED || 0) + (statusCounts.PROCESSING || 0));
+
+      const setEl = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+      };
+
+      setEl("analytics-total", total.toLocaleString());
+      setEl("analytics-rate", `${rate}%`);
+      setEl("analytics-failed", failed.toLocaleString());
+      setEl("analytics-queued", queued.toLocaleString());
+
+      // Channel breakdown
+      const chContainer = document.getElementById("analytics-channel-breakdown");
+      if (chContainer) {
+        const channels = d.channels || [];
+        if (channels.length === 0) {
+          chContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem;">No channel dispatch data recorded yet.</div>';
+        } else {
+          chContainer.innerHTML = channels.map(c => {
+            const chName = c.channel || c._id || "unknown";
+            const chCount = c.count || 0;
+            const pct = total > 0 ? ((chCount / total) * 100).toFixed(1) : 0;
+            return `
+              <div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.825rem; margin-bottom: 4px;">
+                  <span style="font-weight: 600; text-transform: uppercase;">${escapeHtml(chName)}</span>
+                  <span style="color: var(--text-muted);">${chCount} messages (${pct}%)</span>
+                </div>
+                <div style="height: 6px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden;">
+                  <div style="height: 100%; width: ${pct}%; background: var(--accent-cyan); border-radius: 3px;"></div>
+                </div>
+              </div>
+            `;
+          }).join("");
+        }
+      }
+
+      // 14-day Daily Dispatch Volume
+      const trendContainer = document.getElementById("analytics-trend-list");
+      if (trendContainer) {
+        const trends = d.daily_trends || d.trends_14d || [];
+        if (trends.length === 0) {
+          trendContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem;">No message volume in the last 14 days.</div>';
+        } else {
+          trendContainer.innerHTML = trends.map(t => {
+            const dateStr = t.date || t._id || "";
+            const count = t.total ?? t.count ?? 0;
+            return `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: rgba(255,255,255,0.03); border-radius: 6px; font-size: 0.8rem;">
+                <span style="font-family: var(--font-mono); color: var(--text-secondary);">${escapeHtml(dateStr)}</span>
+                <span style="font-weight: 600; color: var(--accent-cyan);">${count} dispatched</span>
+              </div>
+            `;
+          }).join("");
+        }
+      }
+    }
+  } catch (err) {
+    showToast(err.message, "danger");
   }
 }
 
 function setupSendMessageForm() {
+  // Backward compatibility wrapper
   document.getElementById("send-message-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    let dataObj;
-    try {
-      dataObj = JSON.parse(document.getElementById("msg-payload").value);
-    } catch {
-      showToast("Invalid JSON payload format", "danger");
-      return;
-    }
-
-    const payload = {
-      channel: document.getElementById("msg-channel").value,
-      provider: document.getElementById("msg-provider").value,
-      recipient: document.getElementById("msg-recipient").value.trim(),
-      data: dataObj
-    };
-
-    try {
-      const res = await ApiClient.createMessage(payload);
-      if (res.success && res.data?.message?.message_id) {
-        showToast("Message created and queued for processing!", "success");
-        // Dispatch via dedicated queue endpoint
-        await ApiClient.queueMessage(res.data.message.message_id);
-        document.querySelector('[data-tab="tab-org-messages"]')?.click();
-      } else {
-        showToast(res.message || "Failed to create message", "danger");
-      }
-    } catch (err) {
-      showToast(err.message, "danger");
-    }
   });
 }
 
@@ -1614,22 +2653,10 @@ async function openCreateUserModal() {
   }
 
   document.getElementById("form-create-user")?.reset();
+  const empCodeInput = document.getElementById("new-user-employee-code");
+  if (empCodeInput) empCodeInput.value = "";
   generateRandomUserPassword();
-  generateNextEmployeeId();
   openModal("modal-create-user");
-}
-
-async function generateNextEmployeeId() {
-  const codeInput = document.getElementById("new-user-employee-code");
-  if (!codeInput) return;
-  try {
-    const res = await ApiClient.getNextEmployeeCode();
-    if (res && res.success && res.data?.next_code) {
-      codeInput.value = res.data.next_code;
-    }
-  } catch (err) {
-    console.warn("Could not prefill employee code:", err);
-  }
 }
 
 function generateRandomUserPassword() {
@@ -1650,18 +2677,22 @@ function setupCreateUserForm() {
     e.preventDefault();
     const selRole = document.getElementById("new-user-role-select").value;
     const appScope = document.getElementById("new-user-app-scope")?.value || null;
-    const employeeCode = document.getElementById("new-user-employee-code")?.value.trim().toUpperCase() || null;
+    const employeeCode = document.getElementById("new-user-employee-code")?.value.trim().toUpperCase() || "";
+
+    if (!employeeCode) {
+      showToast("Employee ID is required", "warning");
+      document.getElementById("new-user-employee-code")?.focus();
+      return;
+    }
 
     const payload = {
       name: document.getElementById("new-user-name").value.trim(),
       email: document.getElementById("new-user-email").value.trim().toLowerCase(),
+      employee_code: employeeCode,
       password: document.getElementById("new-user-password").value,
       role_ids: selRole ? [selRole] : [],
       role_assignments: selRole ? [{ role_id: selRole, application_id: appScope }] : []
     };
-    if (employeeCode) {
-      payload.employee_code = employeeCode;
-    }
 
     try {
       const res = await ApiClient.createUser(payload);
@@ -1821,6 +2852,10 @@ async function saveRoleAssignments() {
       showToast("Role assignments saved successfully!", "success");
       closeModal("modal-assign-role");
       loadOrgUsers();
+      const currentAccount = ApiClient.getStoredAccount();
+      if (currentAccount && (userId === currentAccount.id || userId === currentAccount.user_id)) {
+        await initOrganizationDashboard(currentAccount);
+      }
     } else {
       showToast(res.message || "Failed to update role assignments", "danger");
     }
@@ -3008,52 +4043,6 @@ async function loadOrgSettings() {
       document.getElementById("settings-org-slug").textContent = account.organization_id || "-";
       document.getElementById("settings-org-id").textContent = account.organization_id || "-";
     }
-  }
-
-  // Load Employee ID Configuration (Phase 5 Task 4)
-  try {
-    const idRes = await ApiClient.getOrganizationIdentity();
-    if (idRes.success && idRes.data) {
-      const idData = idRes.data;
-      const empPrefixInput = document.getElementById("identity-emp-prefix");
-      const previewEl = document.getElementById("identity-preview-code");
-      const seqEl = document.getElementById("identity-next-seq");
-
-      if (empPrefixInput) {
-        empPrefixInput.value = idData.employee_id_prefix || "";
-      }
-      if (previewEl) previewEl.textContent = idData.preview_next_code || "-";
-      if (seqEl) seqEl.textContent = idData.next_employee_sequence !== undefined ? idData.next_employee_sequence : "-";
-    }
-  } catch (err) {
-    console.warn("Could not load employee ID prefix settings:", err);
-  }
-}
-
-async function saveOrganizationIdentity(event) {
-  if (event) event.preventDefault();
-  const empPrefixInput = document.getElementById("identity-emp-prefix");
-  const saveBtn = document.getElementById("btn-save-identity");
-
-  const prefix = empPrefixInput ? empPrefixInput.value.trim().toUpperCase() : "";
-  if (!prefix) {
-    showToast("Please enter an employee ID prefix", "warning");
-    return;
-  }
-
-  if (saveBtn) saveBtn.disabled = true;
-  try {
-    const res = await ApiClient.updateOrganizationIdentity({ employee_id_prefix: prefix });
-    if (res.success) {
-      showToast("Employee ID prefix updated successfully!", "success");
-      await loadOrgSettings();
-    } else {
-      showToast(res.message || "Failed to update employee ID prefix", "danger");
-    }
-  } catch (err) {
-    showToast(err.message || "Error saving employee ID prefix", "danger");
-  } finally {
-    if (saveBtn) saveBtn.disabled = false;
   }
 }
 

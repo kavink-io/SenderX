@@ -22,9 +22,30 @@ def create_message():
 
     organization_id = g.current_organization["organization_id"]
 
+    # Resolve application_id and enforce employee application scoping
+    user_app_scopes = getattr(g, "user_application_ids", None)
+    app_id = payload.get("application_id") or request.headers.get("X-Application-ID") or getattr(g, "current_application_id", None)
+
+    if user_app_scopes:
+        if not app_id:
+            if len(user_app_scopes) == 1:
+                app_id = list(user_app_scopes)[0]
+                payload["application_id"] = app_id
+            else:
+                return jsonify({
+                    "success": False,
+                    "message": "application_id is required within your authorized application scope"
+                }), 400
+        elif str(app_id).strip() not in user_app_scopes:
+            return jsonify({
+                "success": False,
+                "message": f"You do not have permission to send messages for application '{app_id}'"
+            }), 403
+
     result = MessageService.create_message(
         payload,
-        organization_id
+        organization_id,
+        application_id=app_id
     )
 
     if not result["success"]:
@@ -46,10 +67,12 @@ def create_message():
 def get_message(message_id):
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = getattr(g, "user_application_ids", None)
 
     message = MessageService.get_message(
         message_id,
-        organization_id
+        organization_id,
+        user_application_ids=user_app_scopes
     )
 
     if not message:
@@ -57,6 +80,12 @@ def get_message(message_id):
             "success": False,
             "message": "Message not found"
         }), 404
+
+    if isinstance(message, dict) and message.get("_error") == "FORBIDDEN":
+        return jsonify({
+            "success": False,
+            "message": message.get("message", "Access denied for this application scope")
+        }), 403
 
     return jsonify({
         "success": True,
@@ -69,15 +98,32 @@ def get_message(message_id):
 def get_all_messages():
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = getattr(g, "user_application_ids", None)
+
+    limit = request.args.get("limit", 50)
+    page = request.args.get("page", 1)
+    status = request.args.get("status", "").strip().upper() or None
+    channel = request.args.get("channel", "").strip().lower() or None
+    provider = request.args.get("provider", "").strip().lower() or None
+    recipient = request.args.get("recipient", "").strip() or None
+    application_id = request.args.get("application_id", "").strip() or None
+    search = request.args.get("search", "").strip() or None
+    start_date = request.args.get("start_date", "").strip() or None
+    end_date = request.args.get("end_date", "").strip() or None
 
     result = MessageService.get_all_messages(
         organization_id=organization_id,
-        limit=request.args.get("limit", 50),
-        page=request.args.get("page", 1),
-        status=request.args.get("status"),
-        channel=request.args.get("channel"),
-        provider=request.args.get("provider"),
-        recipient=request.args.get("recipient")
+        limit=limit,
+        page=page,
+        status=status,
+        channel=channel,
+        provider=provider,
+        recipient=recipient,
+        application_id=application_id,
+        search=search,
+        start_date=start_date,
+        end_date=end_date,
+        user_application_ids=user_app_scopes
     )
 
     return jsonify({
@@ -87,6 +133,23 @@ def get_all_messages():
         "pagination": result["pagination"],
         "data": result["items"]
     }), 200
+
+
+@messages_bp.route("/<string:message_id>/retry", methods=["POST"])
+@require_permissions("organization:messages:manage")
+def retry_message(message_id):
+
+    organization_id = g.current_organization["organization_id"]
+    user_app_scopes = getattr(g, "user_application_ids", None)
+
+    result = MessageService.retry_message(
+        message_id=message_id,
+        organization_id=organization_id,
+        user_application_ids=user_app_scopes
+    )
+
+    status_code = result.get("status_code", 200 if result.get("success") else 400)
+    return jsonify(result), status_code
 
 
 @messages_bp.route("/<string:message_id>/queue", methods=["POST"])

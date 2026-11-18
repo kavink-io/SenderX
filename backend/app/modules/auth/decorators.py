@@ -134,6 +134,7 @@ def require_permissions(*required_permissions):
             granted_permissions = set()
             user_roles = []
             user_app_scopes = set()
+            has_org_wide_scope = False
 
             for assignment in role_assignments:
                 if not isinstance(assignment, dict):
@@ -180,6 +181,7 @@ def require_permissions(*required_permissions):
                 else:
                     # Organization-wide role (e.g. ORG_ADMIN, application_id=None or 'all'):
                     # Applies unconditionally to all applications and org-wide operations.
+                    has_org_wide_scope = True
                     granted_permissions.update(
                         permission for permission in permissions if isinstance(permission, str)
                     )
@@ -244,7 +246,7 @@ def require_permissions(*required_permissions):
             g.current_organization = organization
             g.current_roles = user_roles
             g.current_application_id = target_app_id
-            g.user_application_ids = list(user_app_scopes)
+            g.user_application_ids = None if has_org_wide_scope else (list(user_app_scopes) if user_app_scopes else None)
 
             return func(*args, **kwargs)
 

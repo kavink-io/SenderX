@@ -13,7 +13,6 @@ from app.modules.organizations.role_repository import RoleRepository
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.organizations.service import OrganizationService
 from app.modules.applications.repository import ApplicationRepository
-from app.modules.organizations.sequence_repository import SequenceRepository
 
 
 class UserService:
@@ -135,33 +134,26 @@ class UserService:
         if AuthRepository.find_by_email(email):
             return {"success": False, "message": "This email is registered to a platform administrator"}
 
-        # Validate or allocate employee business ID (employee_code)
+        # Validate required employee business ID (employee_code) - manual entry only
         requested_code = data.get("employee_code")
-        assigned_employee_code = None
+        if requested_code is None or str(requested_code).strip() == "":
+            return {
+                "success": False,
+                "message": "Employee ID is required",
+                "status_code": 400
+            }
 
-        org = OrganizationRepository.find_by_id(organization_id)
-        default_prefix = (org.get("employee_id_prefix") or "EMP") if org else "EMP"
-
-        if requested_code is not None and str(requested_code).strip() != "":
-            code_clean, err = cls.validate_employee_code(requested_code)
-            if err:
-                return {"success": False, "message": err, "status_code": 400}
-            existing = UserRepository.find_by_employee_code(code_clean, organization_id=organization_id)
-            if existing:
-                return {
-                    "success": False,
-                    "message": f"Employee ID '{code_clean}' already exists in this organization",
-                    "status_code": 409
-                }
-            assigned_employee_code = code_clean
-        else:
-            # Atomic allocation using SequenceRepository
-            seq = SequenceRepository.allocate_next_sequence(
-                organization_id=organization_id,
-                sequence_type="employee",
-                default_prefix=default_prefix
-            )
-            assigned_employee_code = seq["code"]
+        code_clean, err = cls.validate_employee_code(requested_code)
+        if err:
+            return {"success": False, "message": err, "status_code": 400}
+        existing = UserRepository.find_by_employee_code(code_clean, organization_id=organization_id)
+        if existing:
+            return {
+                "success": False,
+                "message": f"Employee ID '{code_clean}' already exists in this organization",
+                "status_code": 409
+            }
+        assigned_employee_code = code_clean
 
         # Normalize and validate role assignments
         validated_assignments, validation_err = cls._normalize_and_validate_role_assignments(
@@ -306,28 +298,6 @@ class UserService:
         return {
             "items": enriched_items,
             "pagination": result["pagination"]
-        }
-
-    @classmethod
-    def get_next_employee_code(cls, organization_id):
-        """Preview the next auto-allocated employee business ID for the organization."""
-        org = OrganizationRepository.find_by_id(organization_id)
-        if not org:
-            return {"success": False, "message": "Organization not found", "status_code": 404}
-        default_prefix = org.get("employee_id_prefix") or "EMP"
-        seq_info = SequenceRepository.preview_next_sequence(
-            organization_id=organization_id,
-            sequence_type="employee",
-            default_prefix=default_prefix
-        )
-        return {
-            "success": True,
-            "data": {
-                "organization_id": organization_id,
-                "prefix": seq_info["prefix"],
-                "next_value": seq_info["next_value"],
-                "next_code": seq_info["code"]
-            }
         }
 
     @classmethod
@@ -647,9 +617,13 @@ class UserService:
                 "name": user.get("name", user["email"]),
                 "email": user["email"],
                 "account_type": "ORGANIZATION_USER",
+                "status": "ACTIVE" if user.get("is_active", True) else "INACTIVE",
+                "is_active": user.get("is_active", True),
+                "created_at": user.get("created_at"),
+                "last_login_at": user.get("last_login_at"),
+                "last_login": user.get("last_login_at"),
                 "organization_id": organization_id,
                 "organization_name": organization.get("name", "Organization Workspace"),
-                "employee_id_prefix": organization.get("employee_id_prefix"),
                 "organization_status": organization.get("status", "ACTIVE"),
                 "is_org_admin": is_admin,
                 "roles": user_roles_list,
@@ -745,6 +719,8 @@ class UserService:
         if not user:
             return {"success": False, "message": "User not found"}
 
+        update_fields = {}
+
         # Protection: Employee ID immutability
         if "employee_code" in data:
             requested_code = str(data["employee_code"]).strip().upper() if data["employee_code"] is not None else None
@@ -784,8 +760,6 @@ class UserService:
                         "status_code": 409,
                         "message": "Cannot deactivate the last active administrator in the organization"
                     }
-
-        update_fields = {}
 
         if "name" in data:
             name = str(data["name"]).strip()
