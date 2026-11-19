@@ -16,9 +16,13 @@ class Config:
 
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
+    BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
+
     SECRET_KEY = os.getenv("SECRET_KEY")
 
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+    OTP_HMAC_SECRET = os.getenv("OTP_HMAC_SECRET")
+    AUTH_OTP_EMAIL_PROVIDER = os.getenv("AUTH_OTP_EMAIL_PROVIDER")
 
     JWT_ACCESS_TOKEN_EXPIRES = 900
 
@@ -51,6 +55,12 @@ class Config:
 
     SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
     SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL")
+    AWS_SES_FROM_EMAIL = os.getenv("AWS_SES_FROM_EMAIL")
+    SMTP_HOST = os.getenv("SMTP_HOST")
+    SMTP_PORT = os.getenv("SMTP_PORT", "587")
+    SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL")
+    SMTP_USER = os.getenv("SMTP_USER")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
     # Media & Storage Settings
     STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local")

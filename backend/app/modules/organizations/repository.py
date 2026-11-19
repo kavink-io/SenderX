@@ -68,8 +68,12 @@ class OrganizationRepository:
         query = {}
         if status:
             status_clean = str(status).strip().upper()
-            if status_clean in ("ACTIVE", "INACTIVE"):
+            if status_clean in ("ACTIVE", "INACTIVE", "DELETED", "SUSPENDED"):
                 query["status"] = status_clean
+            elif status_clean == "ALL":
+                pass
+        else:
+            query["status"] = {"$ne": "DELETED"}
 
         if search:
             search_clean = str(search).strip()

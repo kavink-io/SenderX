@@ -69,6 +69,7 @@ def test_create_organization_and_auto_org_admin(app):
                 "name": "Staff Member",
                 "email": f"staff-{suffix}@test.io",
                 "password": "StaffMemberPassword123!",
+                "employee_code": f"EMP-{suffix.upper()}",
                 "role_ids": [org_admin_role["role_id"]]
             }
             new_user_res = UserService.create_user(user_data, organization_id=org_id)

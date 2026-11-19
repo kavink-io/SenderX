@@ -177,6 +177,7 @@ def setup_org_context(app):
             "token_admin_a1": token_admin_a1,
             "token_admin_a2": token_admin_a2,
             "token_admin_b": token_admin_b,
+            "suffix": suffix,
         }
 
         yield ctx
@@ -195,7 +196,7 @@ def test_employee_creation_and_listing(client, setup_org_context):
 
     # 1. Create custom role for testing
     role_res = client.post("/api/v1/users/roles", json={
-        "name": "SUPPORT_SPECIALIST",
+        "name": "Support Specialist",
         "description": "Customer support role",
         "permissions": ["organization:messages:read", "organization:templates:read"]
     }, headers=headers)
@@ -203,10 +204,12 @@ def test_employee_creation_and_listing(client, setup_org_context):
     support_role_id = role_res.json["data"]["role_id"]
 
     # 2. Add employee with application scope
+    alice_email = f"alice.support.{ctx['suffix']}@orga.com"
+    alice_code = f"ALICE-{ctx['suffix']}"
     emp_res = client.post("/api/v1/users/", json={
         "name": "Alice Support",
-        "email": "alice.support@orga.com",
-        "employee_code": "ALICE-001",
+        "email": alice_email,
+        "employee_code": alice_code,
         "password": "StrongPassword123!",
         "role_ids": [support_role_id],
         "role_assignments": [{"role_id": support_role_id, "application_id": ctx["app_crm"]}]
@@ -237,7 +240,7 @@ def test_employee_creation_and_listing(client, setup_org_context):
     detail_res = client.get(f"/api/v1/users/{emp_id}", headers=headers)
     assert detail_res.status_code == 200
     detail_data = detail_res.json["data"]
-    assert detail_data["email"] == "alice.support@orga.com"
+    assert detail_data["email"] == alice_email
     assert len(detail_data["roles"]) == 1
     assert detail_data["roles"][0]["role_id"] == support_role_id
     assert detail_data["roles"][0]["application_id"] == ctx["app_crm"]
@@ -250,7 +253,7 @@ def test_custom_role_lifecycle_and_safe_deletion(client, setup_org_context):
 
     # 1. Create custom role
     create_res = client.post("/api/v1/users/roles", json={
-        "name": "ANALYST_TEMPORARY",
+        "name": "Analyst Temporary",
         "description": "Temporary analytics viewer",
         "permissions": ["organization:analytics:read"]
     }, headers=headers)
@@ -259,7 +262,7 @@ def test_custom_role_lifecycle_and_safe_deletion(client, setup_org_context):
 
     # 2. Reject wildcard permissions
     wildcard_res = client.post("/api/v1/users/roles", json={
-        "name": "HACKER_ROLE",
+        "name": "Hacker Role",
         "permissions": ["*"]
     }, headers=headers)
     assert wildcard_res.status_code == 400
@@ -268,8 +271,8 @@ def test_custom_role_lifecycle_and_safe_deletion(client, setup_org_context):
     # 3. Create employee assigned to this role
     emp_res = client.post("/api/v1/users/", json={
         "name": "Bob Analyst",
-        "email": "bob.analyst@orga.com",
-        "employee_code": "BOB-001",
+        "email": f"bob.analyst.{ctx['suffix']}@orga.com",
+        "employee_code": f"BOB-{ctx['suffix']}",
         "password": "StrongPassword123!",
         "role_ids": [temp_role_id]
     }, headers=headers)
@@ -315,7 +318,7 @@ def test_application_scoped_permissions_enforcement(client, setup_org_context, a
 
     # 1. Create a role with template/message permissions
     role_res = client.post("/api/v1/users/roles", json={
-        "name": "CRM_TEMPLATE_MANAGER",
+        "name": "CRM Template Manager",
         "description": "Manages CRM communication templates",
         "permissions": ["organization:templates:read", "organization:templates:create"]
     }, headers=headers_admin)
@@ -325,8 +328,8 @@ def test_application_scoped_permissions_enforcement(client, setup_org_context, a
     # 2. Create scoped employee: assigned ONLY to app_crm
     emp_res = client.post("/api/v1/users/", json={
         "name": "Scoped Specialist Charlie",
-        "email": "charlie.crm@orga.com",
-        "employee_code": "CHARLIE-001",
+        "email": f"charlie.crm.{ctx['suffix']}@orga.com",
+        "employee_code": f"CHARLIE-{ctx['suffix']}",
         "password": "StrongPassword123!",
         "role_assignments": [{"role_id": crm_role_id, "application_id": ctx["app_crm"]}]
     }, headers=headers_admin)
@@ -419,12 +422,17 @@ def test_last_admin_protection_and_self_deactivation(client, setup_org_context):
     assert service_res["status_code"] == 409
     assert "last active administrator" in service_res["message"].lower()
 
-    # 4. Attempting to strip ORG_ADMIN role from the last active admin must fail
+    # 4. Attempting to strip ORG_ADMIN role from self must fail with 403 (Self-role protection)
     strip_admin_res = client.post(f"/api/v1/users/{ctx['admin_user_a1']}/roles", json={
         "role_assignments": []
     }, headers=headers_a1)
-    assert strip_admin_res.status_code == 409
-    assert "last active administrator" in strip_admin_res.json["message"].lower()
+    assert strip_admin_res.status_code == 403
+    assert "cannot modify your own roles" in strip_admin_res.json["message"].lower()
+
+    # Attempting to strip ORG_ADMIN role from the last active admin via another actor must fail with 409 (Last admin protection)
+    service_role_res = UserService.assign_user_roles(ctx["admin_user_a1"], ctx["org_a"], {"role_assignments": []}, actor_id="different_actor")
+    assert service_role_res["status_code"] == 409
+    assert "last active administrator" in service_role_res["message"].lower()
 
     # 5. Reactivate Admin A2
     react_res = client.post(f"/api/v1/users/{ctx['admin_user_a2']}/activate", headers=headers_a1)
@@ -443,7 +451,7 @@ def test_security_audit_logging(client, setup_org_context):
 
     # Verify event types logged
     event_types = {l["event_type"] for l in logs}
-    assert "USER_CREATED" in event_types or "ROLE_CREATED" in event_types or "ROLE_ASSIGNED" in event_types
+    assert any(e in event_types for e in ["USER_CREATED", "EMPLOYEE_CREATED", "EMPLOYEE_ACTIVATED", "ROLE_CREATED", "ROLE_ASSIGNED", "EMPLOYEE_DELETED"])
 
     # 2. Verify audit logs are scoped to organization
     for log in logs:

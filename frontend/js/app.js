@@ -123,7 +123,43 @@ let currentOrgProfile = null;
 let cachedApplicationsList = [];
 let hasCopiedSecretKey = false;
 
+// ==========================================
+// Theme Management (Phase 5: Responsive White Theme)
+// ==========================================
+function initTheme() {
+  try {
+    const currentTheme = localStorage.getItem("senderx_theme") || "light";
+    document.documentElement.setAttribute("data-theme", currentTheme);
+    updateThemeIcons(currentTheme);
+  } catch (e) {
+    console.error("Theme init error", e);
+  }
+}
+
+function toggleTheme() {
+  try {
+    const current = document.documentElement.getAttribute("data-theme") || "light";
+    const nextTheme = current === "light" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", nextTheme);
+    localStorage.setItem("senderx_theme", nextTheme);
+    updateThemeIcons(nextTheme);
+  } catch (e) {
+    console.error("Theme toggle error", e);
+  }
+}
+
+function updateThemeIcons(theme) {
+  const isDark = theme === "dark";
+  document.querySelectorAll("#theme-icon-sun, .theme-icon-sun-alt").forEach(el => {
+    el.style.display = isDark ? "block" : "none";
+  });
+  document.querySelectorAll("#theme-icon-moon, .theme-icon-moon-alt").forEach(el => {
+    el.style.display = isDark ? "none" : "block";
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  initTheme();
   initApp();
 });
 
@@ -161,7 +197,7 @@ async function initApp() {
         if (res.data.account_type === "PLATFORM_ADMIN") {
           updatePlatformAdminProfileDisplay(res.data);
         } else {
-          updateUserProfileDisplay(res.data);
+          await initOrganizationDashboard(res.data);
         }
       }
     } catch (e) {
@@ -212,6 +248,23 @@ async function initApp() {
     handleLogout();
   });
 
+  window.addEventListener("sx_permission_denied", async (e) => {
+    console.warn("Protected action returned 401/403. Re-fetching dashboard context & re-rendering navigation...", e.detail);
+    if (ApiClient.getAccessToken()) {
+      try {
+        await loadDashboardContext();
+        if (typeof applyPermissionVisibility === "function") {
+          applyPermissionVisibility();
+        }
+        if (typeof updateNavScopeIndicators === "function") {
+          updateNavScopeIndicators();
+        }
+      } catch (err) {
+        console.error("Error refreshing context after permission denial:", err);
+      }
+    }
+  });
+
   // Sidebar Tab Navigation Setup
   setupNavItemListeners();
 
@@ -222,6 +275,7 @@ async function initApp() {
   setupCreateOrgForm();
   setupSendMessageForm();
   setupCreateUserForm();
+  setupAuthOtpFlow();
   setupProviderConfigForm();
   setupTemplateEditorForm();
   setupRegisterAppForm();
@@ -241,8 +295,312 @@ function setupNavItemListeners() {
 }
 
 function showAuth() {
+  resetAuthOtpFlow();
   document.getElementById("auth-view").classList.add("active");
   document.getElementById("app-shell").classList.remove("active");
+}
+
+let authOtpPurpose = null;
+let authOtpEmail = "";
+let authOtpResetToken = "";
+let authOtpExpiryAt = 0;
+let authOtpResendAt = 0;
+let authOtpCountdownTimer = null;
+
+function resetAuthOtpFlow() {
+  if (authOtpCountdownTimer) {
+    clearInterval(authOtpCountdownTimer);
+    authOtpCountdownTimer = null;
+  }
+  authOtpPurpose = null;
+  authOtpEmail = "";
+  authOtpResetToken = "";
+  authOtpExpiryAt = 0;
+  authOtpResendAt = 0;
+
+  const flow = document.getElementById("auth-otp-flow");
+  if (flow) flow.hidden = true;
+  const loginForm = document.getElementById("login-form");
+  if (loginForm) loginForm.hidden = false;
+  const loginLinks = document.getElementById("auth-login-links");
+  if (loginLinks) loginLinks.hidden = false;
+  const cancelButton = document.getElementById("btn-cancel-otp-flow");
+  if (cancelButton) cancelButton.hidden = false;
+
+  ["otp-email-form", "otp-code-form", "otp-password-form", "otp-success"].forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) element.hidden = id !== "otp-email-form";
+  });
+  ["otp-email-error", "otp-code-error", "otp-password-error"].forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = "";
+  });
+  document.querySelectorAll(".otp-digit").forEach((input) => { input.value = ""; });
+  const passwordInput = document.getElementById("otp-new-password");
+  if (passwordInput) passwordInput.value = "";
+}
+
+function startAuthOtpFlow(purpose) {
+  resetAuthOtpFlow();
+  authOtpPurpose = purpose;
+  const loginEmail = document.getElementById("login-email");
+  const emailInput = document.getElementById("otp-email");
+  if (emailInput && loginEmail) emailInput.value = loginEmail.value.trim();
+
+  document.getElementById("login-form").hidden = true;
+  document.getElementById("auth-login-links").hidden = true;
+  document.getElementById("login-error").textContent = "";
+  document.getElementById("auth-otp-flow").hidden = false;
+  document.getElementById("otp-flow-title").textContent =
+    purpose === "ACTIVATION" ? "Activate your account" : "Reset your password";
+  document.getElementById("otp-flow-description").textContent =
+    purpose === "ACTIVATION"
+      ? "Enter your work email to receive a one-time activation code."
+      : "Enter your account email. If it is eligible, we will send a one-time reset code.";
+  document.getElementById("otp-email-form").hidden = false;
+  document.getElementById("otp-code-form").hidden = true;
+  document.getElementById("otp-password-form").hidden = true;
+  document.getElementById("otp-success").hidden = true;
+}
+
+function authOtpPasswordRules(password) {
+  return {
+    length: password.length >= 8,
+    upper: /[A-Z]/.test(password),
+    lower: /[a-z]/.test(password),
+    digit: /\d/.test(password),
+    special: /[^A-Za-z0-9]/.test(password)
+  };
+}
+
+function updateAuthOtpPasswordRules() {
+  const password = document.getElementById("otp-new-password")?.value || "";
+  const rules = authOtpPasswordRules(password);
+  document.querySelectorAll("#otp-password-rules [data-rule]").forEach((item) => {
+    item.classList.toggle("is-met", Boolean(rules[item.dataset.rule]));
+  });
+}
+
+function updateAuthOtpCountdown() {
+  const now = Date.now();
+  const expirySeconds = Math.max(0, Math.ceil((authOtpExpiryAt - now) / 1000));
+  const resendSeconds = Math.max(0, Math.ceil((authOtpResendAt - now) / 1000));
+  const format = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  const expiryLabel = document.getElementById("otp-expiry-countdown");
+  const resendButton = document.getElementById("btn-resend-otp");
+  const resendLabel = document.getElementById("otp-resend-countdown");
+  const verifyButton = document.querySelector("#otp-code-form button[type='submit']");
+
+  if (expiryLabel) {
+    expiryLabel.textContent = expirySeconds
+      ? `Code expires in ${format(expirySeconds)}`
+      : "This code has expired. Request a new one.";
+  }
+  if (verifyButton) verifyButton.disabled = expirySeconds === 0;
+  if (resendButton) {
+    resendButton.disabled = resendSeconds > 0;
+    resendButton.textContent = resendSeconds ? "Resend code" : "Didn't get it? Resend";
+  }
+  if (resendLabel) {
+    resendLabel.textContent = resendSeconds ? `Available in ${format(resendSeconds)}` : "";
+  }
+
+  if (expirySeconds === 0 && authOtpCountdownTimer) {
+    clearInterval(authOtpCountdownTimer);
+    authOtpCountdownTimer = null;
+  }
+}
+
+function startAuthOtpCountdown() {
+  if (authOtpCountdownTimer) clearInterval(authOtpCountdownTimer);
+  authOtpExpiryAt = Date.now() + 10 * 60 * 1000;
+  authOtpResendAt = Date.now() + 60 * 1000;
+  updateAuthOtpCountdown();
+  authOtpCountdownTimer = setInterval(updateAuthOtpCountdown, 1000);
+}
+
+function clearAuthOtpDigits() {
+  document.querySelectorAll(".otp-digit").forEach((input) => { input.value = ""; });
+  document.querySelector(".otp-digit")?.focus();
+}
+
+function setupAuthOtpFlow() {
+  document.getElementById("link-forgot-password")?.addEventListener("click", () => {
+    startAuthOtpFlow("PASSWORD_RESET");
+  });
+  document.getElementById("link-activate-account")?.addEventListener("click", () => {
+    startAuthOtpFlow("ACTIVATION");
+  });
+  document.getElementById("btn-cancel-otp-flow")?.addEventListener("click", () => {
+    const email = document.getElementById("otp-email")?.value.trim();
+    resetAuthOtpFlow();
+    if (email) document.getElementById("login-email").value = email;
+  });
+  document.getElementById("btn-otp-back-to-login")?.addEventListener("click", () => {
+    const email = authOtpEmail;
+    resetAuthOtpFlow();
+    if (email) document.getElementById("login-email").value = email;
+  });
+
+  const requestEmailForm = document.getElementById("otp-email-form");
+  const codeForm = document.getElementById("otp-code-form");
+  const passwordForm = document.getElementById("otp-password-form");
+
+  const requestCode = async (resend) => {
+    const errorBox = document.getElementById(resend ? "otp-code-error" : "otp-email-error");
+    errorBox.textContent = "";
+    const button = document.getElementById(resend ? "btn-resend-otp" : "btn-request-otp");
+    button.disabled = true;
+    try {
+      const result = authOtpPurpose === "ACTIVATION"
+        ? await ApiClient.requestActivationOtp(authOtpEmail)
+        : await ApiClient.requestPasswordResetOtp(authOtpEmail);
+      if (!result.success) {
+        errorBox.textContent = result.message || "Could not send a code. Please try again.";
+        if (resend && Number(result.retry_after) > 0) {
+          authOtpResendAt = Date.now() + Number(result.retry_after) * 1000;
+          if (!authOtpCountdownTimer) {
+            authOtpCountdownTimer = setInterval(updateAuthOtpCountdown, 1000);
+          }
+          updateAuthOtpCountdown();
+        } else {
+          button.disabled = false;
+        }
+        return false;
+      }
+
+      document.getElementById("otp-email-caption").textContent = authOtpEmail;
+      requestEmailForm.hidden = true;
+      codeForm.hidden = false;
+      document.getElementById("otp-password-form").hidden = true;
+      document.getElementById("otp-success").hidden = true;
+      document.getElementById("btn-cancel-otp-flow").hidden = false;
+      document.getElementById("otp-code-error").textContent = "";
+      clearAuthOtpDigits();
+      startAuthOtpCountdown();
+      return true;
+    } catch (error) {
+      errorBox.textContent = error.message || "Could not connect to the service. Please try again.";
+      button.disabled = false;
+      return false;
+    }
+  };
+
+  requestEmailForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    authOtpEmail = document.getElementById("otp-email").value.trim().toLowerCase();
+    await requestCode(false);
+  });
+
+  document.getElementById("btn-resend-otp")?.addEventListener("click", async () => {
+    if (Date.now() < authOtpResendAt) return;
+    await requestCode(true);
+  });
+
+  const digitInputs = Array.from(document.querySelectorAll(".otp-digit"));
+  digitInputs.forEach((input, index) => {
+    input.addEventListener("input", () => {
+      const digits = input.value.replace(/\D/g, "");
+      if (digits.length > 1) {
+        digits.slice(0, 6).split("").forEach((digit, position) => {
+          if (digitInputs[position]) digitInputs[position].value = digit;
+        });
+        digitInputs[Math.min(digits.length, 6) - 1]?.focus();
+      } else {
+        input.value = digits.slice(0, 1);
+        if (input.value) digitInputs[index + 1]?.focus();
+      }
+      document.getElementById("otp-code-error").textContent = "";
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Backspace" && !input.value) digitInputs[index - 1]?.focus();
+    });
+    input.addEventListener("paste", (event) => {
+      event.preventDefault();
+      const digits = event.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+      digits.split("").forEach((digit, position) => {
+        if (digitInputs[position]) digitInputs[position].value = digit;
+      });
+      digitInputs[Math.max(0, digits.length - 1)]?.focus();
+    });
+  });
+
+  codeForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const code = digitInputs.map((input) => input.value).join("");
+    const errorBox = document.getElementById("otp-code-error");
+    errorBox.textContent = "";
+    if (!/^\d{6}$/.test(code)) {
+      errorBox.textContent = "Enter all six digits from the email.";
+      return;
+    }
+
+    const submitButton = codeForm.querySelector("button[type='submit']");
+    submitButton.disabled = true;
+    try {
+      const result = await ApiClient.verifyOtp(authOtpEmail, authOtpPurpose, code);
+      if (!result.success || !result.data?.reset_token) {
+        errorBox.textContent = result.message || "That code could not be verified.";
+        return;
+      }
+      authOtpResetToken = result.data.reset_token;
+      codeForm.hidden = true;
+      passwordForm.hidden = false;
+      document.getElementById("otp-password-error").textContent = "";
+      document.getElementById("otp-new-password").focus();
+    } catch (error) {
+      errorBox.textContent = error.message || "Could not verify the code. Please try again.";
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+
+  const passwordInput = document.getElementById("otp-new-password");
+  passwordInput?.addEventListener("input", updateAuthOtpPasswordRules);
+  document.getElementById("btn-toggle-otp-password")?.addEventListener("click", (event) => {
+    const button = event.currentTarget;
+    const isHidden = passwordInput.type === "password";
+    passwordInput.type = isHidden ? "text" : "password";
+    button.textContent = isHidden ? "Hide" : "Show";
+    button.setAttribute("aria-label", isHidden ? "Hide password" : "Show password");
+  });
+
+  passwordForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const password = passwordInput.value;
+    const rules = authOtpPasswordRules(password);
+    const errorBox = document.getElementById("otp-password-error");
+    errorBox.textContent = "";
+    if (!Object.values(rules).every(Boolean)) {
+      errorBox.textContent = "Choose a password that meets all the requirements.";
+      return;
+    }
+
+    const button = document.getElementById("btn-set-otp-password");
+    button.disabled = true;
+    try {
+      const result = await ApiClient.setPasswordWithOtp(
+        authOtpPurpose,
+        authOtpResetToken,
+        password
+      );
+      if (!result.success) {
+        errorBox.textContent = result.message || "Could not set the password. Request a new code.";
+        return;
+      }
+      if (authOtpCountdownTimer) clearInterval(authOtpCountdownTimer);
+      authOtpCountdownTimer = null;
+      authOtpResetToken = "";
+      passwordForm.hidden = true;
+      document.getElementById("otp-success-message").textContent = result.message;
+      document.getElementById("otp-success").hidden = false;
+      document.getElementById("btn-cancel-otp-flow").hidden = true;
+    } catch (error) {
+      errorBox.textContent = error.message || "Could not set the password. Please try again.";
+    } finally {
+      button.disabled = false;
+    }
+  });
 }
 
 function updatePlatformAdminProfileDisplay(account) {
@@ -354,6 +712,24 @@ function setupTopNav() {
       }
     });
   });
+
+  // Global modal dismissal: backdrop click and Escape key
+  document.querySelectorAll(".modal").forEach((m) => {
+    m.addEventListener("click", (e) => {
+      if (e.target === m) {
+        m.classList.remove("active");
+      }
+    });
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      const activeModal = document.querySelector(".modal.active");
+      if (activeModal) {
+        activeModal.classList.remove("active");
+      }
+    }
+  });
 }
 
 function updateBreadcrumb(tabId) {
@@ -376,6 +752,7 @@ function updateBreadcrumb(tabId) {
     "tab-org-users": { title: "Employees & Roles", sub: "Manage organization members, assignments, and custom role permissions" },
     "tab-org-settings": { title: "Settings", sub: "Organization profile, environment policies, and security architecture parameters" },
     "tab-platform-overview": { title: "Platform Organizations", sub: "Platform-wide organization management" },
+    "tab-platform-change-requests": { title: "Organization Change Requests", sub: "Review, approve, or reject tenant name and slug rebranding requests" },
     "tab-platform-analytics": { title: "Platform Analytics", sub: "Cross-organization telemetry and system throughput" },
     "tab-platform-monitoring": { title: "System Health", sub: "Real-time health status of infrastructure services" },
     "tab-org-messages": { title: "Messages", sub: "Direct message management" },
@@ -700,11 +1077,8 @@ async function showUserProfile() {
     // ----------------------------------------------------
     if (titleEl) titleEl.textContent = "User Profile & Access Scopes";
 
-    let ctx = currentUserDashboardContext;
-    if (!ctx) {
-      ctx = await loadDashboardContext();
-    }
-    if (!ctx) ctx = account;
+    const freshCtx = await loadDashboardContext();
+    const ctx = freshCtx || currentUserDashboardContext || account;
 
     const displayName = ctx.name || ctx.email || "Organization User";
     if (nameEl) nameEl.textContent = displayName;
@@ -732,7 +1106,7 @@ async function showUserProfile() {
     }
 
     if (orgEl) {
-      orgEl.textContent = `${ctx.organization_name || account.organization_name || "Organization Workspace"} • ID: ${ctx.organization_id || account.organization_id || "N/A"}`;
+      orgEl.textContent = ctx.organization_name || account.organization_name || "Organization Workspace";
     }
 
     if (createdEl) {
@@ -766,7 +1140,7 @@ async function showUserProfile() {
         `;
       } else if (assignments.length > 0) {
         rolesListEl.innerHTML = assignments.map((a) => `
-          <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
             <div>
               <strong style="color: var(--accent-cyan);">${escapeHtml(a.role_name || "Custom Role")}</strong>
               <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 6px;">(${a.permissions ? a.permissions.length : 0} perms)</span>
@@ -778,7 +1152,7 @@ async function showUserProfile() {
         `).join("");
       } else if (roles.length > 0) {
         rolesListEl.innerHTML = roles.map((r) => `
-          <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
             <strong style="color: var(--accent-cyan);">${escapeHtml(r.name || r.role_id)}</strong>
             <span class="badge badge-scope" style="font-size: 0.75rem;">${r.application_id ? escapeHtml(r.application_id) : 'Org-wide'}</span>
           </div>
@@ -988,6 +1362,9 @@ async function handleTabActivation(tabId) {
     case "tab-platform-overview":
       await loadOrganizations();
       break;
+    case "tab-platform-change-requests":
+      await loadPlatformChangeRequests();
+      break;
     case "tab-platform-analytics":
       await loadPlatformAnalytics();
       break;
@@ -1060,7 +1437,6 @@ async function loadOrganizations(page = platformOrgsCurrentPage, limit = platfor
           <tr>
             <td>
               <div style="font-weight: 600; color: var(--text-primary); cursor: pointer;" onclick="openOrgDetailsModal('${org.organization_id}')" title="View details">${escapeHtml(org.name)}</div>
-              <div style="font-family: var(--font-mono); font-size: 0.725rem; color: var(--text-muted); margin-top: 2px;">ID: ${org.organization_id}</div>
             </td>
             <td><code>${escapeHtml(org.slug)}</code></td>
             <td><span class="badge badge-${(org.status || "active").toLowerCase()}">${org.status || "ACTIVE"}</span></td>
@@ -1071,7 +1447,14 @@ async function loadOrganizations(page = platformOrgsCurrentPage, limit = platfor
                 ${
                   org.status === "ACTIVE"
                     ? `<button class="btn btn-secondary btn-sm" onclick="toggleOrgStatus('${org.organization_id}', 'INACTIVE')">Deactivate</button>`
-                    : `<button class="btn btn-primary btn-sm" onclick="toggleOrgStatus('${org.organization_id}', 'ACTIVE')">Activate</button>`
+                    : org.status === "INACTIVE"
+                    ? `<button class="btn btn-primary btn-sm" onclick="toggleOrgStatus('${org.organization_id}', 'ACTIVE')">Activate</button>`
+                    : ""
+                }
+                ${
+                  org.status !== "DELETED"
+                    ? `<button class="btn btn-danger btn-sm" onclick="openDeleteOrgModal('${org.organization_id}', '${escapeHtml(org.name)}', '${escapeHtml(org.slug)}')">Delete</button>`
+                    : `<span class="badge badge-inactive">DELETED</span>`
                 }
               </div>
             </td>
@@ -1152,9 +1535,9 @@ async function openOrgDetailsModal(orgId) {
   // Loading placeholders
   document.getElementById("org-detail-name").textContent = "Loading...";
   document.getElementById("org-detail-slug").textContent = "-";
-  document.getElementById("org-detail-id").textContent = orgId;
+  if (document.getElementById("org-detail-id")) document.getElementById("org-detail-id").textContent = "";
   document.getElementById("org-detail-status-badge").textContent = "...";
-  document.getElementById("org-detail-prefix").textContent = "-";
+  if (document.getElementById("org-detail-prefix")) document.getElementById("org-detail-prefix").textContent = "-";
   document.getElementById("org-detail-users-count").textContent = "-";
   document.getElementById("org-detail-apps-count").textContent = "-";
   document.getElementById("org-detail-admin").textContent = "-";
@@ -1167,13 +1550,13 @@ async function openOrgDetailsModal(orgId) {
       const org = res.data;
       document.getElementById("org-detail-name").textContent = org.name;
       document.getElementById("org-detail-slug").textContent = org.slug;
-      document.getElementById("org-detail-id").textContent = org.organization_id;
+      if (document.getElementById("org-detail-id")) document.getElementById("org-detail-id").textContent = "";
       
       const badge = document.getElementById("org-detail-status-badge");
       badge.textContent = org.status || "ACTIVE";
       badge.className = `badge badge-${(org.status || "active").toLowerCase()}`;
 
-      document.getElementById("org-detail-prefix").textContent = org.employee_id_prefix || "None (Default: EMP)";
+      if (document.getElementById("org-detail-prefix")) document.getElementById("org-detail-prefix").textContent = org.employee_id_prefix || "None (Default: EMP)";
       document.getElementById("org-detail-users-count").textContent = org.user_count !== undefined ? org.user_count : "-";
       document.getElementById("org-detail-apps-count").textContent = org.application_count !== undefined ? org.application_count : "-";
       
@@ -1187,9 +1570,17 @@ async function openOrgDetailsModal(orgId) {
 
       const toggleActionBox = document.getElementById("org-detail-toggle-action");
       if (org.status === "ACTIVE") {
-        toggleActionBox.innerHTML = `<button class="btn btn-secondary" onclick="toggleOrgStatusFromModal('${org.organization_id}', 'INACTIVE')">Deactivate Organization</button>`;
+        toggleActionBox.innerHTML = `
+          <button class="btn btn-secondary" onclick="toggleOrgStatusFromModal('${org.organization_id}', 'INACTIVE')">Deactivate Organization</button>
+          <button class="btn btn-danger" style="margin-left: 8px;" onclick="closeModal('modal-org-details'); openDeleteOrgModal('${org.organization_id}', '${escapeHtml(org.name)}', '${escapeHtml(org.slug)}')">Delete Organization</button>
+        `;
+      } else if (org.status === "INACTIVE") {
+        toggleActionBox.innerHTML = `
+          <button class="btn btn-primary" onclick="toggleOrgStatusFromModal('${org.organization_id}', 'ACTIVE')">Activate Organization</button>
+          <button class="btn btn-danger" style="margin-left: 8px;" onclick="closeModal('modal-org-details'); openDeleteOrgModal('${org.organization_id}', '${escapeHtml(org.name)}', '${escapeHtml(org.slug)}')">Delete Organization</button>
+        `;
       } else {
-        toggleActionBox.innerHTML = `<button class="btn btn-primary" onclick="toggleOrgStatusFromModal('${org.organization_id}', 'ACTIVE')">Activate Organization</button>`;
+        toggleActionBox.innerHTML = `<span class="badge badge-inactive">ORGANIZATION DELETED</span>`;
       }
     } else {
       showToast(res.message || "Could not load organization details", "danger");
@@ -1469,7 +1860,7 @@ async function loadOrgMessages(page = 1, limit = 50) {
             <tr>
               <td><code>${escapeHtml((m.message_id || "").substring(0, 8))}...</code></td>
               <td>${appLabel}</td>
-              <td><span class="badge" style="background: rgba(255,255,255,0.06); font-family: var(--font-mono); font-size: 0.72rem;">${escapeHtml(m.channel || "")}</span></td>
+              <td><span class="badge" style="background: var(--bg-surface); border: 1px solid var(--border-color); color: var(--text-primary); font-family: var(--font-mono); font-size: 0.72rem;">${escapeHtml(m.channel || "")}</span></td>
               <td><span title="${escapeHtml(m.recipient || "")}" style="max-width: 170px; display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem;">${escapeHtml(m.recipient || "")}</span></td>
               <td><span class="badge ${badgeClass}">${statusDisplay}</span></td>
               <td><span style="font-family: var(--font-mono); font-size: 0.8rem;">${m.retry_count || 0}</span></td>
@@ -1886,7 +2277,7 @@ async function previewComposerTemplate() {
     if (res.success && res.data) {
       if (outEl) {
         outEl.innerHTML = `
-          <div style="background: rgba(0,0,0,0.4); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px;">
+          <div style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px;">
             <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">Subject: ${escapeHtml(res.data.subject || "-")}</div>
             <div style="color: var(--text-secondary); font-size: 0.78rem; max-height: 120px; overflow-y: auto;">${escapeHtml(res.data.plain_text_body || "")}</div>
           </div>
@@ -1952,7 +2343,7 @@ async function openMediaSelectorModal() {
       }
       if (listEl) {
         listEl.innerHTML = res.data.map(m => `
-          <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px;">
             <div>
               <div style="font-size: 0.825rem; font-weight: 600; color: var(--text-primary);">${escapeHtml(m.filename)}</div>
               <div style="font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(m.mime_type || "")} &bull; ${(m.size_bytes / 1024).toFixed(1)} KB</div>
@@ -2206,7 +2597,7 @@ async function loadMessageAnalytics() {
                   <span style="font-weight: 600; text-transform: uppercase;">${escapeHtml(chName)}</span>
                   <span style="color: var(--text-muted);">${chCount} messages (${pct}%)</span>
                 </div>
-                <div style="height: 6px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden;">
+                <div style="height: 6px; background: var(--border-color); border-radius: 3px; overflow: hidden;">
                   <div style="height: 100%; width: ${pct}%; background: var(--accent-cyan); border-radius: 3px;"></div>
                 </div>
               </div>
@@ -2226,7 +2617,7 @@ async function loadMessageAnalytics() {
             const dateStr = t.date || t._id || "";
             const count = t.total ?? t.count ?? 0;
             return `
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: rgba(255,255,255,0.03); border-radius: 6px; font-size: 0.8rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.8rem;">
                 <span style="font-family: var(--font-mono); color: var(--text-secondary);">${escapeHtml(dateStr)}</span>
                 <span style="font-weight: 600; color: var(--accent-cyan);">${count} dispatched</span>
               </div>
@@ -2471,24 +2862,52 @@ async function loadOrgUsers() {
           }).join("");
         }
 
+        const isDeleted = u.status === "DELETED" || u.is_deleted === true;
+        const isPendingActivation = u.status === "PENDING_ACTIVATION";
+
         // Action buttons
         let statusToggleBtn = "";
-        if (isSelf) {
-          statusToggleBtn = `<button class="btn btn-outline btn-sm" disabled style="opacity: 0.5; cursor: not-allowed;" title="You cannot deactivate your own account">Deactivate (You)</button>`;
-        } else if (u.is_active) {
-          if (isLastAdmin) {
-            statusToggleBtn = `<button class="btn btn-outline btn-sm" disabled style="opacity: 0.5; cursor: not-allowed;" title="Cannot deactivate the last active organization administrator">Deactivate (Last Admin)</button>`;
-          } else {
-            statusToggleBtn = `<button class="btn btn-outline btn-sm" data-perm="organization:users:manage" onclick="handleToggleUserStatus('${u.user_id}', '${escapeHtml(u.name)}', true)">Deactivate</button>`;
-          }
+        let deleteBtn = "";
+
+        const roleDisplayName = u.is_org_admin ? "ORG_ADMIN" : (u.roles && u.roles.length > 0 ? (u.roles[0].name || u.roles[0].role_name || "Employee") : "Employee");
+        const empCodeVal = u.employee_code || "";
+        const deptVal = u.department || "";
+        const phoneVal = u.phone || "";
+
+        if (isDeleted) {
+          statusToggleBtn = "";
+          deleteBtn = `<span class="badge badge-inactive" style="font-size: 0.7rem;">DELETED</span>`;
+        } else if (isPendingActivation) {
+          statusToggleBtn = `<button class="btn btn-outline btn-sm" data-perm="organization:users:manage" onclick="handleResendActivationOtp('${u.user_id}', '${escapeHtml(u.name)}')">Resend activation code</button>`;
+          deleteBtn = `<button class="btn btn-danger btn-sm" data-perm="organization:users:manage" onclick="openDeleteEmployeeModal('${u.user_id}', '${escapeHtml(u.name)}', '${escapeHtml(u.email)}', '${escapeHtml(empCodeVal)}', '${escapeHtml(deptVal)}', '${escapeHtml(phoneVal)}', '${escapeHtml(roleDisplayName)}')">Delete</button>`;
         } else {
-          statusToggleBtn = `<button class="btn btn-outline btn-sm" style="border-color: var(--status-success); color: var(--status-success);" data-perm="organization:users:manage" onclick="handleToggleUserStatus('${u.user_id}', '${escapeHtml(u.name)}', false)">Activate</button>`;
+          if (isSelf) {
+            statusToggleBtn = `<button class="btn btn-outline btn-sm" disabled style="opacity: 0.5; cursor: not-allowed;" title="You cannot deactivate your own account">Deactivate (You)</button>`;
+            deleteBtn = `<button class="btn btn-outline btn-sm" disabled style="opacity: 0.4; cursor: not-allowed;" title="You cannot delete your own account">Delete</button>`;
+          } else if (u.is_active) {
+            if (isLastAdmin) {
+              statusToggleBtn = `<button class="btn btn-outline btn-sm" disabled style="opacity: 0.5; cursor: not-allowed;" title="Cannot deactivate the last active organization administrator">Deactivate (Last Admin)</button>`;
+              deleteBtn = `<button class="btn btn-outline btn-sm" disabled style="opacity: 0.4; cursor: not-allowed;" title="Cannot delete the last active organization administrator">Delete</button>`;
+            } else {
+              statusToggleBtn = `<button class="btn btn-outline btn-sm" data-perm="organization:users:manage" onclick="handleToggleUserStatus('${u.user_id}', '${escapeHtml(u.name)}', true)">Deactivate</button>`;
+              deleteBtn = `<button class="btn btn-danger btn-sm" data-perm="organization:users:manage" onclick="openDeleteEmployeeModal('${u.user_id}', '${escapeHtml(u.name)}', '${escapeHtml(u.email)}', '${escapeHtml(empCodeVal)}', '${escapeHtml(deptVal)}', '${escapeHtml(phoneVal)}', '${escapeHtml(roleDisplayName)}')">Delete</button>`;
+            }
+          } else {
+            statusToggleBtn = `<button class="btn btn-outline btn-sm" style="border-color: var(--status-success); color: var(--status-success);" data-perm="organization:users:manage" onclick="handleToggleUserStatus('${u.user_id}', '${escapeHtml(u.name)}', false)">Activate</button>`;
+            deleteBtn = `<button class="btn btn-danger btn-sm" data-perm="organization:users:manage" onclick="openDeleteEmployeeModal('${u.user_id}', '${escapeHtml(u.name)}', '${escapeHtml(u.email)}', '${escapeHtml(empCodeVal)}', '${escapeHtml(deptVal)}', '${escapeHtml(phoneVal)}', '${escapeHtml(roleDisplayName)}')">Delete</button>`;
+          }
         }
 
         const initials = (u.name || "U").split(" ").map(p => p[0]).join("").toUpperCase().slice(0, 2);
         const empCodeHtml = u.employee_code
           ? `<span class="badge-emp-code">${escapeHtml(u.employee_code)}</span>`
           : `<span style="color: var(--text-muted); font-size: 0.775rem;">-</span>`;
+
+        const statusBadgeHtml = isDeleted
+          ? `<span class="badge badge-inactive">DELETED</span>`
+          : isPendingActivation
+            ? `<span class="badge badge-pending-activation">Pending activation</span>`
+            : `<span class="badge badge-${u.is_active ? "active" : "inactive"}">${u.is_active ? "ACTIVE" : "INACTIVE"}</span>`;
 
         return `
           <tr>
@@ -2497,23 +2916,21 @@ async function loadOrgUsers() {
                 <div class="user-avatar-circle">${escapeHtml(initials)}</div>
                 <div>
                   <strong style="color: var(--text-primary); display: block;">${escapeHtml(u.name)}</strong>
-                  <span style="font-family: var(--font-mono); font-size: 0.725rem; color: var(--text-muted);">${escapeHtml(u.user_id)}</span>
                 </div>
               </div>
             </td>
             <td>${empCodeHtml}</td>
             <td><span style="color: var(--text-secondary);">${escapeHtml(u.email)}</span></td>
-            <td>
-              <span class="badge badge-${u.is_active ? "active" : "inactive"}">${u.is_active ? "ACTIVE" : "INACTIVE"}</span>
-            </td>
+            <td>${statusBadgeHtml}</td>
             <td>
               <div style="display: flex; flex-wrap: wrap; max-width: 380px;">${roleTagsHtml}</div>
             </td>
             <td>
               <div style="display: flex; gap: 6px; align-items: center;">
                 <button class="btn btn-secondary btn-sm" onclick="handleViewUserDetails('${u.user_id}')">Details</button>
-                <button class="btn btn-outline btn-sm" data-perm="organization:roles:manage" onclick="handleOpenAssignRoles('${u.user_id}')">Assign Roles</button>
+                ${!isDeleted ? `<button class="btn btn-outline btn-sm" data-perm="organization:roles:manage" onclick="handleOpenAssignRoles('${u.user_id}')">Assign Roles</button>` : ""}
                 ${statusToggleBtn}
+                ${deleteBtn}
               </div>
             </td>
           </tr>
@@ -2594,42 +3011,291 @@ async function loadOrgRoles() {
   }
 }
 
-async function loadOrgAuditLogs() {
+// ----------------------------------------------------
+// EMPLOYEE DELETION (Phase 5 Task 5.4)
+// ----------------------------------------------------
+
+function openDeleteEmployeeModal(userId, name, email, employeeCode, department, phone, roleName) {
+  const idInput = document.getElementById("delete-employee-id");
+  const nameEl = document.getElementById("delete-employee-name");
+  const emailEl = document.getElementById("delete-employee-email");
+  const codeEl = document.getElementById("delete-employee-code");
+  const deptEl = document.getElementById("delete-employee-department");
+  const phoneEl = document.getElementById("delete-employee-phone");
+  const roleEl = document.getElementById("delete-employee-role");
+
+  if (idInput) idInput.value = userId;
+  if (nameEl) nameEl.textContent = name || "Employee";
+  if (emailEl) emailEl.textContent = email || "Not provided";
+  if (codeEl) codeEl.textContent = employeeCode || "Not provided";
+  if (deptEl) deptEl.textContent = department || "Not provided";
+  if (phoneEl) phoneEl.textContent = phone || "Not provided";
+  if (roleEl) roleEl.textContent = roleName || "Employee";
+
+  openModal("modal-delete-employee");
+}
+
+async function executeDeleteEmployee() {
+  const userId = document.getElementById("delete-employee-id")?.value;
+  if (!userId) return;
+
+  const btn = document.getElementById("btn-confirm-delete-employee");
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await ApiClient.deleteUser(userId);
+    if (res.success) {
+      showToast("Employee deleted successfully", "success");
+      closeModal("modal-delete-employee");
+      await loadOrgUsers();
+      if (typeof loadOrgAuditLogs === "function") {
+        await loadOrgAuditLogs(1);
+      }
+    } else {
+      showToast(res.message || "Failed to delete employee", "danger");
+    }
+  } catch (err) {
+    showToast(err.message, "danger");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ----------------------------------------------------
+// SECURITY AUDIT LOGS (Phase 5 Task 5.4)
+// ----------------------------------------------------
+
+let orgAuditCurrentPage = 1;
+let orgAuditLimit = 20;
+let orgAuditSearchDebounceTimer = null;
+let _cachedAuditLogs = [];
+
+function formatRelativeTime(isoString) {
+  if (!isoString) return "";
+  try {
+    const d = new Date(isoString);
+    const now = new Date();
+    const diffSec = Math.floor((now - d) / 1000);
+    if (diffSec < 45) return "just now";
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHour = Math.floor(diffMin / 60);
+    if (diffHour < 24) return `${diffHour}h ago`;
+    const diffDay = Math.floor(diffHour / 24);
+    if (diffDay === 1) return "yesterday";
+    if (diffDay < 30) return `${diffDay}d ago`;
+    return d.toLocaleDateString();
+  } catch (e) {
+    return "";
+  }
+}
+
+function handleAuditSearchDebounced() {
+  if (orgAuditSearchDebounceTimer) clearTimeout(orgAuditSearchDebounceTimer);
+  orgAuditSearchDebounceTimer = setTimeout(() => {
+    loadOrgAuditLogs(1);
+  }, 300);
+}
+
+function prevAuditPage() {
+  if (orgAuditCurrentPage > 1) {
+    loadOrgAuditLogs(orgAuditCurrentPage - 1);
+  }
+}
+
+function nextAuditPage() {
+  loadOrgAuditLogs(orgAuditCurrentPage + 1);
+}
+
+async function loadOrgAuditLogs(page = orgAuditCurrentPage) {
+  orgAuditCurrentPage = page;
   const tbody = document.getElementById("audit-logs-table-body");
   const emptyState = document.getElementById("audit-empty-state");
   if (!tbody) return;
 
-  tbody.innerHTML = '<tr><td colspan="5" class="loading-cell">Loading security audit trail...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading security audit trail...</td></tr>';
   if (emptyState) emptyState.style.display = "none";
 
+  const search = document.getElementById("audit-search-input")?.value?.trim() || "";
+  const action = document.getElementById("audit-filter-action")?.value || "";
+  const result = document.getElementById("audit-filter-result")?.value || "";
+  const dateFilter = document.getElementById("audit-filter-date")?.value || "";
+
+  let startDate = "";
+  if (dateFilter === "today") {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    startDate = today.toISOString();
+  } else if (dateFilter === "7d") {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    startDate = d.toISOString();
+  } else if (dateFilter === "30d") {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    startDate = d.toISOString();
+  }
+
   try {
-    const res = await ApiClient.listSecurityAuditLogs(1, 50);
+    const filters = {};
+    if (search) filters.search = search;
+    if (action) filters.action = action;
+    if (result) filters.result = result;
+    if (startDate) filters.start_date = startDate;
+
+    const res = await ApiClient.listSecurityAuditLogs(page, orgAuditLimit, filters);
     if (res.success && res.data) {
+      _cachedAuditLogs = res.data;
       if (res.data.length === 0) {
         tbody.innerHTML = "";
         if (emptyState) emptyState.style.display = "block";
-        return;
+      } else {
+        tbody.innerHTML = res.data.map(log => {
+          const localTime = log.timestamp ? new Date(log.timestamp).toLocaleString() : "-";
+          const relHint = formatRelativeTime(log.timestamp);
+          const isSuccess = log.result === "SUCCESS" || !log.result;
+          const resultBadge = `<span class="badge badge-${isSuccess ? 'active' : 'inactive'}" style="font-size: 0.68rem;">${escapeHtml(log.result || "SUCCESS")}</span>`;
+          const actionBadge = `<span class="badge badge-info" style="font-size: 0.72rem; letter-spacing: 0.3px;">${escapeHtml(log.action_label || log.event_type || "-")}</span>`;
+
+          return `
+            <tr>
+              <td style="font-size: 0.775rem; color: var(--text-primary); white-space: nowrap;">
+                <div>${escapeHtml(localTime)}</div>
+                <div style="font-size: 0.7rem; color: var(--text-muted);">${escapeHtml(relHint)}</div>
+              </td>
+              <td>
+                <div style="font-weight: 600; color: var(--text-primary); font-size: 0.85rem;">${escapeHtml(log.actor_name || "System")}</div>
+                <div style="font-size: 0.725rem; color: var(--text-muted);">${escapeHtml(log.actor_email || "-")}</div>
+              </td>
+              <td>${actionBadge}</td>
+              <td>
+                <div style="font-weight: 500; color: var(--text-primary); font-size: 0.85rem;">${escapeHtml(log.target_name || "-")}</div>
+                <div style="font-size: 0.7rem; color: var(--accent-cyan); text-transform: uppercase;">${escapeHtml(log.target_type || "")}</div>
+              </td>
+              <td style="font-size: 0.825rem; color: var(--text-secondary); max-width: 320px; line-height: 1.4;">
+                ${escapeHtml(log.summary || "-")}
+              </td>
+              <td>${resultBadge}</td>
+              <td style="text-align: right; white-space: nowrap;">
+                <button class="btn btn-secondary btn-sm" onclick="openAuditDetailsModal('${log.audit_id}')">Details</button>
+              </td>
+            </tr>
+          `;
+        }).join("");
       }
 
-      tbody.innerHTML = res.data.map(log => {
-        const timeFormatted = log.timestamp ? new Date(log.timestamp).toLocaleString() : "-";
-        const detailsStr = log.details ? JSON.stringify(log.details) : "-";
-        return `
-          <tr>
-            <td style="font-size: 0.775rem; color: var(--text-secondary); white-space: nowrap;">${escapeHtml(timeFormatted)}</td>
-            <td><span class="badge badge-active" style="font-size: 0.7rem;">${escapeHtml(log.event_type || "-")}</span></td>
-            <td style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--accent-cyan);">${escapeHtml(log.actor_id || "System")}</td>
-            <td style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(log.target_id || "-")}</td>
-            <td style="font-size: 0.75rem; color: var(--text-secondary); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(detailsStr)}">
-              ${escapeHtml(detailsStr)}
-            </td>
-          </tr>
-        `;
-      }).join("");
+      // Update Audit Pagination Bar
+      const pagination = res.pagination || { total: res.total_count || 0, page: 1, limit: orgAuditLimit, total_pages: 1 };
+      const total = pagination.total || 0;
+      const totalPages = pagination.total_pages || 1;
+      const start = total === 0 ? 0 : (page - 1) * orgAuditLimit + 1;
+      const end = Math.min(page * orgAuditLimit, total);
+
+      const infoEl = document.getElementById("audit-pagination-info");
+      const indicatorEl = document.getElementById("audit-page-indicator");
+      const prevBtn = document.getElementById("audit-prev-btn");
+      const nextBtn = document.getElementById("audit-next-btn");
+
+      if (infoEl) infoEl.textContent = `Showing ${start}-${end} of ${total}`;
+      if (indicatorEl) indicatorEl.textContent = `Page ${page} of ${totalPages || 1}`;
+      if (prevBtn) prevBtn.disabled = page <= 1;
+      if (nextBtn) nextBtn.disabled = page >= totalPages;
     }
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" class="loading-cell error">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="loading-cell error">${escapeHtml(err.message)}</td></tr>`;
   }
+}
+
+function openAuditDetailsModal(auditId) {
+  const log = _cachedAuditLogs.find(l => l.audit_id === auditId);
+  if (!log) {
+    showToast("Audit event details not found", "warning");
+    return;
+  }
+
+  const titleEl = document.getElementById("audit-detail-title");
+  const resultBadge = document.getElementById("audit-detail-result-badge");
+  const summaryBanner = document.getElementById("audit-detail-summary-banner");
+  const actorNameEl = document.getElementById("audit-detail-actor-name");
+  const actorEmailEl = document.getElementById("audit-detail-actor-email");
+  const actorRoleEl = document.getElementById("audit-detail-actor-role");
+  const targetNameEl = document.getElementById("audit-detail-target-name");
+  const targetTypeEl = document.getElementById("audit-detail-target-type");
+  const timeEl = document.getElementById("audit-detail-time");
+  const timeHintEl = document.getElementById("audit-detail-time-hint");
+  const orgEl = document.getElementById("audit-detail-org");
+
+  if (titleEl) titleEl.textContent = log.action_label || log.event_type || "Audit Event Details";
+  if (resultBadge) {
+    const isSuccess = log.result === "SUCCESS" || !log.result;
+    resultBadge.textContent = log.result || "SUCCESS";
+    resultBadge.className = `badge badge-${isSuccess ? 'active' : 'inactive'}`;
+  }
+  if (summaryBanner) summaryBanner.textContent = log.summary || "No description provided.";
+  if (actorNameEl) actorNameEl.textContent = log.actor_name || "System";
+  if (actorEmailEl) actorEmailEl.textContent = log.actor_email || "-";
+  if (actorRoleEl) {
+    actorRoleEl.innerHTML = `<span class="badge badge-secondary" style="font-size: 0.68rem;">${escapeHtml(log.actor_role_label || "Administrator")}</span>`;
+  }
+  if (targetNameEl) targetNameEl.textContent = log.target_name || "-";
+  if (targetTypeEl) targetTypeEl.textContent = `Type: ${log.target_type || "System"}`;
+  if (timeEl) timeEl.textContent = log.timestamp ? new Date(log.timestamp).toLocaleString() : "-";
+  if (timeHintEl) timeHintEl.textContent = formatRelativeTime(log.timestamp);
+  if (orgEl) orgEl.textContent = log.organization_name || "Organization Workspace";
+
+  // Diff rendering
+  const diffContainer = document.getElementById("audit-detail-diff-container");
+  const diffList = document.getElementById("audit-detail-diff-list");
+  if (diffContainer && diffList) {
+    const diffObj = log.diff || {};
+    const diffKeys = Object.keys(diffObj);
+    if (diffKeys.length > 0) {
+      diffContainer.style.display = "block";
+      diffList.innerHTML = diffKeys.map(k => {
+        const item = diffObj[k];
+        let beforeVal = "-";
+        let afterVal = "-";
+        if (typeof item === "object" && item !== null) {
+          beforeVal = JSON.stringify(item.before ?? item.old ?? "-");
+          afterVal = JSON.stringify(item.after ?? item.new ?? "-");
+        } else {
+          afterVal = String(item);
+        }
+        return `
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: 0.8rem;">
+            <strong style="color: var(--text-primary); text-transform: capitalize;">${escapeHtml(k.replace(/_/g, " "))}:</strong>
+            <div>
+              <span style="color: #f87171; text-decoration: line-through; margin-right: 8px;">${escapeHtml(beforeVal)}</span>
+              <span style="color: var(--text-muted);">&rarr;</span>
+              <span style="color: #4ade80; margin-left: 8px; font-weight: 600;">${escapeHtml(afterVal)}</span>
+            </div>
+          </div>
+        `;
+      }).join("");
+    } else {
+      diffContainer.style.display = "none";
+    }
+  }
+
+  // Extra details rendering (sanitized, excluding secrets)
+  const extraContainer = document.getElementById("audit-detail-extra-container");
+  const extraList = document.getElementById("audit-detail-extra-list");
+  if (extraContainer && extraList) {
+    const details = log.details || {};
+    const keys = Object.keys(details).filter(k => !k.toLowerCase().includes("password") && !k.toLowerCase().includes("secret") && !k.toLowerCase().includes("token") && !k.toLowerCase().includes("hash"));
+    if (keys.length > 0) {
+      extraContainer.style.display = "block";
+      extraList.innerHTML = keys.map(k => {
+        const v = details[k];
+        const valStr = typeof v === "object" ? JSON.stringify(v) : String(v);
+        return `<div style="margin-bottom: 4px;"><strong style="color: var(--text-primary);">${escapeHtml(k)}:</strong> <span style="color: var(--accent-cyan);">${escapeHtml(valStr)}</span></div>`;
+      }).join("");
+    } else {
+      extraContainer.style.display = "none";
+    }
+  }
+
+  openModal("modal-audit-details");
 }
 
 // ----------------------------------------------------
@@ -2655,21 +3321,7 @@ async function openCreateUserModal() {
   document.getElementById("form-create-user")?.reset();
   const empCodeInput = document.getElementById("new-user-employee-code");
   if (empCodeInput) empCodeInput.value = "";
-  generateRandomUserPassword();
   openModal("modal-create-user");
-}
-
-function generateRandomUserPassword() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%&*";
-  let pwd = "";
-  for (let i = 0; i < 16; i++) {
-    pwd += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  const pwdInput = document.getElementById("new-user-password");
-  if (pwdInput) {
-    pwdInput.value = pwd;
-    pwdInput.type = "text";
-  }
 }
 
 function setupCreateUserForm() {
@@ -2685,19 +3337,33 @@ function setupCreateUserForm() {
       return;
     }
 
+    const dept = document.getElementById("new-user-department")?.value.trim() || "";
+    const phone = document.getElementById("new-user-phone")?.value.trim() || "";
+    if (!dept) {
+      showToast("Department is required", "warning");
+      document.getElementById("new-user-department")?.focus();
+      return;
+    }
+    if (!phone) {
+      showToast("Phone number is required", "warning");
+      document.getElementById("new-user-phone")?.focus();
+      return;
+    }
+
     const payload = {
       name: document.getElementById("new-user-name").value.trim(),
       email: document.getElementById("new-user-email").value.trim().toLowerCase(),
       employee_code: employeeCode,
-      password: document.getElementById("new-user-password").value,
       role_ids: selRole ? [selRole] : [],
       role_assignments: selRole ? [{ role_id: selRole, application_id: appScope }] : []
     };
+    payload.department = dept;
+    payload.phone = phone;
 
     try {
       const res = await ApiClient.createUser(payload);
       if (res.success) {
-        showToast("Employee added successfully!", "success");
+        showToast("Employee added. They must activate through their email.", "success");
         closeModal("modal-create-user");
         document.getElementById("form-create-user").reset();
         loadOrgUsers();
@@ -2708,6 +3374,19 @@ function setupCreateUserForm() {
       showToast(err.message, "danger");
     }
   });
+}
+
+async function handleResendActivationOtp(userId, userName) {
+  try {
+    const result = await ApiClient.resendActivationOtp(userId);
+    if (result.success) {
+      showToast(`Activation code queued for ${userName}.`, "success");
+    } else {
+      showToast(result.message || "Could not resend the activation code.", "danger");
+    }
+  } catch (error) {
+    showToast(error.message || "Could not resend the activation code.", "danger");
+  }
 }
 
 async function handleToggleUserStatus(userId, userName, currentActive) {
@@ -2760,6 +3439,8 @@ async function handleOpenAssignRoles(userId) {
     document.getElementById("assign-role-user-id").value = u.user_id;
     document.getElementById("assign-role-user-name").textContent = u.name;
     document.getElementById("assign-role-user-email").textContent = u.email;
+    if (document.getElementById("edit-user-department")) document.getElementById("edit-user-department").value = u.department || "";
+    if (document.getElementById("edit-user-phone")) document.getElementById("edit-user-phone").value = u.phone || "";
 
     _currentRoleAssignments = (u.role_assignments && u.role_assignments.length > 0)
       ? JSON.parse(JSON.stringify(u.role_assignments))
@@ -2847,7 +3528,24 @@ async function saveRoleAssignments() {
   if (!userId) return;
 
   try {
-    const res = await ApiClient.assignUserRoles(userId, { role_assignments: _currentRoleAssignments });
+    const dept = document.getElementById("edit-user-department")?.value.trim() || "";
+    const phone = document.getElementById("edit-user-phone")?.value.trim() || "";
+    if (!dept) {
+      showToast("Department is required", "warning");
+      document.getElementById("edit-user-department")?.focus();
+      return;
+    }
+    if (!phone) {
+      showToast("Phone number is required", "warning");
+      document.getElementById("edit-user-phone")?.focus();
+      return;
+    }
+    const payload = {
+      role_assignments: _currentRoleAssignments,
+      department: dept,
+      phone: phone
+    };
+    const res = await ApiClient.assignUserRoles(userId, payload);
     if (res.success) {
       showToast("Role assignments saved successfully!", "success");
       closeModal("modal-assign-role");
@@ -2875,7 +3573,18 @@ async function handleViewUserDetails(userId) {
     const u = res.data;
     document.getElementById("detail-user-name").textContent = u.name;
     document.getElementById("detail-user-email").textContent = u.email;
-    document.getElementById("detail-user-id").textContent = `ID: ${u.user_id}`;
+    if (document.getElementById("detail-user-emp-code")) {
+      document.getElementById("detail-user-emp-code").textContent = u.employee_code || "No ID";
+    }
+    if (document.getElementById("detail-user-department")) {
+      document.getElementById("detail-user-department").textContent = u.department || "Not provided";
+    }
+    if (document.getElementById("detail-user-phone")) {
+      document.getElementById("detail-user-phone").textContent = u.phone || "Not provided";
+    }
+    if (document.getElementById("detail-user-id")) {
+      document.getElementById("detail-user-id").textContent = "";
+    }
     document.getElementById("detail-user-created").textContent = `Created: ${u.created_at ? new Date(u.created_at).toLocaleDateString() : "-"}`;
 
     const badge = document.getElementById("detail-user-status-badge");
@@ -3034,7 +3743,7 @@ function toggleCategoryPermissions(cat, selectAll) {
 function setupCreateRoleForm() {
   document.getElementById("form-create-role")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const name = document.getElementById("new-role-name").value.trim().toUpperCase().replace(/\s+/g, "_");
+    const name = document.getElementById("new-role-name").value.trim().replace(/\s+/g, " ");
     const description = document.getElementById("new-role-desc")?.value?.trim() || "";
     const appScope = document.getElementById("new-role-app-scope")?.value || null;
 
@@ -3112,7 +3821,7 @@ async function handleViewRoleDetails(roleId) {
         membersList.innerHTML = '<span class="subtitle" style="font-size: 0.8rem;">No active employees currently assigned to this role</span>';
       } else {
         membersList.innerHTML = employees.map(emp => `
-          <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border-color);">
             <div>
               <strong style="color: var(--text-primary); font-size: 0.85rem;">${escapeHtml(emp.name)}</strong>
               <span style="font-size: 0.75rem; color: var(--text-secondary); margin-left: 8px;">${escapeHtml(emp.email)}</span>
@@ -3541,7 +4250,6 @@ async function loadOrgApplications() {
               <strong>${escapeHtml(app.name)}</strong>
               ${app.description ? `<div class="subtitle" style="font-size: 0.75rem;">${escapeHtml(app.description)}</div>` : ""}
             </td>
-            <td><code>${escapeHtml(app.application_id)}</code></td>
             <td><span class="badge ${envClass}">${(app.environment || "all").toUpperCase()}</span></td>
             <td><span class="badge ${statusClass}">${app.status || "ACTIVE"}</span></td>
             <td>${createdDate}</td>
@@ -3609,7 +4317,7 @@ async function viewAppDetails(appId) {
   }
 
   document.getElementById("app-details-title").textContent = app.name || "Connected Application Details";
-  document.getElementById("app-details-id").textContent = app.application_id || "-";
+  if (document.getElementById("app-details-id")) document.getElementById("app-details-id").textContent = "";
   document.getElementById("app-details-description").textContent = app.description || "No description provided.";
   document.getElementById("app-details-created").textContent = app.created_at ? new Date(app.created_at).toLocaleString() : "-";
   
@@ -4022,29 +4730,490 @@ async function viewPayloadDetails(payloadId) {
   }
 }
 
-// 5. Organization Settings Operations
+// 5. Organization Settings Operations (Phase 5 Task 5.3)
 async function loadOrgSettings() {
   try {
     const res = await ApiClient.getCurrentOrganization();
     if (res.success && res.data) {
       const org = res.data;
       currentOrgProfile = org;
-      document.getElementById("settings-org-name").textContent = org.name || "-";
-      document.getElementById("settings-org-slug").textContent = org.slug || "-";
-      document.getElementById("settings-org-id").textContent = org.organization_id || "-";
-      document.getElementById("settings-org-status").textContent = org.status || "ACTIVE";
-      document.getElementById("settings-org-status").className = `badge badge-${(org.status || "active").toLowerCase()}`;
-      document.getElementById("settings-org-created").textContent = org.created_at ? new Date(org.created_at).toLocaleDateString() : "Active";
+      const nameEl = document.getElementById("settings-org-name");
+      const slugEl = document.getElementById("settings-org-slug");
+      const idEl = document.getElementById("settings-org-id");
+      const statusEl = document.getElementById("settings-org-status");
+      const createdEl = document.getElementById("settings-org-created");
+
+      if (nameEl) nameEl.textContent = org.name || "-";
+      if (slugEl) slugEl.textContent = org.slug || "-";
+      if (idEl) idEl.textContent = org.organization_id || "-";
+      if (statusEl) {
+        statusEl.textContent = org.status || "ACTIVE";
+        statusEl.className = `badge badge-${(org.status || "active").toLowerCase()}`;
+      }
+      if (createdEl) createdEl.textContent = org.created_at ? new Date(org.created_at).toLocaleDateString() : "Active";
     }
   } catch {
     const account = ApiClient.getStoredAccount();
     if (account) {
-      document.getElementById("settings-org-name").textContent = "Organization Workspace";
-      document.getElementById("settings-org-slug").textContent = account.organization_id || "-";
-      document.getElementById("settings-org-id").textContent = account.organization_id || "-";
+      const nameEl = document.getElementById("settings-org-name");
+      const slugEl = document.getElementById("settings-org-slug");
+      const idEl = document.getElementById("settings-org-id");
+      if (nameEl) nameEl.textContent = "Organization Workspace";
+      if (slugEl) slugEl.textContent = account.organization_id || "-";
+      if (idEl) idEl.textContent = account.organization_id || "-";
     }
   }
+
+  // Populate Admin Self-Profile form with current user info
+  const storedAccount = ApiClient.getStoredAccount();
+  if (storedAccount) {
+    const selfName = document.getElementById("self-profile-name");
+    const selfEmail = document.getElementById("self-profile-email");
+    if (selfName && !selfName.value) selfName.value = storedAccount.name || "";
+    if (selfEmail && !selfEmail.value) selfEmail.value = storedAccount.email || "";
+  }
+
+  // Load identity change requests history
+  await loadOrgChangeRequests();
 }
+
+async function loadOrgChangeRequests() {
+  const tbody = document.getElementById("org-cr-table")?.querySelector("tbody");
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading change requests...</td></tr>';
+
+  try {
+    const res = await ApiClient.listOrgChangeRequests();
+    if (res.success && res.data) {
+      const requests = res.data;
+      const pendingReq = requests.find((r) => r.status === "PENDING");
+
+      const indicator = document.getElementById("cr-pending-indicator");
+      const banner = document.getElementById("cr-pending-banner");
+      const submitBtn = document.getElementById("btn-submit-cr");
+      const reqNameInput = document.getElementById("cr-req-name");
+      const reqSlugInput = document.getElementById("cr-req-slug");
+      const reqReasonInput = document.getElementById("cr-req-reason");
+
+      if (pendingReq) {
+        if (indicator) indicator.style.display = "inline-flex";
+        if (banner) banner.style.display = "block";
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.title = "A change request is already pending review";
+        }
+        if (reqNameInput) reqNameInput.disabled = true;
+        if (reqSlugInput) reqSlugInput.disabled = true;
+        if (reqReasonInput) reqReasonInput.disabled = true;
+      } else {
+        if (indicator) indicator.style.display = "none";
+        if (banner) banner.style.display = "none";
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.title = "";
+        }
+        if (reqNameInput) reqNameInput.disabled = false;
+        if (reqSlugInput) reqSlugInput.disabled = false;
+        if (reqReasonInput) reqReasonInput.disabled = false;
+      }
+
+      if (requests.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">No change requests recorded yet.</td></tr>';
+      } else {
+        tbody.innerHTML = requests
+          .map((cr) => {
+            let statusBadge = `<span class="badge badge-warning">${escapeHtml(cr.status)}</span>`;
+            if (cr.status === "APPROVED") statusBadge = `<span class="badge badge-active">APPROVED</span>`;
+            else if (cr.status === "REJECTED") statusBadge = `<span class="badge badge-inactive">REJECTED</span>`;
+            else if (cr.status === "CANCELLED") statusBadge = `<span class="badge badge-secondary">CANCELLED</span>`;
+
+            const submittedAt = cr.created_at ? new Date(cr.created_at).toLocaleString() : "-";
+            let resolution = "-";
+            if (cr.status === "APPROVED") {
+              resolution = `<div style="font-size: 0.75rem; color: #4ade80;">Approved on ${cr.reviewed_at ? new Date(cr.reviewed_at).toLocaleDateString() : ""}</div>`;
+            } else if (cr.status === "REJECTED") {
+              resolution = `<div style="font-size: 0.75rem; color: #f87171;" title="${escapeHtml(cr.rejection_reason || "")}">Rejected: ${escapeHtml(cr.rejection_reason || "No reason")}</div>`;
+            }
+
+            let actionBtn = "-";
+            if (cr.status === "PENDING") {
+              actionBtn = `<button class="btn btn-secondary btn-sm" onclick="handleCancelChangeRequest('${cr.request_id}')">Cancel</button>`;
+            }
+
+            return `
+              <tr>
+                <td><strong>${escapeHtml(cr.requested_name || "-")}</strong></td>
+                <td><code>${escapeHtml(cr.requested_slug || "-")}</code></td>
+                <td style="max-width: 200px; white-space: normal; font-size: 0.8rem;">${escapeHtml(cr.reason || "-")}</td>
+                <td>${statusBadge}</td>
+                <td style="font-size: 0.75rem;">${submittedAt}</td>
+                <td>${resolution}</td>
+                <td style="text-align: right;">${actionBtn}</td>
+              </tr>
+            `;
+          })
+          .join("");
+      }
+    } else {
+      tbody.innerHTML = `<tr><td colspan="7" class="loading-cell error">${res.message || "Failed to load requests"}</td></tr>`;
+    }
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="7" class="loading-cell error">${err.message}</td></tr>`;
+  }
+}
+
+async function handleSaveAdminProfile(event) {
+  event.preventDefault();
+  const name = document.getElementById("self-profile-name").value.trim();
+  const email = document.getElementById("self-profile-email").value.trim();
+  const currentPassword = document.getElementById("self-profile-current-pwd").value;
+  const newPassword = document.getElementById("self-profile-new-pwd").value;
+
+  const btn = document.getElementById("btn-save-self-profile");
+  if (btn) btn.disabled = true;
+
+  try {
+    const payload = { name, email };
+    if (currentPassword) payload.current_password = currentPassword;
+    if (newPassword) payload.new_password = newPassword;
+
+    const res = await ApiClient.updateMyProfile(payload);
+    if (res.success) {
+      showToast("Profile updated successfully!", "success");
+      // Clear password fields
+      const curPwdEl = document.getElementById("self-profile-current-pwd");
+      const newPwdEl = document.getElementById("self-profile-new-pwd");
+      if (curPwdEl) curPwdEl.value = "";
+      if (newPwdEl) newPwdEl.value = "";
+
+      // If tokens returned (e.g. password changed and new tokens issued)
+      if (res.data && res.data.access_token) {
+        ApiClient.setTokens(res.data.access_token, res.data.refresh_token);
+      }
+
+      // Update stored account
+      const currentAccount = ApiClient.getStoredAccount();
+      if (currentAccount && res.data?.user) {
+        currentAccount.name = res.data.user.name;
+        currentAccount.email = res.data.user.email;
+        ApiClient.setStoredAccount(currentAccount);
+      }
+      await loadDashboardContext();
+    } else {
+      showToast(res.message || "Failed to update profile", "danger");
+    }
+  } catch (err) {
+    showToast(err.message || "Error updating profile", "danger");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function handleSubmitChangeRequest(event) {
+  event.preventDefault();
+  const requestedName = document.getElementById("cr-req-name").value.trim();
+  const requestedSlug = document.getElementById("cr-req-slug").value.trim();
+  const reason = document.getElementById("cr-req-reason").value.trim();
+
+  if (!requestedName && !requestedSlug) {
+    showToast("Please provide either a requested name or requested slug", "warning");
+    return;
+  }
+  if (!reason) {
+    showToast("Business justification reason is required", "warning");
+    return;
+  }
+
+  const btn = document.getElementById("btn-submit-cr");
+  if (btn) btn.disabled = true;
+
+  try {
+    const payload = {
+      requested_name: requestedName || undefined,
+      requested_slug: requestedSlug || undefined,
+      reason
+    };
+    const res = await ApiClient.submitChangeRequest(payload);
+    if (res.success) {
+      showToast("Organization change request submitted for review!", "success");
+      document.getElementById("form-submit-change-request").reset();
+      await loadOrgChangeRequests();
+    } else {
+      showToast(res.message || "Failed to submit change request", "danger");
+    }
+  } catch (err) {
+    showToast(err.message || "Error submitting change request", "danger");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function handleCancelChangeRequest(requestId) {
+  if (!confirm("Are you sure you want to cancel this pending change request?")) return;
+  try {
+    const res = await ApiClient.cancelChangeRequest(requestId);
+    if (res.success) {
+      showToast("Change request cancelled", "success");
+      await loadOrgChangeRequests();
+    } else {
+      showToast(res.message || "Failed to cancel change request", "danger");
+    }
+  } catch (err) {
+    showToast(err.message || "Error cancelling change request", "danger");
+  }
+}
+
+// ----------------------------------------------------
+// PLATFORM CHANGE REQUESTS OPERATIONS (Phase 5 Task 5.3)
+// ----------------------------------------------------
+let platformCrCurrentPage = 1;
+let platformCrLimit = 20;
+let platformCrStatus = "PENDING";
+let platformCrSearch = "";
+let platformCrDebounceTimer = null;
+let currentRejectRequestId = null;
+
+async function loadPlatformChangeRequests(page = platformCrCurrentPage) {
+  platformCrCurrentPage = page;
+  const tbody = document.getElementById("platform-cr-table-body");
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading change requests...</td></tr>';
+
+  try {
+    const filters = {
+      status: platformCrStatus,
+      search: platformCrSearch
+    };
+    const res = await ApiClient.listPlatformChangeRequests(page, platformCrLimit, filters);
+    if (res.success && res.data) {
+      const items = res.data;
+      if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">No change requests found.</td></tr>';
+      } else {
+        tbody.innerHTML = items
+          .map((cr) => {
+            let statusBadge = `<span class="badge badge-warning">${escapeHtml(cr.status)}</span>`;
+            if (cr.status === "APPROVED") statusBadge = `<span class="badge badge-active">APPROVED</span>`;
+            else if (cr.status === "REJECTED") statusBadge = `<span class="badge badge-inactive">REJECTED</span>`;
+            else if (cr.status === "CANCELLED") statusBadge = `<span class="badge badge-secondary">CANCELLED</span>`;
+
+            const submittedAt = cr.created_at ? new Date(cr.created_at).toLocaleDateString() : "-";
+
+            let requestedChanges = [];
+            if (cr.requested_name) requestedChanges.push(`<div>Name: <strong>${escapeHtml(cr.requested_name)}</strong></div>`);
+            if (cr.requested_slug) requestedChanges.push(`<div>Slug: <code>${escapeHtml(cr.requested_slug)}</code></div>`);
+            const requestedHtml = requestedChanges.length > 0 ? requestedChanges.join("") : "<em>No identity changes</em>";
+
+            let actionsHtml = "-";
+            if (cr.status === "PENDING") {
+              actionsHtml = `
+                <div style="display: inline-flex; gap: 6px; justify-content: flex-end;">
+                  <button class="btn btn-primary btn-sm" onclick="handleApproveChangeRequest('${cr.request_id}', '${escapeHtml(cr.organization_name || "Organization")}')">Approve</button>
+                  <button class="btn btn-danger btn-sm" onclick="openRejectChangeRequestModal('${cr.request_id}', '${escapeHtml(cr.organization_name || "Organization")}')">Reject</button>
+                </div>
+              `;
+            } else if (cr.status === "APPROVED") {
+              actionsHtml = `<span style="font-size: 0.75rem; color: #4ade80;">Approved</span>`;
+            } else if (cr.status === "REJECTED") {
+              actionsHtml = `<span style="font-size: 0.75rem; color: #f87171;" title="${escapeHtml(cr.rejection_reason || "")}">Rejected</span>`;
+            }
+
+            return `
+              <tr>
+                <td>
+                  <div style="font-weight: 600; color: var(--text-primary);">${escapeHtml(cr.organization_name || "-")}</div>
+                  <div style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(cr.requester_name || "-")} (${escapeHtml(cr.requester_email || "-")})</div>
+                </td>
+                <td>
+                  <div>${escapeHtml(cr.current_name || "-")}</div>
+                  <div style="font-family: var(--font-mono); font-size: 0.75rem; color: #38bdf8;">${escapeHtml(cr.current_slug || "-")}</div>
+                </td>
+                <td>${requestedHtml}</td>
+                <td style="max-width: 220px; white-space: normal; font-size: 0.8rem;">${escapeHtml(cr.reason || "-")}</td>
+                <td>${statusBadge}</td>
+                <td style="font-size: 0.75rem;">${submittedAt}</td>
+                <td style="text-align: right;">${actionsHtml}</td>
+              </tr>
+            `;
+          })
+          .join("");
+      }
+
+      // Pagination
+      const pagination = res.pagination || { total: res.total_count || 0, page: 1, limit: platformCrLimit, total_pages: 1 };
+      const total = pagination.total || 0;
+      const totalPages = pagination.total_pages || 1;
+      const start = total === 0 ? 0 : (page - 1) * platformCrLimit + 1;
+      const end = Math.min(page * platformCrLimit, total);
+
+      const pagBar = document.getElementById("platform-cr-pagination");
+      const infoEl = document.getElementById("platform-cr-pagination-info");
+      const indicatorEl = document.getElementById("platform-cr-page-indicator");
+      const prevBtn = document.getElementById("platform-cr-prev-btn");
+      const nextBtn = document.getElementById("platform-cr-next-btn");
+
+      if (pagBar) pagBar.style.display = total > 0 ? "flex" : "none";
+      if (infoEl) infoEl.textContent = `Showing ${start} - ${end} of ${total} requests`;
+      if (indicatorEl) indicatorEl.textContent = `Page ${page} of ${totalPages}`;
+      if (prevBtn) prevBtn.disabled = page <= 1;
+      if (nextBtn) nextBtn.disabled = page >= totalPages;
+    } else {
+      tbody.innerHTML = `<tr><td colspan="7" class="loading-cell error">${res.message || "Failed to load change requests"}</td></tr>`;
+    }
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="7" class="loading-cell error">${err.message}</td></tr>`;
+  }
+}
+
+function debounceFilterPlatformChangeRequests() {
+  clearTimeout(platformCrDebounceTimer);
+  platformCrDebounceTimer = setTimeout(() => {
+    const input = document.getElementById("platform-cr-search");
+    platformCrSearch = input ? input.value.trim() : "";
+    loadPlatformChangeRequests(1);
+  }, 250);
+}
+
+function handlePlatformCrStatusChange(val) {
+  platformCrStatus = val;
+  loadPlatformChangeRequests(1);
+}
+
+function handlePlatformCrPrevPage() {
+  if (platformCrCurrentPage > 1) {
+    loadPlatformChangeRequests(platformCrCurrentPage - 1);
+  }
+}
+
+function handlePlatformCrNextPage() {
+  loadPlatformChangeRequests(platformCrCurrentPage + 1);
+}
+
+async function handleApproveChangeRequest(requestId, orgName) {
+  if (!confirm(`Are you sure you want to APPROVE the change request for "${orgName}"? This will immediately rebrand the organization and update its slug.`)) return;
+
+  try {
+    const res = await ApiClient.approveChangeRequest(requestId);
+    if (res.success) {
+      showToast(`Change request for "${orgName}" approved successfully!`, "success");
+      loadPlatformChangeRequests();
+    } else {
+      showToast(res.message || "Failed to approve change request", "danger");
+    }
+  } catch (err) {
+    showToast(err.message || "Error approving change request", "danger");
+  }
+}
+
+function openRejectChangeRequestModal(requestId, orgName) {
+  currentRejectRequestId = requestId;
+  const nameEl = document.getElementById("reject-cr-org-name");
+  if (nameEl) nameEl.textContent = orgName;
+  const reasonEl = document.getElementById("reject-cr-reason");
+  if (reasonEl) reasonEl.value = "";
+  openModal("modal-reject-change-request");
+}
+
+async function executeRejectChangeRequest() {
+  const reasonEl = document.getElementById("reject-cr-reason");
+  const reason = reasonEl ? reasonEl.value.trim() : "";
+  if (!reason) {
+    showToast("Rejection reason is required", "warning");
+    return;
+  }
+
+  const btn = document.getElementById("btn-confirm-reject-cr");
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await ApiClient.rejectChangeRequest(currentRejectRequestId, reason);
+    if (res.success) {
+      showToast("Change request rejected", "success");
+      closeModal("modal-reject-change-request");
+      loadPlatformChangeRequests();
+    } else {
+      showToast(res.message || "Failed to reject change request", "danger");
+    }
+  } catch (err) {
+    showToast(err.message || "Error rejecting change request", "danger");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ----------------------------------------------------
+// PLATFORM ORGANIZATION DELETION (Phase 5 Task 5.3)
+// ----------------------------------------------------
+let currentDeleteOrgId = null;
+let currentDeleteOrgSlug = null;
+
+async function openDeleteOrgModal(orgId, name, slug) {
+  currentDeleteOrgId = orgId;
+  currentDeleteOrgSlug = slug;
+
+  document.getElementById("delete-org-target-name").textContent = name;
+  document.getElementById("delete-org-target-slug").textContent = slug;
+  document.getElementById("delete-org-match-slug").textContent = slug;
+  document.getElementById("delete-org-slug-input").value = "";
+  document.getElementById("btn-confirm-delete-org").disabled = true;
+
+  document.getElementById("delete-org-user-count").textContent = "...";
+  document.getElementById("delete-org-app-count").textContent = "...";
+  document.getElementById("delete-org-msg-count").textContent = "...";
+
+  openModal("modal-delete-org");
+
+  try {
+    const res = await ApiClient.getOrgDeletionSummary(orgId);
+    if (res.success && res.data) {
+      document.getElementById("delete-org-user-count").textContent = res.data.users_count !== undefined ? res.data.users_count : 0;
+      document.getElementById("delete-org-app-count").textContent = res.data.applications_count !== undefined ? res.data.applications_count : 0;
+      document.getElementById("delete-org-msg-count").textContent = res.data.messages_count !== undefined ? res.data.messages_count : 0;
+    }
+  } catch (err) {
+    console.error("Failed to load org deletion summary", err);
+  }
+}
+
+function checkDeleteOrgSlugMatch() {
+  const inputVal = document.getElementById("delete-org-slug-input")?.value?.trim();
+  const btn = document.getElementById("btn-confirm-delete-org");
+  if (btn) {
+    btn.disabled = inputVal !== currentDeleteOrgSlug;
+  }
+}
+
+async function executeDeleteOrganization() {
+  const inputVal = document.getElementById("delete-org-slug-input")?.value?.trim();
+  if (inputVal !== currentDeleteOrgSlug) {
+    showToast("Typed slug does not match the organization slug", "warning");
+    return;
+  }
+
+  const btn = document.getElementById("btn-confirm-delete-org");
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await ApiClient.deleteOrganization(currentDeleteOrgId, inputVal);
+    if (res.success) {
+      showToast("Organization deleted (soft-deleted and cascaded) successfully!", "success");
+      closeModal("modal-delete-org");
+      await loadOrganizations();
+    } else {
+      showToast(res.message || "Failed to delete organization", "danger");
+      if (btn) btn.disabled = false;
+    }
+  } catch (err) {
+    showToast(err.message || "Error deleting organization", "danger");
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Global listener for 401/403 permission denied to re-fetch context
+window.addEventListener("sx_permission_denied", async (e) => {
+  console.warn("Received 401/403 permission denied event. Refreshing dashboard context.");
+  await loadDashboardContext();
+});
 
 // 6. User Deactivation Handler
 function handleDeactivateUser(userId, userName) {

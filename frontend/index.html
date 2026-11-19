@@ -1,9 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SenderX - Multi-Tenant Messaging Platform</title>
+  <script>
+    (function() {
+      try {
+        var saved = localStorage.getItem("senderx_theme") || "light";
+        document.documentElement.setAttribute("data-theme", saved);
+      } catch(e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="css/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,7 +25,25 @@
   <div id="toast-container" class="toast-container"></div>
 
   <!-- AUTH VIEW -->
-  <div id="auth-view" class="view active">
+  <div id="auth-view" class="view active" style="position: relative;">
+    <div style="position: absolute; top: 20px; right: 20px; z-index: 10;">
+      <button class="icon-btn" id="btn-auth-theme-toggle" title="Toggle Light/Dark Theme" aria-label="Toggle theme" onclick="toggleTheme()">
+        <svg class="theme-icon-sun-alt" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+        <svg class="theme-icon-moon-alt" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </button>
+    </div>
     <div class="auth-card">
       <div class="auth-brand">
         <div class="brand-logo">SX</div>
@@ -37,6 +63,67 @@
         <button type="submit" class="btn btn-primary btn-block" id="btn-login">Sign In</button>
       </form>
       <div id="login-error" class="error-msg"></div>
+      <div id="auth-login-links" class="auth-login-links">
+        <button type="button" class="auth-link" id="link-forgot-password">Forgot password?</button>
+        <button type="button" class="auth-link" id="link-activate-account">Activate account</button>
+      </div>
+      <section id="auth-otp-flow" class="auth-otp-flow" hidden aria-live="polite">
+        <h2 id="otp-flow-title"></h2>
+        <p id="otp-flow-description" class="subtitle"></p>
+
+        <form id="otp-email-form">
+          <div class="form-group">
+            <label for="otp-email">Email Address</label>
+            <input type="email" id="otp-email" required autocomplete="email" />
+          </div>
+          <div id="otp-email-error" class="error-msg"></div>
+          <button type="submit" class="btn btn-primary btn-block" id="btn-request-otp">Send code</button>
+        </form>
+
+        <form id="otp-code-form" hidden>
+          <p class="otp-email-caption">Code sent to <strong id="otp-email-caption"></strong></p>
+          <div class="otp-inputs" role="group" aria-label="Six-digit verification code">
+            <input class="otp-digit" aria-label="Digit 1" inputmode="numeric" autocomplete="one-time-code" maxlength="1" />
+            <input class="otp-digit" aria-label="Digit 2" inputmode="numeric" maxlength="1" />
+            <input class="otp-digit" aria-label="Digit 3" inputmode="numeric" maxlength="1" />
+            <input class="otp-digit" aria-label="Digit 4" inputmode="numeric" maxlength="1" />
+            <input class="otp-digit" aria-label="Digit 5" inputmode="numeric" maxlength="1" />
+            <input class="otp-digit" aria-label="Digit 6" inputmode="numeric" maxlength="1" />
+          </div>
+          <div id="otp-code-error" class="error-msg"></div>
+          <p id="otp-expiry-countdown" class="otp-countdown"></p>
+          <div class="otp-actions">
+            <button type="button" class="auth-link" id="btn-resend-otp" disabled>Resend code</button>
+            <span id="otp-resend-countdown" class="subtitle"></span>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">Verify code</button>
+        </form>
+
+        <form id="otp-password-form" hidden>
+          <div class="form-group">
+            <label for="otp-new-password">New Password</label>
+            <div class="password-input-wrap">
+              <input type="password" id="otp-new-password" required autocomplete="new-password" />
+              <button type="button" class="auth-link" id="btn-toggle-otp-password" aria-label="Show password">Show</button>
+            </div>
+          </div>
+          <ul id="otp-password-rules" class="password-rules" aria-live="polite">
+            <li data-rule="length">At least 8 characters</li>
+            <li data-rule="upper">An uppercase letter</li>
+            <li data-rule="lower">A lowercase letter</li>
+            <li data-rule="digit">A number</li>
+            <li data-rule="special">A special character</li>
+          </ul>
+          <div id="otp-password-error" class="error-msg"></div>
+          <button type="submit" class="btn btn-primary btn-block" id="btn-set-otp-password">Set password</button>
+        </form>
+
+        <div id="otp-success" class="otp-success" hidden>
+          <p id="otp-success-message"></p>
+          <button type="button" class="btn btn-primary btn-block" id="btn-otp-back-to-login">Back to sign in</button>
+        </div>
+        <button type="button" class="auth-link auth-back-link" id="btn-cancel-otp-flow">Back to sign in</button>
+      </section>
     </div>
   </div>
 
@@ -64,6 +151,10 @@
           <button class="nav-item" data-tab="tab-platform-monitoring">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
             <span>System Health</span>
+          </button>
+          <button class="nav-item" data-tab="tab-platform-change-requests" id="nav-platform-change-requests">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            <span>Change Requests</span>
           </button>
         </div>
 
@@ -172,6 +263,23 @@
             <span class="env-dot"></span>
             <span id="header-env-text">Production</span>
           </div>
+          <!-- Theme Toggle Button (Phase 5: Responsive White Theme) -->
+          <button class="icon-btn" id="btn-theme-toggle" title="Toggle Light/Dark Theme" aria-label="Toggle theme" onclick="toggleTheme()">
+            <svg id="theme-icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+              <circle cx="12" cy="12" r="5"></circle>
+              <line x1="12" y1="1" x2="12" y2="3"></line>
+              <line x1="12" y1="21" x2="12" y2="23"></line>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+              <line x1="1" y1="12" x2="3" y2="12"></line>
+              <line x1="21" y1="12" x2="23" y2="12"></line>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+            <svg id="theme-icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+            </svg>
+          </button>
           <div class="notification-wrapper">
             <button class="icon-btn" id="btn-notifications" title="System Notifications">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -237,6 +345,7 @@
               <option value="ALL">All Statuses</option>
               <option value="ACTIVE">Active Only</option>
               <option value="INACTIVE">Inactive Only</option>
+              <option value="DELETED">Deleted Only</option>
             </select>
             <select id="platform-org-limit-select" class="filter-select" style="min-width: 100px;" onchange="handlePlatformOrgLimitChange(this.value)">
               <option value="10">10 / page</option>
@@ -295,6 +404,59 @@
             <div class="metric-card"><div class="metric-label">Redis</div><div class="metric-value" id="h-redis">-</div></div>
             <div class="metric-card"><div class="metric-label">RabbitMQ</div><div class="metric-value" id="h-rabbitmq">-</div></div>
             <div class="metric-card"><div class="metric-label">Celery Workers</div><div class="metric-value" id="h-celery">-</div></div>
+          </div>
+        </section>
+
+        <!-- Platform Admin Change Requests View -->
+        <section id="tab-platform-change-requests" class="tab-pane">
+          <div class="section-toolbar">
+            <div>
+              <h3>Organization Change Requests</h3>
+              <p class="subtitle" style="margin: 0;">Review, approve, or reject tenant name and slug rebranding requests</p>
+            </div>
+            <button class="btn btn-secondary" onclick="loadPlatformChangeRequests(1)">Refresh</button>
+          </div>
+
+          <div class="filter-toolbar">
+            <div class="filter-search-box">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="platform-cr-search" placeholder="Search requests..." oninput="debounceFilterPlatformChangeRequests()" />
+            </div>
+            <select id="platform-cr-status-filter" class="filter-select" onchange="handlePlatformCrStatusChange(this.value)">
+              <option value="ALL">All Statuses</option>
+              <option value="PENDING" selected>Pending Review</option>
+              <option value="APPROVED">Approved</option>
+              <option value="REJECTED">Rejected</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </div>
+
+          <div class="table-container">
+            <table class="data-table" id="platform-cr-table">
+              <thead>
+                <tr>
+                  <th>Organization & Requester</th>
+                  <th>Current Identity</th>
+                  <th>Requested Changes</th>
+                  <th>Reason</th>
+                  <th>Status</th>
+                  <th>Submitted</th>
+                  <th style="text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="platform-cr-table-body">
+                <tr><td colspan="7" class="loading-cell">Loading change requests...</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="pagination-bar" id="platform-cr-pagination" style="display: none;">
+            <div class="pagination-info" id="platform-cr-pagination-info">Showing 0 of 0 requests</div>
+            <div class="pagination-controls">
+              <button class="btn btn-secondary btn-sm" id="platform-cr-prev-btn" onclick="handlePlatformCrPrevPage()">Previous</button>
+              <span class="page-indicator" id="platform-cr-page-indicator">Page 1 of 1</span>
+              <button class="btn btn-secondary btn-sm" id="platform-cr-next-btn" onclick="handlePlatformCrNextPage()">Next</button>
+            </div>
           </div>
         </section>
 
@@ -524,7 +686,6 @@
               <thead>
                 <tr>
                   <th>Application Name</th>
-                  <th>Application ID</th>
                   <th>Environment</th>
                   <th>Status</th>
                   <th>Created At</th>
@@ -532,7 +693,7 @@
                 </tr>
               </thead>
               <tbody id="apps-table-body">
-                <tr><td colspan="6" class="loading-cell">Loading connected applications...</td></tr>
+                <tr><td colspan="5" class="loading-cell">Loading connected applications...</td></tr>
               </tbody>
             </table>
           </div>
@@ -801,6 +962,7 @@
                 <option value="">All Statuses</option>
                 <option value="ACTIVE">Active Only</option>
                 <option value="INACTIVE">Inactive Only</option>
+                <option value="DELETED">Deleted Only</option>
               </select>
               <select id="users-filter-role" class="filter-select" onchange="filterUsersList()">
                 <option value="">All Roles</option>
@@ -870,21 +1032,56 @@
 
           <!-- 3. SECURITY AUDIT LOGS VIEW -->
           <div id="view-org-audit" style="display: none;">
+            <div class="filter-toolbar" style="margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+              <input type="text" id="audit-search-input" class="search-input" placeholder="Search actor, target, summary..." oninput="handleAuditSearchDebounced()" style="flex: 1; min-width: 200px;" />
+              <select id="audit-filter-action" class="filter-select" onchange="loadOrgAuditLogs(1)">
+                <option value="">All Actions</option>
+                <option value="EMPLOYEE">Employee Events</option>
+                <option value="ROLE">Role Events</option>
+                <option value="ORGANIZATION">Organization Events</option>
+                <option value="APPLICATION">Application Events</option>
+              </select>
+              <select id="audit-filter-result" class="filter-select" onchange="loadOrgAuditLogs(1)">
+                <option value="">All Results</option>
+                <option value="SUCCESS">Success</option>
+                <option value="FAILED">Failed</option>
+              </select>
+              <select id="audit-filter-date" class="filter-select" onchange="loadOrgAuditLogs(1)">
+                <option value="">All Time</option>
+                <option value="today">Today</option>
+                <option value="7d">Last 7 Days</option>
+                <option value="30d">Last 30 Days</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="loadOrgAuditLogs(1)">Refresh</button>
+            </div>
+
             <div class="table-container">
               <table class="data-table" id="audit-table">
                 <thead>
                   <tr>
-                    <th>Timestamp</th>
-                    <th>Event Type</th>
+                    <th>Time</th>
                     <th>Actor</th>
-                    <th>Target ID</th>
-                    <th>Action Details</th>
+                    <th>Action</th>
+                    <th>Target</th>
+                    <th>Summary</th>
+                    <th>Result</th>
+                    <th>Details</th>
                   </tr>
                 </thead>
                 <tbody id="audit-logs-table-body">
-                  <tr><td colspan="5" class="loading-cell">Loading security audit trail...</td></tr>
+                  <tr><td colspan="7" class="loading-cell">Loading security audit trail...</td></tr>
                 </tbody>
               </table>
+            </div>
+
+            <!-- Audit Pagination Controls -->
+            <div id="audit-pagination-bar" class="pagination-bar" style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding: 10px 14px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px;">
+              <span id="audit-pagination-info" style="font-size: 0.8rem; color: var(--text-secondary);">Showing 0-0 of 0</span>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <button class="btn btn-secondary btn-sm" id="audit-prev-btn" onclick="prevAuditPage()">Previous</button>
+                <span id="audit-page-indicator" style="font-size: 0.8rem; color: var(--text-primary); font-weight: 600;">Page 1</span>
+                <button class="btn btn-secondary btn-sm" id="audit-next-btn" onclick="nextAuditPage()">Next</button>
+              </div>
             </div>
 
             <div id="audit-empty-state" class="empty-state" style="display: none;">
@@ -972,6 +1169,98 @@
                   <p class="subtitle" style="font-size: 0.8rem; margin-top: 4px;">
                     Inbound and historical payloads are protected at rest with AES-256 MultiFernet envelope encryption with key-rotation audit support.
                   </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Admin Self-Service Profile Card (Phase 5 Task 5.3) -->
+            <div class="card-panel">
+              <div class="card-panel-header">
+                <span class="card-panel-title">Administrator Account Profile</span>
+                <span class="badge badge-active">SELF-SERVICE</span>
+              </div>
+              <form id="form-admin-self-profile" onsubmit="handleSaveAdminProfile(event)" style="margin-top: 12px; display: flex; flex-direction: column; gap: 12px;">
+                <div class="form-group">
+                  <label>Full Name *</label>
+                  <input type="text" id="self-profile-name" required placeholder="Administrator Full Name" />
+                </div>
+                <div class="form-group">
+                  <label>Email Address *</label>
+                  <input type="email" id="self-profile-email" required placeholder="admin@domain.com" />
+                </div>
+                <div style="background: rgba(0, 0, 0, 0.2); border-radius: 8px; padding: 10px; border: 1px solid var(--border-color);">
+                  <div style="font-size: 0.775rem; color: var(--accent-cyan); font-weight: 600; margin-bottom: 6px;">SECURITY & PASSWORD UPDATE</div>
+                  <div class="form-group" style="margin-bottom: 8px;">
+                    <label style="font-size: 0.75rem;">Current Password (required for email or password updates)</label>
+                    <input type="password" id="self-profile-current-pwd" placeholder="Enter current password..." autocomplete="current-password" />
+                  </div>
+                  <div class="form-group" style="margin-bottom: 0;">
+                    <label style="font-size: 0.75rem;">New Password (min 12 characters, leave blank to keep unchanged)</label>
+                    <input type="password" id="self-profile-new-pwd" placeholder="Enter new strong password..." autocomplete="new-password" />
+                  </div>
+                </div>
+                <div style="font-size: 0.75rem; color: var(--text-muted);">
+                  Note: Organization Name and Slug cannot be changed directly. Submit a change request below.
+                </div>
+                <button type="submit" class="btn btn-primary" id="btn-save-self-profile" style="align-self: flex-start; margin-top: 4px;">Save Profile Changes</button>
+              </form>
+            </div>
+
+            <!-- Organization Change Requests Card (Phase 5 Task 5.3) -->
+            <div class="card-panel" style="grid-column: span 2;">
+              <div class="card-panel-header">
+                <div>
+                  <span class="card-panel-title">Organization Identity Change Requests</span>
+                  <p class="subtitle" style="margin: 2px 0 0 0; font-size: 0.8rem;">Submit requests to rename your organization or update its human-readable domain slug</p>
+                </div>
+                <span class="badge" id="cr-pending-indicator" style="display: none; background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">PENDING REVIEW</span>
+              </div>
+
+              <!-- Pending Alert Banner -->
+              <div id="cr-pending-banner" style="display: none; margin-top: 14px; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 8px; padding: 12px; font-size: 0.85rem; color: #fbbf24;">
+                <strong>Notice:</strong> Your organization has a change request currently pending review by Platform Administration. Only one pending request is permitted at a time. You may cancel it below if you need to submit different modifications.
+              </div>
+
+              <!-- Submission Form -->
+              <form id="form-submit-change-request" onsubmit="handleSubmitChangeRequest(event)" style="margin-top: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px;">
+                <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 12px; font-size: 0.9rem;">Submit New Identity Rebranding Request</div>
+                <div class="form-row">
+                  <div class="form-group col-half">
+                    <label>Requested Organization Name</label>
+                    <input type="text" id="cr-req-name" placeholder="Leave blank to keep unchanged" />
+                  </div>
+                  <div class="form-group col-half">
+                    <label>Requested Slug (lowercase letters, numbers, hyphens)</label>
+                    <input type="text" id="cr-req-slug" placeholder="e.g. acme-global" />
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Business Justification & Reason *</label>
+                  <textarea id="cr-req-reason" rows="2" required placeholder="Explain why this change is required (e.g. rebranding, legal entity name update)..." style="width: 100%; border-radius: 6px; padding: 8px;"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary" id="btn-submit-cr">Submit Change Request</button>
+              </form>
+
+              <!-- Request History Table -->
+              <div style="margin-top: 20px;">
+                <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 8px; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Change Request History</div>
+                <div class="table-container">
+                  <table class="data-table" id="org-cr-table">
+                    <thead>
+                      <tr>
+                        <th>Requested Name</th>
+                        <th>Requested Slug</th>
+                        <th>Reason</th>
+                        <th>Status</th>
+                        <th>Submitted At</th>
+                        <th>Resolution</th>
+                        <th style="text-align: right;">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="org-cr-table-body">
+                      <tr><td colspan="7" class="loading-cell">Loading change request history...</td></tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
@@ -1082,10 +1371,10 @@
               <input type="date" id="msg-filter-start-date" class="filter-select" style="max-width: 140px;" title="Start Date" onchange="handleMessageFilterChange()" />
               <input type="date" id="msg-filter-end-date" class="filter-select" style="max-width: 140px;" title="End Date" onchange="handleMessageFilterChange()" />
               <select id="msg-limit-select" class="filter-select" style="max-width: 90px;" onchange="handleMessageLimitChange()">
-                <option value="10">10 / pg</option>
-                <option value="25">25 / pg</option>
-                <option value="50" selected>50 / pg</option>
-                <option value="100">100 / pg</option>
+                <option value="10">10 / page</option>
+                <option value="25">25 / page</option>
+                <option value="50" selected>50 / page</option>
+                <option value="100">100 / page</option>
               </select>
               <button class="btn btn-secondary btn-sm" id="btn-msg-reset" onclick="resetMessageFilters()" title="Reset Filters">Reset</button>
             </div>
@@ -1175,7 +1464,7 @@
                   </div>
 
                   <!-- Dynamic Template Variables Container -->
-                  <div id="composer-template-vars-box" style="display: none; background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+                  <div id="composer-template-vars-box" style="display: none; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                       <label style="font-size: 0.8rem; font-weight: 600; color: var(--accent-cyan); margin: 0;">Template Variables (Key-Value JSON)</label>
                       <button type="button" class="btn btn-secondary btn-sm" onclick="previewComposerTemplate()">Preview Render</button>
@@ -1374,14 +1663,6 @@
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px;">
           <div>
-            <label style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Organization ID</label>
-            <div style="font-family: var(--font-mono); font-size: 0.825rem; color: var(--text-secondary); margin-top: 2px; word-break: break-all;" id="org-detail-id">-</div>
-          </div>
-          <div>
-            <label style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Employee ID Prefix</label>
-            <div style="font-family: var(--font-mono); font-size: 0.85rem; color: #38bdf8; margin-top: 2px;" id="org-detail-prefix">-</div>
-          </div>
-          <div>
             <label style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Total Employees</label>
             <div style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary); margin-top: 2px;" id="org-detail-users-count">-</div>
           </div>
@@ -1399,9 +1680,8 @@
           </div>
         </div>
       </div>
-      <div class="modal-actions" style="display: flex; justify-content: space-between; align-items: center;">
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; align-items: center;">
         <div id="org-detail-toggle-action"></div>
-        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-org-details')">Close</button>
       </div>
     </div>
   </div>
@@ -1463,13 +1743,17 @@
           <input type="text" id="new-user-employee-code" required placeholder="e.g. EMP-101, ENG-402, or CORP-009" style="text-transform: uppercase; font-family: var(--font-mono);" />
           <span style="font-size: 0.725rem; color: var(--text-muted); margin-top: 3px; display: block;">Required. Custom employee ID unique within your organization.</span>
         </div>
-        <div class="form-group">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <label style="margin: 0;">Password (min 12 chars) *</label>
-            <button type="button" class="btn btn-outline btn-sm" style="padding: 2px 8px; font-size: 0.725rem;" onclick="generateRandomUserPassword()">Generate Strong</button>
+        <div class="form-row">
+          <div class="form-group col-half">
+            <label>Department *</label>
+            <input type="text" id="new-user-department" required placeholder="e.g. Engineering, Sales" />
           </div>
-          <input type="password" id="new-user-password" required placeholder="••••••••••••" />
+          <div class="form-group col-half">
+            <label>Phone Number *</label>
+            <input type="tel" id="new-user-phone" required placeholder="e.g. +1 555-0199" />
+          </div>
         </div>
+        <p class="subtitle" style="margin: 0 0 16px;">The employee will activate their account and set a password using a code sent to their email.</p>
         <div class="form-row">
           <div class="form-group col-half">
             <label>Initial Role *</label>
@@ -1505,6 +1789,17 @@
           <div style="font-weight: 600; color: var(--text-primary); font-size: 1rem;" id="assign-role-user-name">-</div>
           <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px;" id="assign-role-user-email">-</div>
           <input type="hidden" id="assign-role-user-id" />
+        </div>
+
+        <div class="form-row" style="margin-bottom: 14px;">
+          <div class="form-group col-half">
+            <label style="font-size: 0.75rem;">Department *</label>
+            <input type="text" id="edit-user-department" required placeholder="e.g. Engineering, Sales" />
+          </div>
+          <div class="form-group col-half">
+            <label style="font-size: 0.75rem;">Phone Number *</label>
+            <input type="tel" id="edit-user-phone" required placeholder="e.g. +1 555-0199" />
+          </div>
         </div>
 
         <label style="font-size: 0.775rem; text-transform: uppercase; color: var(--text-secondary); font-weight: 600; display: block; margin-bottom: 8px;">Active Role Assignments</label>
@@ -1545,15 +1840,21 @@
         <button class="btn-close" onclick="closeModal('modal-user-details')">&times;</button>
       </div>
       <div>
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding: 14px; background: rgba(255, 255, 255, 0.03); border-radius: 8px; border: 1px solid var(--border-color);">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; padding: 14px; background: rgba(255, 255, 255, 0.03); border-radius: 8px; border: 1px solid var(--border-color);">
           <div>
-            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);" id="detail-user-name">-</div>
+            <div style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary);" id="detail-user-name">-</div>
             <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 2px;" id="detail-user-email">-</div>
-            <div style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-muted); margin-top: 4px;" id="detail-user-id">-</div>
+            <div style="display: flex; gap: 8px; align-items: center; margin-top: 6px;">
+              <span class="badge badge-scope" id="detail-user-emp-code" style="font-family: var(--font-mono); font-size: 0.75rem;">-</span>
+              <span class="badge badge-active" id="detail-user-status-badge">ACTIVE</span>
+            </div>
+            <div style="display: grid; grid-template-columns: auto auto; gap: 14px; margin-top: 10px; font-size: 0.825rem;">
+              <div><span style="color: var(--text-muted);">Department:</span> <strong id="detail-user-department" style="color: var(--text-primary);">-</strong></div>
+              <div><span style="color: var(--text-muted);">Phone:</span> <strong id="detail-user-phone" style="color: var(--text-primary);">-</strong></div>
+            </div>
           </div>
           <div style="text-align: right;">
-            <span class="badge badge-active" id="detail-user-status-badge">ACTIVE</span>
-            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 6px;" id="detail-user-created">-</div>
+            <div style="font-size: 0.75rem; color: var(--text-secondary);" id="detail-user-created">-</div>
           </div>
         </div>
 
@@ -1582,10 +1883,6 @@
             </table>
           </div>
         </div>
-
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-user-details')">Close</button>
-        </div>
       </div>
     </div>
   </div>
@@ -1601,7 +1898,8 @@
         <div class="form-row">
           <div class="form-group col-half">
             <label>Role Name *</label>
-            <input type="text" id="new-role-name" required placeholder="e.g. CRM_SPECIALIST, HRMS_ANALYST" />
+            <input type="text" id="new-role-name" required placeholder="e.g. Backend Development, Marketing &amp; Sales" />
+            <span style="font-size: 0.725rem; color: var(--text-muted); margin-top: 3px; display: block;">Human-readable name: letters, numbers, spaces, hyphens, and &amp; (2–60 chars).</span>
           </div>
           <div class="form-group col-half">
             <label>Default Application Scope (Optional)</label>
@@ -1665,9 +1963,8 @@
           <div id="detail-role-members-list" style="max-height: 140px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;"></div>
         </div>
 
-        <div class="modal-actions" style="justify-content: space-between;">
+        <div class="modal-actions" style="justify-content: flex-start;">
           <button type="button" class="btn btn-danger btn-sm" id="btn-delete-role-action" onclick="handleDeleteCurrentRole()">Delete Role</button>
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-role-details')">Close</button>
         </div>
       </div>
     </div>
@@ -1775,10 +2072,6 @@
           <label style="font-weight: 600; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px; display: block;">Plain-Text Preview</label>
           <pre id="tpl-preview-text-box" class="code-output" style="min-height: 120px; max-height: 200px;"></pre>
         </div>
-
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-template-preview')">Close</button>
-        </div>
       </div>
     </div>
   </div>
@@ -1811,9 +2104,6 @@
         <div>
           <label style="font-weight: 600; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px; display: block;">Selected Version Snapshot</label>
           <pre id="tpl-version-snapshot-view" class="code-output" style="min-height: 180px; max-height: 280px;">Select a version to view snapshot...</pre>
-        </div>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-template-versions')">Close</button>
         </div>
       </div>
     </div>
@@ -1863,10 +2153,6 @@
       <div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
           <div>
-            <label style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Application ID</label>
-            <div id="app-details-id" style="font-family: var(--font-mono); font-size: 0.85rem; color: #38bdf8; margin-top: 2px;">-</div>
-          </div>
-          <div>
             <label style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Status & Environment</label>
             <div style="margin-top: 4px; display: flex; gap: 8px;">
               <span id="app-details-status-badge" class="badge badge-active">ACTIVE</span>
@@ -1897,10 +2183,6 @@
             <div class="metric-label">Error / DLQ Rate</div>
             <div class="metric-value danger" id="app-stats-error-rate" style="font-size: 1.3rem;">0%</div>
           </div>
-        </div>
-
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-app-details')">Close</button>
         </div>
       </div>
     </div>
@@ -2042,10 +2324,6 @@
           <label style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 6px; display: block;">Immutable JSON Payload Content</label>
           <pre id="view-payload-json" class="code-output" style="max-height: 320px;"></pre>
         </div>
-
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-view-payload')">Close</button>
-        </div>
       </div>
     </div>
   </div>
@@ -2106,11 +2384,7 @@
 
         <div>
           <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 6px;">Effective Permissions (<span id="profile-modal-perm-count">0</span>)</div>
-          <div id="profile-modal-perms" style="max-height: 160px; overflow-y: auto; background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; display: flex; flex-wrap: wrap; gap: 4px;"></div>
-        </div>
-
-        <div class="modal-actions" style="margin-top: 20px;">
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-user-profile')">Close</button>
+          <div id="profile-modal-perms" style="max-height: 160px; overflow-y: auto; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; display: flex; flex-wrap: wrap; gap: 4px;"></div>
         </div>
       </div>
     </div>
@@ -2192,14 +2466,13 @@
         </div>
 
         <!-- Modal Actions -->
-        <div class="modal-actions" style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="modal-actions" style="display: flex; justify-content: flex-end; align-items: center;">
           <div>
             <button type="button" class="btn btn-primary" id="btn-modal-msg-retry" style="display: none;" onclick="triggerManualRetryFromModal()">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
               Manual Retry Message
             </button>
           </div>
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-msg-details')">Close</button>
         </div>
       </div>
     </div>
@@ -2237,8 +2510,183 @@
       <div>
         <div id="media-selector-loading" style="font-size: 0.85rem; color: var(--text-muted); padding: 20px 0; text-align: center;">Loading media files...</div>
         <div id="media-selector-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto;"></div>
-        <div class="modal-actions" style="margin-top: 16px;">
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-media-selector')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 11. Delete Organization Modal (Phase 5 Task 5.3) -->
+  <div id="modal-delete-org" class="modal">
+    <div class="modal-card" style="max-width: 520px;">
+      <div class="modal-header">
+        <h4 style="color: #ef4444; display: flex; align-items: center; gap: 8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+          Delete Organization
+        </h4>
+        <button class="btn-close" onclick="closeModal('modal-delete-org')">&times;</button>
+      </div>
+      <div>
+        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
+          <div style="font-weight: 600; color: #f87171; font-size: 0.85rem; margin-bottom: 4px;">Warning: Soft-Deletion &amp; Cascade Deactivation</div>
+          <div style="font-size: 0.8rem; color: #fca5a5; line-height: 1.5;">
+            Deleting this organization will transition its status to <strong>DELETED</strong>. All member accounts and applications will be deactivated, all API keys revoked, and all queued sends cancelled.
+          </div>
+        </div>
+
+        <!-- Resource Impact Counts -->
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px;" id="delete-org-counts">
+          <div style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; text-align: center;">
+            <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Employees</div>
+            <div style="font-size: 1.25rem; font-weight: 700; color: var(--text-primary); margin-top: 2px;" id="delete-org-user-count">-</div>
+          </div>
+          <div style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; text-align: center;">
+            <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Apps</div>
+            <div style="font-size: 1.25rem; font-weight: 700; color: var(--text-primary); margin-top: 2px;" id="delete-org-app-count">-</div>
+          </div>
+          <div style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; text-align: center;">
+            <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Messages</div>
+            <div style="font-size: 1.25rem; font-weight: 700; color: var(--text-primary); margin-top: 2px;" id="delete-org-msg-count">-</div>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 16px;">
+          <p style="font-size: 0.85rem; color: var(--text-primary); margin-bottom: 8px;">
+            Target Organization: <strong id="delete-org-target-name">-</strong> (<code id="delete-org-target-slug" style="color: #38bdf8;">-</code>)
+          </p>
+          <label style="font-size: 0.8rem; color: var(--text-secondary); display: block; margin-bottom: 6px;">
+            To confirm deletion, type the organization slug <strong id="delete-org-match-slug" style="color: #f87171;">-</strong> below:
+          </label>
+          <input type="text" id="delete-org-slug-input" placeholder="Type slug to confirm" autocomplete="off" oninput="checkDeleteOrgSlugMatch()" style="width: 100%;" />
+        </div>
+
+        <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px;">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-delete-org')">Cancel</button>
+          <button type="button" class="btn btn-danger" id="btn-confirm-delete-org" disabled onclick="executeDeleteOrganization()">Confirm Deletion</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 12. Reject Change Request Modal (Phase 5 Task 5.3) -->
+  <div id="modal-reject-change-request" class="modal">
+    <div class="modal-card" style="max-width: 480px;">
+      <div class="modal-header">
+        <h4>Reject Change Request</h4>
+        <button class="btn-close" onclick="closeModal('modal-reject-change-request')">&times;</button>
+      </div>
+      <div>
+        <p style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 14px;">
+          Provide a reason for rejecting the rebranding request for <strong id="reject-cr-org-name" style="color: var(--text-primary);">-</strong>. This reason will be recorded in the audit trail and visible to the organization administrator.
+        </p>
+        <div class="form-group">
+          <label>Rejection Reason *</label>
+          <textarea id="reject-cr-reason" rows="3" required placeholder="Explain why this request is rejected (e.g. naming conflict, invalid justification)..." style="width: 100%; border-radius: 6px; padding: 8px;"></textarea>
+        </div>
+        <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-reject-change-request')">Cancel</button>
+          <button type="button" class="btn btn-danger" id="btn-confirm-reject-cr" onclick="executeRejectChangeRequest()">Reject Request</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 13. Delete Employee Confirmation Modal (Phase 5 Task 5.4) -->
+  <div id="modal-delete-employee" class="modal">
+    <div class="modal-card" style="max-width: 520px;">
+      <div class="modal-header">
+        <h4 style="color: var(--status-error);">Delete Employee</h4>
+        <button class="btn-close" onclick="closeModal('modal-delete-employee')">&times;</button>
+      </div>
+      <div>
+        <p style="font-size: 0.9rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 14px;">
+          Are you sure you want to delete this employee?
+        </p>
+
+        <!-- Rich Employee Details Card -->
+        <div style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+            <div>
+              <div style="font-weight: 700; font-size: 1.05rem; color: var(--text-primary);" id="delete-employee-name">-</div>
+              <div style="font-size: 0.825rem; color: var(--text-secondary); margin-top: 2px;" id="delete-employee-email">-</div>
+            </div>
+            <span class="badge badge-secondary" id="delete-employee-role">-</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.825rem; border-top: 1px solid var(--border-color); padding-top: 10px; margin-top: 6px;">
+            <div>
+              <span style="color: var(--text-muted); display: block; font-size: 0.725rem; text-transform: uppercase;">Employee ID</span>
+              <strong id="delete-employee-code" style="font-family: var(--font-mono); color: var(--text-primary);">-</strong>
+            </div>
+            <div>
+              <span style="color: var(--text-muted); display: block; font-size: 0.725rem; text-transform: uppercase;">Department</span>
+              <span id="delete-employee-department" style="color: var(--text-primary); font-weight: 500;">-</span>
+            </div>
+            <div style="grid-column: span 2;">
+              <span style="color: var(--text-muted); display: block; font-size: 0.725rem; text-transform: uppercase;">Phone Number</span>
+              <span id="delete-employee-phone" style="color: var(--text-primary); font-weight: 500;">-</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="background: rgba(255, 100, 124, 0.1); border: 1px solid rgba(255, 100, 124, 0.25); border-radius: 8px; padding: 12px; margin-bottom: 18px; font-size: 0.825rem; color: #fca5a5; line-height: 1.5;">
+          <strong>Warning:</strong> This employee will lose access immediately. Active sessions will be terminated and their Employee ID and email released for future reuse.
+        </div>
+        <input type="hidden" id="delete-employee-id" />
+        <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px;">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-delete-employee')">Cancel</button>
+          <button type="button" class="btn btn-danger" id="btn-confirm-delete-employee" onclick="executeDeleteEmployee()">Delete Employee</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 14. Audit Log Details Drawer Modal (Phase 5 Task 5.4) -->
+  <div id="modal-audit-details" class="modal">
+    <div class="modal-card modal-lg" style="max-width: 640px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <h4 id="audit-detail-title" style="margin: 0;">Audit Event Details</h4>
+          <span id="audit-detail-result-badge" class="badge badge-active">SUCCESS</span>
+        </div>
+        <button class="btn-close" onclick="closeModal('modal-audit-details')">&times;</button>
+      </div>
+      <div>
+        <!-- Human sentence summary banner -->
+        <div id="audit-detail-summary-banner" style="background: rgba(56, 217, 245, 0.08); border: 1px solid rgba(56, 217, 245, 0.25); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 0.9rem; color: var(--text-primary); font-weight: 500;">
+          -
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px solid var(--border-color);">
+          <div>
+            <label style="font-size: 0.725rem; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 2px;">Actor</label>
+            <div id="audit-detail-actor-name" style="font-weight: 600; color: var(--text-primary); font-size: 0.875rem;">-</div>
+            <div id="audit-detail-actor-email" style="font-size: 0.75rem; color: var(--text-muted);">-</div>
+            <div id="audit-detail-actor-role" style="margin-top: 4px;"><span class="badge badge-secondary" style="font-size: 0.68rem;">-</span></div>
+          </div>
+          <div>
+            <label style="font-size: 0.725rem; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 2px;">Target</label>
+            <div id="audit-detail-target-name" style="font-weight: 600; color: var(--text-primary); font-size: 0.875rem;">-</div>
+            <div id="audit-detail-target-type" style="font-size: 0.75rem; color: var(--accent-cyan);">-</div>
+          </div>
+          <div>
+            <label style="font-size: 0.725rem; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 2px;">Event Timestamp</label>
+            <div id="audit-detail-time" style="font-size: 0.825rem; color: var(--text-primary);">-</div>
+            <div id="audit-detail-time-hint" style="font-size: 0.725rem; color: var(--text-muted);">-</div>
+          </div>
+          <div>
+            <label style="font-size: 0.725rem; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 2px;">Organization</label>
+            <div id="audit-detail-org" style="font-size: 0.825rem; color: var(--text-primary);">-</div>
+          </div>
+        </div>
+
+        <!-- Before -> After Structured Diff Section -->
+        <div id="audit-detail-diff-container" style="display: none; margin-bottom: 16px;">
+          <label style="font-size: 0.775rem; text-transform: uppercase; color: var(--text-secondary); font-weight: 600; display: block; margin-bottom: 6px;">Changes Made (Before &rarr; After)</label>
+          <div id="audit-detail-diff-list" style="background: var(--bg-surface); border-radius: 8px; border: 1px solid var(--border-color); padding: 10px;"></div>
+        </div>
+
+        <!-- Context & Additional Details -->
+        <div id="audit-detail-extra-container" style="margin-bottom: 16px;">
+          <label style="font-size: 0.775rem; text-transform: uppercase; color: var(--text-secondary); font-weight: 600; display: block; margin-bottom: 6px;">Event Details</label>
+          <div id="audit-detail-extra-list" style="background: var(--bg-surface); border-radius: 8px; border: 1px solid var(--border-color); padding: 10px; font-size: 0.8rem; font-family: var(--font-mono); color: var(--text-secondary); word-break: break-all;"></div>
         </div>
       </div>
     </div>

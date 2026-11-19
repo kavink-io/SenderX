@@ -51,8 +51,13 @@ class AuthRepository:
 
     @classmethod
     def find_user_by_email(cls, email):
+        clean_email = email.lower().strip()
         return current_app.mongo_db["users"].find_one({
-            "email": email.lower().strip()
+            "email": clean_email,
+            "status": {"$ne": "DELETED"},
+            "deleted_at": None
+        }) or current_app.mongo_db["users"].find_one({
+            "email": clean_email
         })
 
     @classmethod

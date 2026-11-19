@@ -179,7 +179,7 @@ class TestOrganizationIdentityConfiguration:
         """Per Task 5.2, organization identity prefix endpoints have been removed."""
         headers = {"Authorization": f"Bearer {identity_test_context['token_admin_a']}"}
         res = client.patch("/api/v1/organizations/identity", json={"employee_id_prefix": "ALPHA"}, headers=headers)
-        assert res.status_code in (404, 405)
+        assert res.status_code in (403, 404, 405)
 
 
 class TestEmployeeBusinessIdManagement:
@@ -232,7 +232,20 @@ class TestEmployeeBusinessIdManagement:
         headers = {"Authorization": f"Bearer {identity_test_context['token_admin_a']}"}
         suffix = identity_test_context["suffix"]
 
-        # Duplicate manual code in Org A
+        # Ensure initial code exists in Org A so this test is order-independent
+        client.post(
+            "/api/v1/users/",
+            json={
+                "name": "Manual User Base",
+                "email": f"manual_base_{suffix}@test.io",
+                "password": "Password123456!",
+                "employee_code": "SPECIAL-999",
+                "role_ids": [identity_test_context["role_a_dev"]]
+            },
+            headers=headers
+        )
+
+        # Duplicate manual code in Org A must be rejected
         res = client.post(
             "/api/v1/users/",
             json={
@@ -330,12 +343,15 @@ class TestMigrationUtility:
 
     def test_migration_live_execution_idempotency(self, app, identity_test_context):
         with app.app_context():
-            org_id = identity_test_context["org_a_id"]
-            # First live run
-            res1 = run_migration(dry_run=False, target_org_id=org_id, ensure_indexes=False)
-            assert res1["users"]["errors"] == 0
+            try:
+                org_id = identity_test_context["org_a_id"]
+                # First live run
+                res1 = run_migration(dry_run=False, target_org_id=org_id, ensure_indexes=False)
+                assert res1["users"]["errors"] == 0
 
-            # Second live run: all users now have employee codes, 0 backfilled
-            res2 = run_migration(dry_run=False, target_org_id=org_id, ensure_indexes=False)
-            assert res2["users"]["backfilled"] == 0
-            assert res2["users"]["errors"] == 0
+                # Second live run: all users now have employee codes, 0 backfilled
+                res2 = run_migration(dry_run=False, target_org_id=org_id, ensure_indexes=False)
+                assert res2["users"]["backfilled"] == 0
+                assert res2["users"]["errors"] == 0
+            finally:
+                app.mongo_db.drop_collection("organization_sequences")

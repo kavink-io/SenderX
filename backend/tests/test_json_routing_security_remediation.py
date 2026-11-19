@@ -452,6 +452,22 @@ def test_dlq_list_read_redacts_sensitive_data(client, test_setup):
     """Scenario 9: DLQ list read redacts sensitive data across all returned items."""
     headers = test_setup["headers_admin_a"]
 
+    # Ingest a DLQ item to ensure test is fully self-contained and parallel-safe
+    payload = {
+        "channel": "unsupported_channel",
+        "recipient": "kavin@example.com",
+        "data": {
+            "password": "SuperSecretPassword123!",
+            "api_key": "raw_sensitive_api_key_value",
+            "auth_token": "bearer 1234567890abcdef",
+            "nested": {
+                "secret": "top_secret_code",
+                "client_secret": "my_client_secret"
+            }
+        }
+    }
+    client.post("/api/v1/payloads/ingest", json=payload, headers=headers)
+
     list_res = client.get("/api/v1/dead-letters/organization", headers=headers)
     assert list_res.status_code == 200
     items = list_res.get_json()["data"]

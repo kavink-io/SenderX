@@ -11,6 +11,27 @@ from app.modules.dead_letters.repository import DeadLetterRepository
 from app.adapters.adapter_registry import AdapterRegistry
 
 
+@shared_task(
+    bind=True,
+    name="senderx.send_auth_otp_email",
+    autoretry_for=(RuntimeError,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3}
+)
+def send_auth_otp_email(self, encrypted_payload, provider):
+    from app.modules.auth.otp_service import OTPService
+
+    try:
+        OTPService.send_email(encrypted_payload, provider)
+    except Exception as error:
+        current_app.logger.error(
+            "Authentication email delivery failed for provider %s (%s)",
+            provider,
+            type(error).__name__
+        )
+        raise RuntimeError("Authentication email delivery failed") from None
+
+
 # ======================================================
 # PROCESS MESSAGE
 # ======================================================

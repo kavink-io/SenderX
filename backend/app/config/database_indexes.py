@@ -7,8 +7,14 @@ from flask import current_app
 import pymongo
 
 
-def ensure_database_indexes(app=None):
+_ensured_dbs = set()
+
+
+def ensure_database_indexes(app=None, force=False):
     db = (app.mongo_db if app else current_app.mongo_db)
+    db_name = db.name
+    if not force and db_name in _ensured_dbs:
+        return
 
     # 1. Organizations
     db["organizations"].create_index([("organization_id", pymongo.ASCENDING)], unique=True)
@@ -16,19 +22,81 @@ def ensure_database_indexes(app=None):
     db["organizations"].create_index([("status", pymongo.ASCENDING)])
     db["organizations"].create_index([("created_at", pymongo.DESCENDING)])
 
+    # Organization Change Requests
+    db["organization_change_requests"].create_index([("request_id", pymongo.ASCENDING)], unique=True)
+    db["organization_change_requests"].create_index([("organization_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
+    db["organization_change_requests"].create_index([("created_at", pymongo.DESCENDING)])
+
     # 2. Admins
     db["admins"].create_index([("admin_id", pymongo.ASCENDING)], unique=True)
     db["admins"].create_index([("email", pymongo.ASCENDING)], unique=True)
 
     # 3. Users
     db["users"].create_index([("user_id", pymongo.ASCENDING)], unique=True)
-    db["users"].create_index([("email", pymongo.ASCENDING)], unique=True)
+    try:
+        db["users"].create_index(
+            [("email", pymongo.ASCENDING)],
+            unique=True,
+            partialFilterExpression={"deleted_at": None}
+        )
+    except pymongo.errors.OperationFailure:
+        try:
+            db["users"].drop_index("email_1")
+        except Exception:
+            pass
+        db["users"].create_index(
+            [("email", pymongo.ASCENDING)],
+            unique=True,
+            partialFilterExpression={"deleted_at": None}
+        )
+
     db["users"].create_index([("organization_id", pymongo.ASCENDING)])
-    db["users"].create_index(
-        [("organization_id", pymongo.ASCENDING), ("employee_code", pymongo.ASCENDING)],
-        unique=True,
-        partialFilterExpression={"employee_code": {"$type": "string"}}
-    )
+
+    try:
+        db["users"].create_index(
+            [("organization_id", pymongo.ASCENDING), ("employee_code", pymongo.ASCENDING)],
+            unique=True,
+            partialFilterExpression={
+                "employee_code": {"$type": "string"},
+                "deleted_at": None
+            }
+        )
+    except pymongo.errors.OperationFailure:
+        try:
+            db["users"].drop_index("organization_id_1_employee_code_1")
+        except Exception:
+            pass
+        db["users"].create_index(
+            [("organization_id", pymongo.ASCENDING), ("employee_code", pymongo.ASCENDING)],
+            unique=True,
+            partialFilterExpression={
+                "employee_code": {"$type": "string"},
+                "deleted_at": None
+            }
+        )
+
+    try:
+        db["users"].create_index(
+            [("organization_id", pymongo.ASCENDING), ("employee_code_lower", pymongo.ASCENDING)],
+            unique=True,
+            partialFilterExpression={
+                "employee_code_lower": {"$type": "string"},
+                "deleted_at": None
+            }
+        )
+    except pymongo.errors.OperationFailure:
+        try:
+            db["users"].drop_index("organization_id_1_employee_code_lower_1")
+        except Exception:
+            pass
+        db["users"].create_index(
+            [("organization_id", pymongo.ASCENDING), ("employee_code_lower", pymongo.ASCENDING)],
+            unique=True,
+            partialFilterExpression={
+                "employee_code_lower": {"$type": "string"},
+                "deleted_at": None
+            }
+        )
     db["users"].create_index([("organization_id", pymongo.ASCENDING), ("is_active", pymongo.ASCENDING)])
     db["users"].create_index([("organization_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
 
@@ -127,6 +195,22 @@ def ensure_database_indexes(app=None):
     db["security_audit_logs"].create_index([("organization_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
     db["security_audit_logs"].create_index([("target_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
     db["security_audit_logs"].create_index([("organization_id", pymongo.ASCENDING), ("event_type", pymongo.ASCENDING)])
+
+    # 16. Authentication OTPs and short-lived password tokens
+    db["auth_otps"].create_index([("otp_id", pymongo.ASCENDING)], unique=True)
+    db["auth_otps"].create_index([("expires_at", pymongo.ASCENDING)], expireAfterSeconds=0)
+    db["auth_otps"].create_index([
+        ("email", pymongo.ASCENDING),
+        ("purpose", pymongo.ASCENDING),
+        ("created_at", pymongo.DESCENDING)
+    ])
+    db["auth_otps"].create_index([("reset_token_hash", pymongo.ASCENDING)], sparse=True)
+    db["auth_otps"].create_index([
+        ("account_id", pymongo.ASCENDING),
+        ("purpose", pymongo.ASCENDING)
+    ])
+
+    _ensured_dbs.add(db_name)
 
 
 

@@ -75,7 +75,7 @@ class AuthService:
             ):
                 return {
                     "success": False,
-                    "message": "Invalid email or password"
+                    "message": "Invalid password"
                 }
 
             admin_id = admin["admin_id"]
@@ -84,7 +84,8 @@ class AuthService:
             claims = {
                 "account_type": "PLATFORM_ADMIN",
                 "role": role,
-                "email": email
+                "email": email,
+                "token_version": admin.get("token_version", 1)
             }
 
             tokens = AuthService._generate_tokens(
@@ -121,7 +122,30 @@ class AuthService:
         if not user:
             return {
                 "success": False,
-                "message": "Invalid email or password"
+                "message": "Invalid email"
+            }
+
+        if user.get("status") == "DELETED" or user.get("is_deleted") is True:
+            return {
+                "success": False,
+                "message": "Account has been deactivated or deleted"
+            }
+
+        if user.get("status") == "PENDING_ACTIVATION":
+            return {
+                "success": False,
+                "message": "Activate your account with the code sent to your email before signing in"
+            }
+
+        organization_id = user["organization_id"]
+
+        # Check organization status first
+        from app.modules.organizations.repository import OrganizationRepository
+        organization = OrganizationRepository.find_by_id(organization_id)
+        if not organization or organization.get("status") != "ACTIVE":
+            return {
+                "success": False,
+                "message": "Organization is inactive or unavailable"
             }
 
         if not user.get("is_active", False):
@@ -136,26 +160,17 @@ class AuthService:
         ):
             return {
                 "success": False,
-                "message": "Invalid email or password"
+                "message": "Invalid password"
             }
 
         user_id = user["user_id"]
-        organization_id = user["organization_id"]
-
-        # 3. Check organization status
-        from app.modules.organizations.repository import OrganizationRepository
-        organization = OrganizationRepository.find_by_id(organization_id)
-        if not organization or organization.get("status") != "ACTIVE":
-            return {
-                "success": False,
-                "message": "Organization is inactive or unavailable"
-            }
 
         claims = {
             "account_type": "ORGANIZATION_USER",
             "organization_id": organization_id,
             "role_ids": user.get("role_ids", []),
-            "email": email
+            "email": email,
+            "token_version": user.get("token_version", 1)
         }
 
         tokens = AuthService._generate_tokens(

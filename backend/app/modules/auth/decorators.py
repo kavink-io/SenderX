@@ -42,6 +42,12 @@ def require_roles(*allowed_roles):
                     "message": "Admin account not found or inactive"
                 }), 401
 
+            if claims.get("token_version", 1) != admin.get("token_version", 1):
+                return jsonify({
+                    "success": False,
+                    "message": "Session expired or password changed. Please log in again."
+                }), 401
+
             current_role = admin.get("role")
 
             if current_role not in allowed_roles:
@@ -84,10 +90,16 @@ def require_permissions(*required_permissions):
 
             user = UserRepository.find_by_id(identity)
 
-            if not user or not user.get("is_active", False):
+            if not user or not user.get("is_active", False) or user.get("status") == "DELETED" or user.get("is_deleted") is True:
                 return jsonify({
                     "success": False,
                     "message": "Organization user not found or inactive"
+                }), 401
+
+            if claims.get("token_version", 1) != user.get("token_version", 1):
+                return jsonify({
+                    "success": False,
+                    "message": "Session expired or password changed. Please log in again."
                 }), 401
 
             organization_id = user.get("organization_id")
@@ -216,6 +228,10 @@ def require_permissions(*required_permissions):
 
             # Expand granted permissions with aliases for backward/forward compatibility
             effective_permissions = set(granted_permissions)
+            if "organization:users:manage" in granted_permissions:
+                effective_permissions.add("organization:users:delete")
+            if "organization:users:delete" in granted_permissions:
+                effective_permissions.add("organization:users:manage")
             if "organization:dead_letters:read" in granted_permissions:
                 effective_permissions.add("organization:dlq:read")
             if "organization:dlq:read" in granted_permissions:

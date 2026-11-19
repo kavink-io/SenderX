@@ -1,25 +1,3 @@
-"""
-SenderX Phase 4, Task 1: Centralized Media & Attachment Management Test Suite
-Comprehensive testing for:
-1. Single upload and secure download
-2. Multiple / bulk upload
-3. Invalid MIME types and unsupported formats
-4. File signature magic byte mismatch (spoofing detection)
-5. File size and request size limits
-6. Filename sanitization
-7. Path traversal prevention (local storage & S3)
-8. Multi-tenant organization isolation (cross-tenant access denial)
-9. Unauthorized downloads (unauthenticated & RBAC permission checks)
-10. File deletion (physical and logical)
-11. Storage backend failures (no silent fallback from S3 to local)
-12. Signed URL generation and verification
-13. SHA-256 cryptographic checksum verification
-14. Orphan file cleanup
-15. Expired file cleanup
-16. Provider-specific media validation (Email, WhatsApp, SMS/MMS, Microsoft Teams)
-17. Message service integration (media_ids attachment resolution and cross-tenant blocking)
-"""
-
 import io
 import os
 import shutil
@@ -613,8 +591,11 @@ def test_expired_file_cleanup(app, test_setup):
         storage = get_storage_backend(app.config)
         assert storage.exists(storage_key) is True
 
-        # Wait 1.1s for expiration
-        time.sleep(1.1)
+        # Fast-expire file in DB directly instead of real-time sleep
+        from datetime import datetime, timezone, timedelta
+        db = app.mongo_db
+        past_time = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+        db.media.update_one({"media_id": media_id}, {"$set": {"expires_at": past_time}})
 
         # Run cleanup
         cleanup_res = MediaService.cleanup_expired_files()

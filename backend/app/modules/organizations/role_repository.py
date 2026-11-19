@@ -1,4 +1,3 @@
-
 from datetime import datetime, timezone
 from flask import current_app
 
@@ -47,8 +46,11 @@ class RoleRepository:
 
     @classmethod
     def find_by_name(cls, name, organization_id):
+        if not name:
+            return None
+        import re
         return cls._collection().find_one({
-            "name": name,
+            "name": {"$regex": f"^{re.escape(str(name).strip())}$", "$options": "i"},
             "organization_id": organization_id
         }, {"_id": 0})
 

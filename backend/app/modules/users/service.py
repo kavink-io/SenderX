@@ -1,10 +1,9 @@
 import re
-import secrets
-import string
 import uuid
 import bcrypt
 from pymongo.errors import DuplicateKeyError
 from flask import current_app
+from app.config.settings import Config
 
 from app.modules.users.repository import UserRepository
 from app.modules.users.audit_repository import SecurityAuditRepository
@@ -51,7 +50,8 @@ class UserService:
             "organization:analytics:read"
         ],
         "USERS": [
-            "organization:users:manage"
+            "organization:users:manage",
+            "organization:users:delete"
         ],
         "ROLES": [
             "organization:roles:manage"
@@ -79,11 +79,6 @@ class UserService:
         return 12 <= len(password) and len(password.encode("utf-8")) <= 72
 
     @staticmethod
-    def _generate_temporary_password():
-        alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_"
-        return "".join(secrets.choice(alphabet) for _ in range(16))
-
-    @staticmethod
     def validate_employee_code(code):
         if not isinstance(code, str):
             return None, "Employee ID must be a string"
@@ -94,6 +89,46 @@ class UserService:
             return None, "Employee ID must contain only uppercase letters, numbers, and hyphens (e.g. ABC-EMP-001)"
         return clean, None
 
+    @staticmethod
+    def validate_role_name(name):
+        if not isinstance(name, str):
+            return None, "Role name must be a string"
+        clean = re.sub(r"\s+", " ", name.strip())
+        if len(clean) < 2 or len(clean) > 60:
+            return None, "Role name must be between 2 and 60 characters"
+        if not re.fullmatch(r"^[A-Za-z0-9\s\-&]+$", clean):
+            return None, "Role name can only contain letters, digits, spaces, hyphens, and ampersands (&)"
+        return clean, None
+
+    @staticmethod
+    def validate_department(department):
+        if department is None or department == "":
+            return None, None
+        if not isinstance(department, str):
+            return None, "Department must be a string"
+        clean = department.strip()
+        if not clean:
+            return None, None
+        if len(clean) < 2 or len(clean) > 60:
+            return None, "Department must be between 2 and 60 characters"
+        return clean, None
+
+    @staticmethod
+    def validate_phone(phone):
+        if phone is None or phone == "":
+            return None, None
+        if not isinstance(phone, str):
+            return None, "Phone number must be a string"
+        clean = re.sub(r"\s+", " ", phone.strip())
+        if not clean:
+            return None, None
+        if not re.fullmatch(r"^\+?[0-9\s\-\(\)\.]{7,25}$", clean):
+            return None, "Invalid phone number format. Please provide a valid number (e.g. +1 555-123-4567)"
+        digit_count = sum(c.isdigit() for c in clean)
+        if digit_count < 7 or digit_count > 15:
+            return None, "Phone number must contain between 7 and 15 digits"
+        return clean, None
+
     # ======================================================
     # EMPLOYEE MANAGEMENT
     # ======================================================
@@ -102,10 +137,15 @@ class UserService:
     def create_user(cls, data, organization_id, actor_id=None, actor_email=None):
         if not isinstance(data, dict):
             return {"success": False, "message": "Invalid request body"}
+        if "password" in data:
+            return {
+                "success": False,
+                "status_code": 400,
+                "message": "Employees set their password through account activation"
+            }
 
         name = data.get("name")
         email = data.get("email")
-        password = data.get("password")
         role_ids = data.get("role_ids")
         role_assignments = data.get("role_assignments")
 
@@ -121,18 +161,11 @@ class UserService:
         if not cls._validate_email(email):
             return {"success": False, "message": "Invalid email address format"}
 
-        generated_password = None
-        if password is None or password == "":
-            generated_password = cls._generate_temporary_password()
-            password = generated_password
-        elif not cls._validate_password(password):
-            return {"success": False, "message": "Password must be at least 12 characters and at most 72 bytes"}
-
         if UserRepository.find_by_email(email):
-            return {"success": False, "message": "A user with this email already exists"}
+            return {"success": False, "message": "A user with this email already exists", "status_code": 409}
 
         if AuthRepository.find_by_email(email):
-            return {"success": False, "message": "This email is registered to a platform administrator"}
+            return {"success": False, "message": "This email is registered to a platform administrator", "status_code": 409}
 
         # Validate required employee business ID (employee_code) - manual entry only
         requested_code = data.get("employee_code")
@@ -155,6 +188,16 @@ class UserService:
             }
         assigned_employee_code = code_clean
 
+        # Validate optional department
+        dept_clean, dept_err = cls.validate_department(data.get("department"))
+        if dept_err:
+            return {"success": False, "message": dept_err, "status_code": 400}
+
+        # Validate optional phone
+        phone_clean, phone_err = cls.validate_phone(data.get("phone"))
+        if phone_err:
+            return {"success": False, "message": phone_err, "status_code": 400}
+
         # Normalize and validate role assignments
         validated_assignments, validation_err = cls._normalize_and_validate_role_assignments(
             role_ids=role_ids,
@@ -169,23 +212,21 @@ class UserService:
             a["application_id"] for a in validated_assignments if a.get("application_id")
         )))
 
-        password_hash = bcrypt.hashpw(
-            password.encode("utf-8"),
-            bcrypt.gensalt(rounds=12)
-        ).decode("utf-8")
-
         user_id = str(uuid.uuid4())
         user_doc = {
             "user_id": user_id,
             "organization_id": organization_id,
             "employee_code": assigned_employee_code,
+            "employee_code_lower": assigned_employee_code.lower() if assigned_employee_code else None,
             "name": name,
             "email": email,
-            "password_hash": password_hash,
+            "department": dept_clean,
+            "phone": phone_clean,
             "role_ids": derived_role_ids,
             "role_assignments": validated_assignments,
             "application_ids": derived_app_ids,
-            "is_active": True
+            "status": "PENDING_ACTIVATION",
+            "is_active": False
         }
 
         try:
@@ -203,8 +244,11 @@ class UserService:
                     "name": name,
                     "email": email,
                     "employee_code": assigned_employee_code,
+                    "department": dept_clean,
+                    "phone": phone_clean,
                     "role_ids": derived_role_ids,
-                    "application_ids": derived_app_ids
+                    "application_ids": derived_app_ids,
+                    "status": "PENDING_ACTIVATION"
                 }
             )
 
@@ -214,18 +258,19 @@ class UserService:
                 "employee_code": created.get("employee_code"),
                 "name": created["name"],
                 "email": created["email"],
+                "department": created.get("department"),
+                "phone": created.get("phone"),
                 "role_ids": created["role_ids"],
                 "role_assignments": created.get("role_assignments", []),
                 "application_ids": created.get("application_ids", []),
                 "is_active": created["is_active"],
+                "status": created["status"],
                 "created_at": created.get("created_at")
             }
-            if generated_password:
-                response_data["temporary_password"] = generated_password
 
             return {
                 "success": True,
-                "message": "Organization employee created successfully",
+                "message": "Employee created. They must activate their account before signing in.",
                 "data": response_data
             }
         except DuplicateKeyError as e:
@@ -303,7 +348,7 @@ class UserService:
     @classmethod
     def get_user_by_id(cls, user_id, organization_id):
         user = UserRepository.find_by_id(user_id, organization_id=organization_id)
-        if not user:
+        if not user or user.get("status") == "DELETED" or user.get("is_deleted") is True:
             return {"success": False, "message": "User not found"}
 
         roles_list = RoleRepository.find_by_organization(organization_id)
@@ -367,6 +412,8 @@ class UserService:
                 "employee_code": user.get("employee_code"),
                 "name": user["name"],
                 "email": user["email"],
+                "department": user.get("department"),
+                "phone": user.get("phone"),
                 "role_ids": user.get("role_ids", []),
                 "role_assignments": enriched_assignments,
                 "roles": enriched_assignments,
@@ -716,7 +763,7 @@ class UserService:
             return {"success": False, "message": "Invalid request body"}
 
         user = UserRepository.find_by_id(user_id, organization_id=organization_id)
-        if not user:
+        if not user or user.get("status") == "DELETED" or user.get("is_deleted") is True:
             return {"success": False, "message": "User not found"}
 
         update_fields = {}
@@ -767,21 +814,59 @@ class UserService:
                 return {"success": False, "message": "Name must be between 1 and 100 characters"}
             update_fields["name"] = name
 
+        if "department" in data:
+            dept_val = data.get("department")
+            dept_clean, dept_err = cls.validate_department(dept_val)
+            if dept_err:
+                return {"success": False, "status_code": 400, "message": dept_err}
+            update_fields["department"] = dept_clean
+
+        if "phone" in data:
+            phone_val = data.get("phone")
+            phone_clean, phone_err = cls.validate_phone(phone_val)
+            if phone_err:
+                return {"success": False, "status_code": 400, "message": phone_err}
+            update_fields["phone"] = phone_clean
+
         if "is_active" in data:
             if not isinstance(data["is_active"], bool):
                 return {"success": False, "message": "is_active must be a boolean"}
+            if data["is_active"] is False:
+                if actor_id and str(actor_id) == str(user_id):
+                    return {
+                        "success": False,
+                        "status_code": 409,
+                        "message": "Administrators cannot deactivate their own account"
+                    }
+                if cls._is_user_admin(user, organization_id):
+                    remaining = cls._count_active_admins(organization_id, exclude_user_id=user_id)
+                    if remaining < 1:
+                        return {
+                            "success": False,
+                            "status_code": 409,
+                            "message": "Cannot deactivate the last active administrator in the organization"
+                        }
             update_fields["is_active"] = data["is_active"]
 
         if "password" in data:
             new_pwd = str(data["password"])
             if not cls._validate_password(new_pwd):
                 return {"success": False, "message": "Password must be at least 12 characters and at most 72 bytes"}
+            from app.config.settings import Config
+            bcrypt_rounds = current_app.config.get("BCRYPT_ROUNDS", getattr(Config, "BCRYPT_ROUNDS", 12)) if current_app else getattr(Config, "BCRYPT_ROUNDS", 12)
             update_fields["password_hash"] = bcrypt.hashpw(
                 new_pwd.encode("utf-8"),
-                bcrypt.gensalt(12)
+                bcrypt.gensalt(rounds=bcrypt_rounds)
             ).decode("utf-8")
 
         if "role_ids" in data or "role_assignments" in data:
+            if actor_id and str(actor_id) == str(user_id):
+                return {
+                    "success": False,
+                    "status_code": 403,
+                    "message": "You cannot modify your own roles, permissions, or access scopes"
+                }
+
             validated_assignments, err = cls._normalize_and_validate_role_assignments(
                 role_ids=data.get("role_ids"),
                 role_assignments=data.get("role_assignments"),
@@ -840,10 +925,17 @@ class UserService:
         if not isinstance(data, dict):
             return {"success": False, "message": "Invalid request body"}
 
+        if actor_id and str(actor_id) == str(user_id):
+            return {
+                "success": False,
+                "status_code": 403,
+                "message": "You cannot modify your own roles, permissions, or access scopes"
+            }
+
         role_assignments = data.get("role_assignments")
         role_ids = data.get("role_ids")
 
-        if role_assignments is None and role_ids is None:
+        if role_assignments is None and role_ids is None and "department" not in data and "phone" not in data and "name" not in data:
             return {"success": False, "message": "Either 'role_assignments' or 'role_ids' is required"}
 
         update_payload = {}
@@ -851,6 +943,12 @@ class UserService:
             update_payload["role_assignments"] = role_assignments
         if role_ids is not None:
             update_payload["role_ids"] = role_ids
+        if "department" in data:
+            update_payload["department"] = data["department"]
+        if "phone" in data:
+            update_payload["phone"] = data["phone"]
+        if "name" in data:
+            update_payload["name"] = data["name"]
 
         res = cls.update_user(user_id, organization_id, update_payload, actor_id=actor_id, actor_email=actor_email)
         if res.get("success"):
@@ -919,6 +1017,13 @@ class UserService:
         if not user:
             return {"success": False, "status_code": 404, "message": "User not found"}
 
+        if user.get("status") == "PENDING_ACTIVATION":
+            return {
+                "success": False,
+                "status_code": 409,
+                "message": "Pending employees must activate their account with an email code"
+            }
+
         if user.get("is_active", True):
             return {"success": True, "status_code": 200, "message": "User is already active"}
 
@@ -940,6 +1045,88 @@ class UserService:
             "message": "User activated successfully" if updated else "Failed to activate user"
         }
 
+    @classmethod
+    def delete_user(cls, user_id, organization_id, actor_id=None, actor_email=None):
+        """
+        Soft-delete an organization employee.
+        Invariants:
+        1. Cannot delete another organization's employee (404).
+        2. Cannot delete already deleted employee (404).
+        3. Cannot delete yourself (403).
+        4. Cannot delete the last active ORG_ADMIN (409).
+        5. Cannot delete an ORG_ADMIN unless another active ORG_ADMIN remains (409).
+        6. Employee ID and email are released for future reuse via partial index filter on deleted_at: None.
+        7. Invalidate all active tokens immediately by bumping token_version.
+        """
+        from datetime import datetime, timezone
+
+        user = UserRepository.find_by_id(user_id, organization_id=organization_id)
+        if not user or user.get("status") == "DELETED" or user.get("is_deleted") is True:
+            return {"success": False, "status_code": 404, "message": "User not found"}
+
+        # Protection 1: Cannot delete yourself (409)
+        if actor_id and str(actor_id) == str(user_id):
+            return {
+                "success": False,
+                "status_code": 409,
+                "message": "You cannot delete your own account. Administrators cannot deactivate their own account."
+            }
+
+        # Protection 2: Last active administrator invariant (409)
+        if cls._is_user_admin(user, organization_id):
+            remaining_admins = cls._count_active_admins(organization_id, exclude_user_id=user_id)
+            if remaining_admins < 1:
+                return {
+                    "success": False,
+                    "status_code": 409,
+                    "message": "Cannot delete the last active administrator in the organization"
+                }
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        new_token_version = user.get("token_version", 1) + 1
+
+        update_fields = {
+            "status": "DELETED",
+            "is_active": False,
+            "is_deleted": True,
+            "deleted_at": now_iso,
+            "deleted_by": actor_id,
+            "token_version": new_token_version,
+            "updated_at": now_iso
+        }
+
+        res = UserRepository._collection().update_one(
+            {"user_id": user_id, "organization_id": organization_id},
+            {"$set": update_fields}
+        )
+        if res.matched_count == 0:
+            return {"success": False, "status_code": 404, "message": "User not found"}
+
+        # Write-time audit log snapshot
+        emp_code = user.get("employee_code")
+        emp_code_hint = f" ({emp_code})" if emp_code else ""
+        SecurityAuditRepository.log_event(
+            organization_id=organization_id,
+            event_type="EMPLOYEE_DELETED",
+            actor_id=actor_id,
+            actor_email=actor_email,
+            target_id=user_id,
+            target_type="USER",
+            target_name=user.get("name") or user.get("email"),
+            details={
+                "name": user.get("name"),
+                "email": user.get("email"),
+                "employee_code": emp_code
+            },
+            summary=f"Deleted employee {user.get('name', 'Employee')}{emp_code_hint}"
+        )
+
+        return {
+            "success": True,
+            "status_code": 200,
+            "message": "Employee deleted successfully"
+        }
+
     # ======================================================
     # ROLE MANAGEMENT
     # ======================================================
@@ -955,24 +1142,26 @@ class UserService:
         application_id = data.get("application_id")
 
         if not isinstance(name, str) or not name.strip():
-            return {"success": False, "message": "Role name is required"}
+            return {"success": False, "status_code": 400, "message": "Role name is required"}
 
-        name = name.strip()
-        if len(name) > 60:
-            return {"success": False, "message": "Role name must be between 1 and 60 characters"}
+        name_clean, name_err = cls.validate_role_name(name)
+        if name_err:
+            return {"success": False, "status_code": 400, "message": name_err}
+        name = name_clean
 
         if not isinstance(permissions, list) or not permissions:
-            return {"success": False, "message": "Permissions must be a non-empty list"}
+            return {"success": False, "status_code": 400, "message": "Permissions must be a non-empty list"}
 
         # Validate permissions - prevent wildcards and privilege escalation
         for perm in permissions:
             if not isinstance(perm, str):
-                return {"success": False, "message": "Invalid permission format"}
+                return {"success": False, "status_code": 400, "message": "Invalid permission format"}
             if perm in ("*", "organization:*", "platform:*"):
-                return {"success": False, "message": "Wildcard permissions are not allowed"}
+                return {"success": False, "status_code": 400, "message": "Wildcard permissions are not allowed"}
             if perm not in cls.ALLOWED_ORGANIZATION_PERMISSIONS:
                 return {
                     "success": False,
+                    "status_code": 400,
                     "message": f"Permission '{perm}' is not an allowed organization permission"
                 }
 
@@ -982,14 +1171,14 @@ class UserService:
             app_clean = str(application_id).strip()
             app = ApplicationRepository.find_by_id(app_clean, organization_id=organization_id)
             if not app:
-                return {"success": False, "message": f"Connected application '{app_clean}' not found in your organization"}
+                return {"success": False, "status_code": 400, "message": f"Connected application '{app_clean}' not found in your organization"}
             if app.get("status") not in ("ACTIVE", None):
-                return {"success": False, "message": f"Connected application '{app_clean}' is inactive or deactivated"}
+                return {"success": False, "status_code": 400, "message": f"Connected application '{app_clean}' is inactive or deactivated"}
 
-        # Check duplicate role name in organization
+        # Check duplicate role name in organization (case-insensitive)
         existing_role = RoleRepository.find_by_name(name, organization_id=organization_id)
         if existing_role:
-            return {"success": False, "message": f"A role named '{name}' already exists in this organization"}
+            return {"success": False, "status_code": 409, "message": f"A role named '{name}' already exists in this organization"}
 
         role_id = str(uuid.uuid4())
         role_doc = {
@@ -1110,14 +1299,19 @@ class UserService:
         update_fields = {}
 
         if "name" in data:
-            name = str(data["name"]).strip()
-            if not name or len(name) > 60:
-                return {"success": False, "status_code": 400, "message": "Role name must be between 1 and 60 characters"}
-            if name != role.get("name"):
-                dup = RoleRepository.find_by_name(name, organization_id=organization_id)
-                if dup and dup["role_id"] != role_id:
-                    return {"success": False, "status_code": 400, "message": f"A role named '{name}' already exists in this organization"}
-            update_fields["name"] = name
+            name_raw = data["name"]
+            if not isinstance(name_raw, str) or not name_raw.strip():
+                return {"success": False, "status_code": 400, "message": "Role name is required"}
+            current_name = role.get("name", "")
+            if name_raw.strip() != current_name.strip():
+                name_clean, name_err = cls.validate_role_name(name_raw)
+                if name_err:
+                    return {"success": False, "status_code": 400, "message": name_err}
+                if name_clean.lower() != current_name.lower():
+                    dup = RoleRepository.find_by_name(name_clean, organization_id=organization_id)
+                    if dup and dup["role_id"] != role_id:
+                        return {"success": False, "status_code": 409, "message": f"A role named '{name_clean}' already exists in this organization"}
+                update_fields["name"] = name_clean
 
         if "description" in data:
             desc = data["description"]
@@ -1226,11 +1420,200 @@ class UserService:
         }
 
     @classmethod
-    def get_audit_logs(cls, organization_id, target_id=None, event_type=None, limit=50, page=1):
+    def get_audit_logs(
+        cls,
+        organization_id,
+        target_id=None,
+        event_type=None,
+        search=None,
+        action=None,
+        actor=None,
+        start_date=None,
+        end_date=None,
+        result=None,
+        limit=50,
+        page=1
+    ):
         return SecurityAuditRepository.find_by_organization(
             organization_id=organization_id,
             target_id=target_id,
             event_type=event_type,
+            search=search,
+            action=action,
+            actor=actor,
+            start_date=start_date,
+            end_date=end_date,
+            result=result,
             limit=limit,
             page=page
         )
+
+    @classmethod
+    def update_own_profile(cls, user_id, data):
+        """Allow ORG_ADMIN / employees to update their own name, email, and password."""
+        from datetime import datetime, timezone
+        if not isinstance(data, dict):
+            return {"success": False, "status_code": 400, "message": "Invalid request body"}
+
+        user = UserRepository.find_by_id(user_id)
+        if not user or not user.get("is_active", False):
+            return {"success": False, "status_code": 404, "message": "User not found or inactive"}
+
+        organization_id = user.get("organization_id")
+
+        # 1. Reject direct organization name or slug changes
+        forbidden_org_fields = ["organization_name", "org_name", "slug", "organization_slug", "organization_id"]
+        if any(field in data for field in forbidden_org_fields):
+            return {
+                "success": False,
+                "status_code": 403,
+                "message": "Direct organization name or slug changes are not permitted. Please submit an organization change request."
+            }
+
+        # 2. Reject self-role / permission / scope changes
+        forbidden_priv_fields = ["role_ids", "role_assignments", "roles", "permissions", "application_ids"]
+        if any(field in data for field in forbidden_priv_fields):
+            return {
+                "success": False,
+                "status_code": 403,
+                "message": "You cannot modify your own roles, permissions, or access scopes"
+            }
+
+        # 3. Reject self-deactivation
+        if data.get("is_active") is False:
+            return {
+                "success": False,
+                "status_code": 409,
+                "message": "Administrators cannot deactivate their own account"
+            }
+
+        # 4. Reject employee_code changes if already assigned
+        if "employee_code" in data:
+            requested_code = str(data["employee_code"]).strip().upper() if data["employee_code"] is not None else None
+            existing_code = user.get("employee_code")
+            if existing_code and requested_code != existing_code:
+                return {
+                    "success": False,
+                    "status_code": 400,
+                    "message": "Employee ID is immutable and cannot be changed"
+                }
+
+        update_fields = {}
+        audit_details = {}
+
+        # Update name
+        if "name" in data:
+            name = str(data["name"]).strip()
+            if not name or len(name) > 100:
+                return {"success": False, "status_code": 400, "message": "Name must be between 1 and 100 characters"}
+            update_fields["name"] = name
+            audit_details["name"] = name
+
+        # Update email
+        if "email" in data:
+            new_email = str(data["email"]).strip().lower()
+            if new_email != user.get("email"):
+                if not cls._validate_email(new_email):
+                    return {"success": False, "status_code": 400, "message": "Invalid email address format"}
+
+                current_password = data.get("current_password")
+                if not current_password or not isinstance(current_password, str):
+                    return {"success": False, "status_code": 400, "message": "Current password is required to change email"}
+
+                from app.modules.auth.service import AuthService
+                if not AuthService._verify_password(current_password, user.get("password_hash")):
+                    return {"success": False, "status_code": 400, "message": "Incorrect current password"}
+
+                # Check uniqueness
+                existing_user = UserRepository.find_by_email(new_email)
+                if existing_user and existing_user.get("user_id") != user_id:
+                    return {"success": False, "status_code": 409, "message": "A user with this email already exists"}
+
+                if AuthRepository.find_by_email(new_email):
+                    return {"success": False, "status_code": 409, "message": "This email is registered to a platform administrator"}
+
+                update_fields["email"] = new_email
+                audit_details["old_email"] = user.get("email")
+                audit_details["new_email"] = new_email
+
+        # Update password
+        new_tokens = None
+        if "password" in data or "new_password" in data:
+            new_password = str(data.get("new_password") or data.get("password"))
+            current_password = data.get("current_password")
+
+            if not current_password or not isinstance(current_password, str):
+                return {"success": False, "status_code": 400, "message": "Current password is required to change password"}
+
+            from app.modules.auth.service import AuthService
+            if not AuthService._verify_password(current_password, user.get("password_hash")):
+                return {"success": False, "status_code": 400, "message": "Incorrect current password"}
+
+            if not cls._validate_password(new_password):
+                return {"success": False, "status_code": 400, "message": "New password must be at least 12 characters and at most 72 bytes"}
+
+            bcrypt_rounds = int(current_app.config.get("BCRYPT_ROUNDS", getattr(Config, "BCRYPT_ROUNDS", 12))) if current_app else getattr(Config, "BCRYPT_ROUNDS", 12)
+            new_password_hash = bcrypt.hashpw(
+                new_password.encode("utf-8"),
+                bcrypt.gensalt(rounds=bcrypt_rounds)
+            ).decode("utf-8")
+
+            # Increment token_version to invalidate all existing tokens
+            new_token_version = user.get("token_version", 1) + 1
+            update_fields["password_hash"] = new_password_hash
+            update_fields["token_version"] = new_token_version
+            update_fields["password_changed_at"] = datetime.now(timezone.utc).isoformat()
+            audit_details["password_changed"] = True
+            audit_details["token_version"] = new_token_version
+
+            # Generate fresh replacement tokens with the new token_version
+            claims = {
+                "account_type": "ORGANIZATION_USER",
+                "organization_id": organization_id,
+                "role_ids": user.get("role_ids", []),
+                "email": update_fields.get("email", user.get("email")),
+                "token_version": new_token_version
+            }
+            new_tokens = AuthService._generate_tokens(user_id, claims)
+
+        if not update_fields:
+            return {"success": False, "status_code": 400, "message": "No valid fields provided for update"}
+
+        update_fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+        UserRepository._collection().update_one(
+            {"user_id": user_id},
+            {"$set": update_fields}
+        )
+
+        # Log security audit event
+        SecurityAuditRepository.log_event(
+            organization_id=organization_id,
+            event_type="PROFILE_UPDATED",
+            actor_id=user_id,
+            actor_email=user.get("email"),
+            target_id=user_id,
+            target_type="USER",
+            details=audit_details
+        )
+
+        updated_user = UserRepository.find_by_id(user_id)
+        response_data = {
+            "user_id": updated_user["user_id"],
+            "organization_id": updated_user["organization_id"],
+            "name": updated_user["name"],
+            "email": updated_user["email"],
+            "employee_code": updated_user.get("employee_code"),
+            "is_active": updated_user.get("is_active", True),
+            "created_at": updated_user.get("created_at"),
+            "updated_at": updated_user.get("updated_at")
+        }
+        if new_tokens:
+            response_data["access_token"] = new_tokens["access_token"]
+            response_data["refresh_token"] = new_tokens["refresh_token"]
+            response_data["token_type"] = new_tokens["token_type"]
+
+        return {
+            "success": True,
+            "message": "Profile updated successfully",
+            "data": response_data
+        }

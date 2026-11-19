@@ -11,6 +11,7 @@ from flask_jwt_extended import (
 from app.modules.auth.decorators import require_permissions
 from app.modules.auth.service import AuthService
 from app.modules.auth.repository import AuthRepository
+from app.modules.auth.otp_service import OTPService, OTPServiceError
 from app.modules.users.repository import UserRepository
 from app.modules.organizations.repository import OrganizationRepository
 
@@ -32,6 +33,9 @@ def resolve_account(identity, claims):
         if not admin or not admin.get("is_active", False):
             return None, "Platform administrator not found or inactive"
 
+        if claims.get("token_version", 1) != admin.get("token_version", 1):
+            return None, "Session expired or password changed. Please log in again."
+
         return {
             "account_type": "PLATFORM_ADMIN",
             "id": admin["admin_id"],
@@ -51,6 +55,9 @@ def resolve_account(identity, claims):
 
         if not user or not user.get("is_active", False):
             return None, "Organization user not found or inactive"
+
+        if claims.get("token_version", 1) != user.get("token_version", 1):
+            return None, "Session expired or password changed. Please log in again."
 
         organization_id = user.get("organization_id")
 
@@ -152,6 +159,76 @@ def login():
     )
 
 
+def _otp_error_response(error):
+    payload = {
+        "success": False,
+        "message": error.message
+    }
+    if error.retry_after:
+        payload["retry_after"] = error.retry_after
+    response = jsonify(payload)
+    if error.retry_after:
+        response.headers["Retry-After"] = str(error.retry_after)
+    return response, error.status_code
+
+
+@auth_bp.route("/activation/request-otp", methods=["POST"])
+def request_activation_otp():
+    data = request.get_json(silent=True) or {}
+    try:
+        result = OTPService.request_code(
+            data.get("email"),
+            OTPService.ACTIVATION,
+            client_ip=request.remote_addr
+        )
+        return jsonify(result), 200
+    except OTPServiceError as error:
+        return _otp_error_response(error)
+
+
+@auth_bp.route("/password/forgot", methods=["POST"])
+def request_password_reset_otp():
+    data = request.get_json(silent=True) or {}
+    try:
+        result = OTPService.request_code(
+            data.get("email"),
+            OTPService.PASSWORD_RESET,
+            client_ip=request.remote_addr
+        )
+        return jsonify(result), 200
+    except OTPServiceError as error:
+        return _otp_error_response(error)
+
+
+@auth_bp.route("/otp/verify", methods=["POST"])
+def verify_otp():
+    data = request.get_json(silent=True) or {}
+    try:
+        result = OTPService.verify_code(
+            data.get("email"),
+            data.get("purpose"),
+            data.get("code"),
+            client_ip=request.remote_addr
+        )
+        return jsonify(result), 200
+    except OTPServiceError as error:
+        return _otp_error_response(error)
+
+
+@auth_bp.route("/otp/set-password", methods=["POST"])
+def set_password_with_otp():
+    data = request.get_json(silent=True) or {}
+    try:
+        result = OTPService.set_password(
+            data.get("purpose"),
+            data.get("reset_token"),
+            data.get("password")
+        )
+        return jsonify(result), 200
+    except OTPServiceError as error:
+        return _otp_error_response(error)
+
+
 @auth_bp.route("/me", methods=["GET"])
 @jwt_required()
 def get_current_account():
@@ -190,19 +267,23 @@ def refresh():
 
     if account["account_type"] == "PLATFORM_ADMIN":
 
+        admin = AuthRepository.find_by_id(identity)
         additional_claims = {
             "account_type": "PLATFORM_ADMIN",
             "role": account["role"],
-            "email": account["email"]
+            "email": account["email"],
+            "token_version": admin.get("token_version", 1)
         }
 
     else:
 
+        user = UserRepository.find_by_id(identity)
         additional_claims = {
             "account_type": "ORGANIZATION_USER",
             "organization_id": account["organization_id"],
             "role_ids": account["role_ids"],
-            "email": account["email"]
+            "email": account["email"],
+            "token_version": user.get("token_version", 1)
         }
 
     new_access_token = create_access_token(

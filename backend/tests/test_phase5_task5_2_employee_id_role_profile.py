@@ -7,6 +7,7 @@ from app.modules.organizations.role_repository import RoleRepository
 from app.modules.users.repository import UserRepository
 from app.modules.applications.repository import ApplicationRepository
 from app.modules.auth.service import AuthService
+from app.modules.users.service import UserService
 from flask_jwt_extended import create_access_token
 
 
@@ -584,20 +585,30 @@ def test_cross_organization_role_assignment_rejected(client, setup_tenants):
     assert "does not belong to your organization" in res.get_json()["message"]
 
 
-def test_last_active_admin_protection_preserved(client, setup_tenants):
+def test_last_active_admin_protection_preserved(client, setup_tenants, app):
     """Cannot strip ORG_ADMIN privileges from the only active administrator in the organization."""
     ctx = setup_tenants
     headers = {"Authorization": f"Bearer {ctx['token_admin_a']}"}
     admin_id = ctx["admin_a"]["user_id"]
 
     # Attempt to reassign Org Admin to read-only Role A
+    # Self-role modification blocked with 403 Forbidden under Task 5.3
     res = client.post(
         f"/api/v1/users/{admin_id}/roles",
         headers=headers,
         json={"role_ids": [ctx["role_a"]["role_id"]]}
     )
-    assert res.status_code == 409
-    assert "last active administrator" in res.get_json()["message"]
+    assert res.status_code == 403
+    assert "cannot modify your own roles" in res.get_json()["message"].lower()
+
+    # Last active administrator protection preserved when called by another actor (409)
+    with app.app_context():
+        service_res = UserService.assign_user_roles(
+            admin_id, ctx["org_a"],
+            {"role_ids": [ctx["role_a"]["role_id"]]}, actor_id="another_actor"
+        )
+        assert service_res.get("status_code") == 409
+        assert "last active administrator" in service_res.get("message", "").lower()
 
 
 # ============================================================================

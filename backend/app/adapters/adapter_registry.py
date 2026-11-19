@@ -86,6 +86,13 @@ class AdapterRegistry:
         # 1. MOCK MULTI-CHANNEL PROVIDER
         # --------------------------------------------------
         if provider == "mock":
+            environment = (
+                current_app.config.get("APP_ENV", "development")
+                if has_app_context()
+                else os.getenv("APP_ENV", "development")
+            )
+            if str(environment).strip().lower() == "production":
+                raise ValueError("Mock providers are disabled in production")
             if channel == "email" or channel is None:
                 return MockEmailAdapter()
             if channel == "sms":

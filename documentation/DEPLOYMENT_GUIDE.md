@@ -10,14 +10,17 @@
 ---
 
 ## 2. Environment Configuration
-Create a `.env` file in `backend/` based on `backend/.env.example`:
+For Docker Compose, create a `.env` file in the repository root. For direct
+Windows development, create `backend/.env` from `backend/.env.example`.
 
 ```env
 APP_NAME=SenderX
 APP_ENV=production
 DEBUG=False
-SECRET_KEY=your_production_secret_key_here
-CREDENTIAL_ENCRYPTION_KEY=B45B4HB-FzqHcEGTyh6W5FdKBKl2FRB9DHsyZVriewY=
+SECRET_KEY=<generate-a-unique-random-secret>
+CREDENTIAL_ENCRYPTION_KEY=<generate-a-unique-fernet-key>
+OTP_HMAC_SECRET=<generate-a-separate-random-secret-of-at-least-32-characters>
+AUTH_OTP_EMAIL_PROVIDER=sendgrid
 
 # Database
 MONGO_URI=mongodb+srv://<user>:<password>@cluster0.ghm7ofm.mongodb.net/?compressors=zlib
@@ -27,10 +30,29 @@ MONGO_DB=SenderX_db
 REDIS_URL=redis://localhost:6379/0
 RABBITMQ_URL=amqp://guest:guest@localhost:5672//
 
-# Live SendGrid Provider
+# Live SendGrid Provider (verified sender required)
 SENDGRID_API_KEY=SG.your_verified_api_key_here
 SENDGRID_FROM_EMAIL=verified_sender@domain.com
 ```
+
+For production, set these values in the deployment secret manager or an untracked
+`.env` file; do not commit real credentials. Generate secrets with:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Use distinct random values for `SECRET_KEY` and `OTP_HMAC_SECRET`; the latter
+must be at least 32 characters and must be identical in the API and Celery
+worker. Configure exactly one platform email provider through the SUPER_ADMIN
+provider configuration or deployment environment. If multiple providers are
+configured, set `AUTH_OTP_EMAIL_PROVIDER` explicitly. Production rejects mock
+providers and does not fall back to them. Email delivery requires a live
+provider account, a verified sender, and a running Celery worker; Redis and
+RabbitMQ must also be reachable. Keep the OTP secret unchanged across the API
+and worker and during rolling deployments; queued OTP messages cannot be
+decrypted if the key changes before delivery.
 
 ---
 

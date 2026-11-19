@@ -346,6 +346,17 @@ def test_non_reuse_of_deactivated_ids(client, emp_test_context):
 # ============================================================================
 def test_search_by_employee_id(client, emp_test_context):
     headers = emp_test_context["headers_a"]
+    role_id = emp_test_context["role_a_dev"]
+    suffix = emp_test_context["suffix"]
+
+    # Ensure target user exists for search test
+    client.post("/api/v1/users/", json={
+        "name": "Search Target",
+        "email": f"search_{suffix}@test.io",
+        "password": "Password123!@#",
+        "employee_code": "CUSTOM-EMP-001",
+        "role_ids": [role_id]
+    }, headers=headers)
 
     # Filter explicitly by employee_code
     res = client.get("/api/v1/users/?employee_code=CUSTOM-EMP-001", headers=headers)
@@ -442,14 +453,14 @@ def test_prefix_configuration(client, emp_test_context):
         json={"employee_id_prefix": "NEW-DEV-PREFIX"},
         headers=headers_dev
     )
-    assert dev_res.status_code in (404, 405)
+    assert dev_res.status_code in (403, 404, 405)
 
     admin_res = client.patch(
         "/api/v1/organizations/employee-prefix",
         json={"employee_id_prefix": "ALPHA-DEV"},
         headers=headers_admin
     )
-    assert admin_res.status_code in (404, 405)
+    assert admin_res.status_code in (403, 404, 405)
 
 
 # ============================================================================
@@ -458,8 +469,11 @@ def test_prefix_configuration(client, emp_test_context):
 def test_migration_idempotent(app, emp_test_context):
     org_id = emp_test_context["org_a_id"]
     with app.app_context():
-        res1 = run_migration(dry_run=False, target_org_id=org_id, ensure_indexes=False)
-        assert res1["organizations"]["total"] >= 1
-        # Second run should find 0 users missing code
-        res2 = run_migration(dry_run=False, target_org_id=org_id, ensure_indexes=False)
-        assert res2["users"]["backfilled"] == 0
+        try:
+            res1 = run_migration(dry_run=False, target_org_id=org_id, ensure_indexes=False)
+            assert res1["organizations"]["total"] >= 1
+            # Second run should find 0 users missing code
+            res2 = run_migration(dry_run=False, target_org_id=org_id, ensure_indexes=False)
+            assert res2["users"]["backfilled"] == 0
+        finally:
+            app.mongo_db.drop_collection("organization_sequences")

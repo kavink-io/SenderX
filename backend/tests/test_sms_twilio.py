@@ -668,7 +668,8 @@ def test_mock_vs_production_separation(test_setup, app):
         assert isinstance(mock_adapter, MockSMSAdapter)
 
         # Provider twilio never returns MockSMSAdapter
-        with patch("app.adapters.sms.twilio_adapter.Client"):
+        with patch("app.adapters.sms.twilio_adapter.Client"), \
+             patch("app.modules.provider_config.service.ProviderConfigService.get_decrypted_configuration", return_value={"account_sid": "AC1234567890abcdef1234567890abcdef", "auth_token": "authtoken123456", "from_number": "+15005550006"}):
             prod_adapter = AdapterRegistry.get_adapter(provider="twilio", channel="sms", organization_id=org_a)
             assert isinstance(prod_adapter, TwilioSMSAdapter)
             assert not isinstance(prod_adapter, MockSMSAdapter)

@@ -114,12 +114,26 @@ const ApiClient = {
         if (refreshed) {
           headers["Authorization"] = `Bearer ${this.getAccessToken()}`;
           const retryRes = await fetch(url, { ...options, headers });
+          if (retryRes.status === 401 || retryRes.status === 403) {
+            window.dispatchEvent(new CustomEvent("sx_permission_denied", {
+              detail: { status: retryRes.status, endpoint }
+            }));
+          }
           return await retryRes.json();
         } else {
           this.clearTokens();
           window.dispatchEvent(new CustomEvent("sx_logout"));
+          window.dispatchEvent(new CustomEvent("sx_permission_denied", {
+            detail: { status: 401, endpoint }
+          }));
           throw new Error("Session expired. Please sign in again.");
         }
+      }
+
+      if (response.status === 403) {
+        window.dispatchEvent(new CustomEvent("sx_permission_denied", {
+          detail: { status: 403, endpoint }
+        }));
       }
 
       const json = await response.json();
@@ -165,6 +179,38 @@ const ApiClient = {
       this.setStoredAccount(res.data.account);
     }
     return res;
+  },
+
+  async requestActivationOtp(email) {
+    return await this.request("/auth/activation/request-otp", {
+      method: "POST",
+      body: JSON.stringify({ email })
+    });
+  },
+
+  async requestPasswordResetOtp(email) {
+    return await this.request("/auth/password/forgot", {
+      method: "POST",
+      body: JSON.stringify({ email })
+    });
+  },
+
+  async verifyOtp(email, purpose, code) {
+    return await this.request("/auth/otp/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, purpose, code })
+    });
+  },
+
+  async setPasswordWithOtp(purpose, resetToken, password) {
+    return await this.request("/auth/otp/set-password", {
+      method: "POST",
+      body: JSON.stringify({
+        purpose,
+        reset_token: resetToken,
+        password
+      })
+    });
   },
 
   async getCurrentAccount() {
@@ -216,6 +262,66 @@ const ApiClient = {
     });
   },
 
+  // Phase 5 Task 5.3: Profile & Change Requests & Deletion
+  async updateMyProfile(data) {
+    const res = await this.request("/users/me/profile", {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+    if (res.success && res.data && res.data.access_token) {
+      this.setTokens(res.data.access_token, res.data.refresh_token);
+    }
+    return res;
+  },
+
+  async submitChangeRequest(data) {
+    return await this.request("/organizations/change-requests", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
+
+  async listOrgChangeRequests(page = 1, limit = 50) {
+    return await this.request(`/organizations/change-requests?page=${page}&limit=${limit}`);
+  },
+
+  async cancelChangeRequest(requestId) {
+    return await this.request(`/organizations/change-requests/${requestId}/cancel`, {
+      method: "POST"
+    });
+  },
+
+  async listPlatformChangeRequests(page = 1, limit = 50, filters = {}) {
+    let query = `?page=${page}&limit=${limit}`;
+    if (filters.status && filters.status !== "ALL") query += `&status=${encodeURIComponent(filters.status)}`;
+    if (filters.search) query += `&search=${encodeURIComponent(filters.search)}`;
+    return await this.request(`/platform/change-requests${query}`);
+  },
+
+  async approveChangeRequest(requestId) {
+    return await this.request(`/platform/change-requests/${requestId}/approve`, {
+      method: "POST"
+    });
+  },
+
+  async rejectChangeRequest(requestId, rejectionReason) {
+    return await this.request(`/platform/change-requests/${requestId}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ rejection_reason: rejectionReason })
+    });
+  },
+
+  async getOrgDeletionSummary(orgId) {
+    return await this.request(`/organizations/${orgId}/deletion-summary`);
+  },
+
+  async deleteOrganization(orgId, confirmSlug) {
+    return await this.request(`/organizations/${orgId}/delete`, {
+      method: "POST",
+      body: JSON.stringify({ confirm_slug: confirmSlug })
+    });
+  },
+
   // Users & Roles
   async listUsers(page = 1, limit = 50, filters = {}) {
     let query = `?page=${page}&limit=${limit}`;
@@ -262,7 +368,19 @@ const ApiClient = {
     });
   },
 
+  async resendActivationOtp(userId) {
+    return await this.request(`/users/${userId}/activation/resend`, {
+      method: "POST"
+    });
+  },
+
   async deactivateUser(userId) {
+    return await this.request(`/users/${userId}/deactivate`, {
+      method: "POST"
+    });
+  },
+
+  async deleteUser(userId) {
     return await this.request(`/users/${userId}`, {
       method: "DELETE"
     });
@@ -304,6 +422,12 @@ const ApiClient = {
     let query = `?page=${page}&limit=${limit}`;
     if (filters.target_id) query += `&target_id=${encodeURIComponent(filters.target_id)}`;
     if (filters.event_type) query += `&event_type=${encodeURIComponent(filters.event_type)}`;
+    if (filters.search) query += `&search=${encodeURIComponent(filters.search)}`;
+    if (filters.action) query += `&action=${encodeURIComponent(filters.action)}`;
+    if (filters.actor) query += `&actor=${encodeURIComponent(filters.actor)}`;
+    if (filters.start_date) query += `&start_date=${encodeURIComponent(filters.start_date)}`;
+    if (filters.end_date) query += `&end_date=${encodeURIComponent(filters.end_date)}`;
+    if (filters.result) query += `&result=${encodeURIComponent(filters.result)}`;
     return await this.request(`/users/audit-logs${query}`);
   },
 
