@@ -1,15 +1,19 @@
 """
 SenderX Template Security Module
-Save-time validation, AST inspection, sandboxed Jinja2 execution, and safe variable injection.
+Save-time validation, AST inspection, CSS allowlisting & value validation,
+sandboxed Jinja2 execution, and safe variable injection.
 """
 
 import re
 import html
 import time
 import jinja2
-from jinja2 import nodes, StrictUndefined
+from jinja2 import nodes, StrictUndefined, pass_environment
 from jinja2.sandbox import SandboxedEnvironment, SecurityError
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+import bleach
+from bleach.css_sanitizer import CSSSanitizer
 
 
 # ==============================================================================
@@ -24,6 +28,47 @@ PROHIBITED_TAGS = {
 PROHIBITED_ATTR_PREFIXES = ("on",)  # onclick, onerror, onload, onmouseover, etc.
 DANGEROUS_PROTOCOLS = ("javascript:", "vbscript:", "data:")
 
+# Explicit CSS property allowlist strictly needed for email layouts
+ALLOWED_CSS_PROPERTIES = frozenset([
+    # Box model & Spacing
+    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+    "width", "min-width", "max-width",
+    "height", "min-height", "max-height",
+    "box-sizing", "display", "overflow", "opacity",
+    # Typography
+    "font", "font-family", "font-size", "font-weight", "font-style",
+    "line-height", "letter-spacing",
+    "text-align", "text-decoration", "text-transform", "text-indent",
+    "word-break", "word-wrap",
+    # Colors & Backgrounds
+    "color", "background-color", "background",
+    # Borders & Table styling
+    "border", "border-width", "border-style", "border-color", "border-radius",
+    "border-top", "border-right", "border-bottom", "border-left",
+    "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
+    "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
+    "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+    "border-collapse", "border-spacing", "table-layout", "vertical-align",
+    "outline",
+    # Email client resets & Outlook compatibility
+    "-webkit-text-size-adjust", "-ms-text-size-adjust",
+    "mso-table-lspace", "mso-table-rspace", "mso-line-height-rule"
+])
+
+SAFE_COLOR_NAMES = frozenset([
+    "transparent", "inherit", "initial", "currentcolor",
+    "black", "white", "red", "green", "blue", "yellow", "orange", "purple",
+    "cyan", "magenta", "gray", "grey", "silver", "maroon", "navy", "olive",
+    "teal", "aqua", "fuchsia", "lime", "gold", "pink", "brown",
+    "coral", "indigo", "violet", "khaki", "plum", "salmon", "tan", "turquoise",
+    "beige", "azure", "ivory", "lavender", "linen", "snow", "wheat", "crimson"
+])
+
+HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+RGB_COLOR_RE = re.compile(r"^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+)\s*)?\)$", re.IGNORECASE)
+HSL_COLOR_RE = re.compile(r"^hsla?\(\s*\d{1,3}\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?(?:\s*,\s*(?:0|1|0?\.\d+)\s*)?\)$", re.IGNORECASE)
+
 CSS_DANGEROUS_PATTERNS = [
     (re.compile(r"expression\s*\(", re.IGNORECASE), "CSS expression() execution"),
     (re.compile(r"behavior\s*:", re.IGNORECASE), "CSS behavior: HTC component"),
@@ -31,6 +76,129 @@ CSS_DANGEROUS_PATTERNS = [
     (re.compile(r"@import\b", re.IGNORECASE), "CSS @import external stylesheet"),
     (re.compile(r"url\s*\(\s*['\"]?(?!https:\/\/)[^'\")]+['\"]?\s*\)", re.IGNORECASE), "CSS url() pointing to non-https resource")
 ]
+
+
+def is_safe_css_color(color_str: str) -> bool:
+    """Validate CSS color value against supported safe formats."""
+    clean = color_str.strip().lower()
+    if clean in SAFE_COLOR_NAMES:
+        return True
+    if HEX_COLOR_RE.match(clean):
+        return True
+    if RGB_COLOR_RE.match(clean):
+        return True
+    if HSL_COLOR_RE.match(clean):
+        return True
+    return False
+
+
+def validate_css_property(prop_name: str, prop_value: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validate a single CSS property name and its value:
+    - Name must be in ALLOWED_CSS_PROPERTIES allowlist
+    - Value must not contain dangerous expressions, protocols, scripts, imports, or control chars
+    - Colors must match safe formats (hex, rgb, hsl, safe named color)
+    """
+    prop = prop_name.strip().lower()
+    val = prop_value.strip()
+
+    if not prop or not val:
+        return False, "Empty property or value"
+
+    if prop not in ALLOWED_CSS_PROPERTIES:
+        return False, f"Disallowed CSS property '{prop}'"
+
+    # Reject control characters (0x00 - 0x1F except space and tab)
+    for ch in val:
+        if ord(ch) < 32 and ch not in (" ", "\t"):
+            return False, f"Illegal control character in CSS property '{prop}'"
+
+    val_lower = val.lower()
+
+    # Reject CSS expressions, behavior, -moz-binding, @import
+    if re.search(r"expression\s*\(", val_lower):
+        return False, f"CSS expression() forbidden in property '{prop}'"
+    if "behavior" in val_lower or "-moz-binding" in val_lower:
+        return False, f"CSS behavior / binding forbidden in property '{prop}'"
+    if "@import" in val_lower:
+        return False, f"CSS @import forbidden in property '{prop}'"
+    if "javascript:" in val_lower or "vbscript:" in val_lower:
+        return False, f"Script execution protocol forbidden in property '{prop}'"
+    if "data:" in val_lower:
+        return False, f"Data URL forbidden in property '{prop}'"
+    if "var(" in val_lower:
+        return False, f"CSS custom property var() forbidden in property '{prop}'"
+    if "\\" in val:
+        return False, f"Backslash escape sequences forbidden in property '{prop}'"
+
+    # URL references: must be https:// only
+    if "url(" in val_lower:
+        url_match = re.search(r"url\s*\(\s*['\"]?([^'\")]+)['\"]?\s*\)", val_lower)
+        if not url_match or not url_match.group(1).startswith("https://"):
+            return False, f"Unapproved or non-https URL reference in property '{prop}'"
+
+    # Color validation for explicit color properties
+    if prop in ("color", "background-color", "border-color", "border-top-color",
+                "border-right-color", "border-bottom-color", "border-left-color"):
+        tokens = [t.strip().rstrip(";") for t in val.split() if t.strip()]
+        for tok in tokens:
+            if tok.lower() in ("!important", "!important;"):
+                continue
+            if not is_safe_css_color(tok):
+                return False, f"Invalid or unsafe CSS color '{tok}' in property '{prop}'"
+
+    return True, None
+
+
+def sanitize_inline_css(style_str: str) -> str:
+    """
+    Parse inline CSS style attribute, validate all declarations,
+    and return only safe, allowed property-value pairs.
+    """
+    if not style_str:
+        return ""
+
+    safe_declarations = []
+    # Split on semicolon, taking care of basic properties
+    for decl in style_str.split(";"):
+        decl = decl.strip()
+        if not decl or ":" not in decl:
+            continue
+        parts = decl.split(":", 1)
+        prop = parts[0].strip()
+        val = parts[1].strip()
+
+        is_valid, _ = validate_css_property(prop, val)
+        if is_valid:
+            safe_declarations.append(f"{prop}: {val}")
+
+    return "; ".join(safe_declarations)
+
+
+def sanitize_html_css_boundary(html_text: str) -> str:
+    """
+    Final boundary sanitizer: enforces that only allowed CSS properties survive in inline style attributes,
+    and strips any dangerous protocols in attributes.
+    """
+    if not html_text:
+        return ""
+
+    def _clean_style_match(m):
+        raw_style = m.group(2)
+        sanitized = sanitize_inline_css(raw_style)
+        return f'style="{sanitized}"' if sanitized else ""
+
+    cleaned = re.sub(r'style=(["\'])(.*?)\1', _clean_style_match, html_text, flags=re.DOTALL)
+
+    for proto in ("javascript:", "vbscript:", "data:"):
+        cleaned = re.sub(
+            rf"""\b(href|src|action|background|formaction)\s*=\s*(["\'])\s*{proto}[^"']*\2""",
+            "",
+            cleaned,
+            flags=re.IGNORECASE
+        )
+
+    return cleaned
 
 
 class TemplateSecurityError(ValueError):
@@ -83,7 +251,7 @@ class TemplateSecurityInspector:
                 if val.startswith(proto):
                     findings.append(f"Forbidden URL protocol '{proto}' detected in attribute: {val[:30]}")
 
-        # 4. Inline style dangerous patterns
+        # 4. Inline style inspection
         style_attr_pattern = re.compile(r"""style\s*=\s*['"]([^'"]+)['"]""", re.IGNORECASE)
         for match in style_attr_pattern.finditer(html_content):
             style_content = match.group(1)
@@ -94,7 +262,8 @@ class TemplateSecurityInspector:
     @classmethod
     def inspect_css(cls, css_content: str, context: str = "CSS stylesheet") -> List[str]:
         """
-        Inspect CSS content for expressions, behaviors, imports, and non-https URLs.
+        Inspect CSS content for expressions, behaviors, imports, and non-https URLs,
+        as well as property allowlist violations.
         """
         if not css_content:
             return []
@@ -104,9 +273,23 @@ class TemplateSecurityInspector:
             if pattern.search(css_content):
                 findings.append(f"Forbidden pattern in {context}: {desc}")
 
-        # Check for javascript: in CSS
+        # Check for script execution protocols in CSS
         if "javascript:" in css_content.lower() or "vbscript:" in css_content.lower():
             findings.append(f"Forbidden script execution protocol in {context}")
+
+        # Inspect individual declarations
+        clean_css = re.sub(r"/\*.*?\*/", "", css_content, flags=re.DOTALL)
+        # Match declarations: property: value
+        decl_pattern = re.compile(r"([a-zA-Z0-9_\-]+)\s*:\s*([^;\}]+)")
+        for match in decl_pattern.finditer(clean_css):
+            prop = match.group(1).strip().lower()
+            val = match.group(2).strip()
+            # If in @media rule or container, ignore media query condition syntax
+            if prop.startswith("@") or "screen" in prop:
+                continue
+            is_valid, reason = validate_css_property(prop, val)
+            if not is_valid and reason:
+                findings.append(f"{reason} in {context}")
 
         return list(dict.fromkeys(findings))
 
@@ -114,7 +297,8 @@ class TemplateSecurityInspector:
     def sanitize_rich_html(cls, rich_html: str, max_size_bytes: int = 100 * 1024) -> str:
         """
         Sanitize allowed rich body content (e.g. body_html) using an allowlist approach.
-        Removes dangerous tags while preserving safe formatting.
+        Removes dangerous tags while preserving safe formatting. Uses bleach with
+        tinycss2 CSSSanitizer and safe inline CSS post-sanitization.
         """
         if not rich_html:
             return ""
@@ -122,7 +306,6 @@ class TemplateSecurityInspector:
         if len(rich_html.encode("utf-8")) > max_size_bytes:
             raise ValueError(f"Rich HTML content exceeds limit of {max_size_bytes // 1024} KB")
 
-        import bleach
         allowed_tags = [
             "a", "abbr", "b", "blockquote", "br", "code", "div", "em", "h1", "h2",
             "h3", "h4", "h5", "h6", "hr", "i", "img", "li", "ol", "p", "pre",
@@ -139,23 +322,37 @@ class TemplateSecurityInspector:
         }
         allowed_protocols = ["http", "https", "mailto", "tel"]
 
-        # Clean with bleach
+        # Configure Bleach CSSSanitizer with allowed properties
+        css_sanitizer = CSSSanitizer(allowed_css_properties=list(ALLOWED_CSS_PROPERTIES))
+
         cleaned = bleach.clean(
             rich_html,
             tags=allowed_tags,
             attributes=allowed_attrs,
             protocols=allowed_protocols,
+            css_sanitizer=css_sanitizer,
             strip=True
         )
+
+        # Secondary deep value sanitization for style attributes (removes expressions/invalid colors)
+        def _clean_style_match(m):
+            raw_style = m.group(1)
+            sanitized_style = sanitize_inline_css(raw_style)
+            return f'style="{sanitized_style}"' if sanitized_style else ""
+
+        cleaned = re.sub(r'style="([^"]*)"', _clean_style_match, cleaned)
         return cleaned
 
 
 # ==============================================================================
-# 2. SANDBOXED JINJA2 ENVIRONMENT
+# 2. SANDBOXED JINJA2 ENVIRONMENT & RESOURCE CONTROLS
 # ==============================================================================
 
+MAX_TEMPLATE_SOURCE_BYTES = 64 * 1024   # 64 KB
 MAX_RENDERED_OUTPUT_BYTES = 256 * 1024  # 256 KB
 MAX_RENDER_SECONDS = 1.0
+MAX_CONTEXT_VARIABLES = 100
+MAX_CONTEXT_DEPTH = 5
 
 
 def safe_range(*args):
@@ -180,13 +377,44 @@ def safe_range(*args):
     return range(*args)
 
 
+# Bounded Jinja filter implementations
+def safe_center(val, width=80):
+    if int(width) > 1000:
+        raise SecurityError("Filter width exceeds safe limit (max 1000)")
+    return jinja2.filters.do_center(val, width)
+
+
+def safe_indent(s, width=4, first=False, blank=False):
+    if int(width) > 200:
+        raise SecurityError("Filter indent width exceeds safe limit (max 200)")
+    return jinja2.filters.do_indent(s, width, first, blank)
+
+
+@pass_environment
+def safe_wordwrap(*args, **kwargs):
+    if len(args) > 0 and hasattr(args[0], "newline_sequence"):
+        env_arg = args[0]
+        s = args[1] if len(args) > 1 else kwargs.pop("s", "")
+        width = args[2] if len(args) > 2 else kwargs.pop("width", 79)
+        rest = args[3:]
+    else:
+        env_arg = jinja2.Environment()
+        s = args[0] if len(args) > 0 else kwargs.pop("s", "")
+        width = args[1] if len(args) > 1 else kwargs.pop("width", 79)
+        rest = args[2:]
+
+    if int(width) > 1000:
+        raise SecurityError("Filter wordwrap width exceeds safe limit (max 1000)")
+    return jinja2.filters.do_wordwrap(env_arg, s, width=width, *rest, **kwargs)
+
+
 class SenderXSandboxedEnvironment(SandboxedEnvironment):
     """
     Hardened sandboxed Jinja2 environment enforcing StrictUndefined,
     blocking private attribute access, imports, includes, and extends.
     Intercepts binary operations to prevent resource exhaustion bombs.
     """
-    intercepted_binops = frozenset(["*", "**", "+"])
+    intercepted_binops = frozenset(["*", "**", "+", "-"])
 
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("autoescape", True)
@@ -195,6 +423,10 @@ class SenderXSandboxedEnvironment(SandboxedEnvironment):
         kwargs.setdefault("lstrip_blocks", True)
         super().__init__(*args, **kwargs)
         self.globals["range"] = safe_range
+        # Register bounded filters
+        self.filters["center"] = safe_center
+        self.filters["indent"] = safe_indent
+        self.filters["wordwrap"] = safe_wordwrap
 
     def call_binop(self, context, operator, left, right):
         if operator == "*":
@@ -208,9 +440,16 @@ class SenderXSandboxedEnvironment(SandboxedEnvironment):
                     raise SecurityError(
                         f"Multiplication output size ({len(right) * left // 1024} KB) exceeds maximum limit ({MAX_RENDERED_OUTPUT_BYTES // 1024} KB)"
                     )
+            elif isinstance(left, int) and isinstance(right, int):
+                if abs(left) > 10**12 or abs(right) > 10**12:
+                    raise SecurityError("Numeric multiplication operand exceeds safe limit")
         elif operator == "**":
-            if isinstance(right, (int, float)) and right > 100:
-                raise SecurityError("Exponentiation power exceeds safe limit (max 100)")
+            if isinstance(right, (int, float)) and (right >= 50 or (isinstance(left, (int, float)) and left > 10**6)):
+                raise SecurityError("Exponentiation power exceeds safe limit (max 50)")
+        elif operator in ("+", "-"):
+            if isinstance(left, int) and isinstance(right, int):
+                if abs(left) > 10**14 or abs(right) > 10**14:
+                    raise SecurityError("Numeric operand exceeds safe integer limit")
         return super().call_binop(context, operator, left, right)
 
     def is_safe_attribute(self, obj, attr, value):
@@ -222,22 +461,50 @@ class SenderXSandboxedEnvironment(SandboxedEnvironment):
     def is_safe_callable(self, obj):
         """Disallow executing raw callables unless explicitly whitelisted."""
         if callable(obj):
-            # Allow basic filters / formatters only
             return super().is_safe_callable(obj)
         return True
 
 
+def validate_context_structure(context: Dict[str, Any], max_vars: int = MAX_CONTEXT_VARIABLES, max_depth: int = MAX_CONTEXT_DEPTH):
+    """Enforce limits on total variable count, collection sizes, and nesting depth."""
+    if not isinstance(context, dict):
+        raise ValueError("Context must be a dictionary")
+
+    if len(context) > max_vars:
+        raise ValueError(f"Template context variable count ({len(context)}) exceeds maximum allowed limit ({max_vars})")
+
+    def _check_depth(val: Any, current_depth: int):
+        if current_depth > max_depth:
+            raise ValueError(f"Context nesting depth exceeds maximum allowed depth of {max_depth}")
+        if isinstance(val, dict):
+            for v in val.values():
+                _check_depth(v, current_depth + 1)
+        elif isinstance(val, (list, tuple)):
+            if len(val) > 1000:
+                raise ValueError(f"Collection length ({len(val)}) exceeds maximum limit of 1000 items")
+            for item in val:
+                _check_depth(item, current_depth + 1)
+
+    for val in context.values():
+        _check_depth(val, 1)
+
+
 class TemplateSandboxRunner:
-    """Executes template rendering with AST inspection and size/time limits."""
+    """Executes template rendering with AST inspection, size, depth, and time limits."""
 
     @classmethod
     def inspect_ast(cls, template_text: str, name: str = "template"):
         """
         Parse Jinja AST to catch dunder navigation, import/include/extends,
-        macro recursion attempts, and nested loop bombs before execution.
+        macro recursion attempts, huge filter arguments, and nested loop bombs before execution.
         """
         if not template_text:
             return
+
+        if len(template_text.encode("utf-8")) > MAX_TEMPLATE_SOURCE_BYTES:
+            raise ValueError(
+                f"Template source size ({len(template_text.encode('utf-8')) // 1024} KB) exceeds maximum limit of {MAX_TEMPLATE_SOURCE_BYTES // 1024} KB"
+            )
 
         env = SenderXSandboxedEnvironment(autoescape=False)
 
@@ -290,6 +557,13 @@ class TemplateSandboxRunner:
                     if isinstance(arg, nodes.Const) and isinstance(arg.value, (int, float)) and arg.value > 500:
                         raise ValueError(f"Template complexity error in {name}: range({arg.value}) exceeds maximum 500 items")
 
+        # Check filter calls with enormous numeric arguments
+        for filter_node in ast.find_all(nodes.Filter):
+            if filter_node.name in ("center", "indent", "wordwrap"):
+                for arg in filter_node.args:
+                    if isinstance(arg, nodes.Const) and isinstance(arg.value, (int, float)) and arg.value > 1000:
+                        raise ValueError(f"Filter argument error in {name}: '{filter_node.name}({arg.value})' exceeds safe limit (max 1000)")
+
     @classmethod
     def render(
         cls,
@@ -305,6 +579,10 @@ class TemplateSandboxRunner:
             return ""
 
         cls.inspect_ast(template_text)
+
+        # Validate input context variable count and nesting depth
+        if context:
+            validate_context_structure(context)
 
         env = SenderXSandboxedEnvironment(autoescape=autoescape)
 
@@ -397,7 +675,6 @@ def sanitize_variable_value(
         return ""
 
     if not isinstance(val, str):
-        # Convert numbers/booleans to string
         val_str = str(val)
     else:
         val_str = val
@@ -429,12 +706,11 @@ def sanitize_variable_value(
 
     elif var_type == "color":
         clean_color = val_str.strip()
-        if not COLOR_HEX_PATTERN.match(clean_color):
+        if not HEX_COLOR_RE.match(clean_color):
             raise ValueError(f"Variable '{name}' must be a valid hex color (#RGB or #RRGGBB)")
         return clean_color
 
     elif var_type == "rich":
-        # Rich content is passed through allowlist sanitizer
         return TemplateSecurityInspector.sanitize_rich_html(val_str)
 
     return val_str

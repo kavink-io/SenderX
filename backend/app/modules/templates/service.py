@@ -723,6 +723,20 @@ class TemplateService:
             target_footer = ""
             target_plain = ""
 
+            # Enforce security scanning on draft previews
+            sec_findings = []
+            if target_html:
+                sec_findings.extend(TemplateSecurityInspector.inspect_html(target_html))
+            if target_css:
+                sec_findings.extend(TemplateSecurityInspector.inspect_css(target_css))
+            if sec_findings:
+                return {
+                    "success": False,
+                    "status_code": 400,
+                    "message": "Template security validation failed: " + "; ".join(sec_findings),
+                    "security_findings": sec_findings
+                }
+
         # Merge sample values
         merged_context: Dict[str, Any] = {}
         missing_required = []

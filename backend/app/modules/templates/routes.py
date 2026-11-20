@@ -77,7 +77,10 @@ D. Unknown Key in Strict Mode Rejected (HTTP 422):
 
 from flask import Blueprint, request, jsonify, g, current_app
 from app.modules.auth.decorators import require_permissions
-from app.modules.api_credentials.rate_limiter import DistributedRateLimiter
+from app.modules.api_credentials.rate_limiter import (
+    DistributedRateLimiter,
+    RateLimiterError
+)
 from app.modules.templates.service import TemplateService
 
 templates_bp = Blueprint("templates", __name__)
@@ -117,12 +120,21 @@ def create_template():
 @require_permissions("organization:templates:read")
 def validate_template():
     user_id = g.current_user.get("user_id") or g.current_user.get("email") or "anonymous"
-    is_allowed, retry_after = DistributedRateLimiter.check_rate_limit(
-        dimension="template_validate",
-        identifier=str(user_id),
-        limit=current_app.config.get("RATE_LIMIT_TEMPLATE_VALIDATE_RPM", 60),
-        window_seconds=60
-    )
+    try:
+        is_allowed, retry_after = DistributedRateLimiter.check_rate_limit(
+            dimension="template_validate",
+            identifier=str(user_id),
+            limit=current_app.config.get("RATE_LIMIT_TEMPLATE_VALIDATE_RPM", 60),
+            window_seconds=60,
+            fail_closed=True
+        )
+    except RateLimiterError:
+        current_app.logger.error("Rate limiter service unavailable for template validate")
+        return jsonify({
+            "success": False,
+            "message": "Rate limiting service temporarily unavailable. Please retry later."
+        }), 503
+
     if not is_allowed:
         resp = jsonify({
             "success": False,
@@ -158,12 +170,21 @@ def validate_template():
 @require_permissions("organization:templates:read")
 def preview_template_general():
     user_id = g.current_user.get("user_id") or g.current_user.get("email") or "anonymous"
-    is_allowed, retry_after = DistributedRateLimiter.check_rate_limit(
-        dimension="template_preview",
-        identifier=str(user_id),
-        limit=current_app.config.get("RATE_LIMIT_TEMPLATE_PREVIEW_RPM", 60),
-        window_seconds=60
-    )
+    try:
+        is_allowed, retry_after = DistributedRateLimiter.check_rate_limit(
+            dimension="template_preview",
+            identifier=str(user_id),
+            limit=current_app.config.get("RATE_LIMIT_TEMPLATE_PREVIEW_RPM", 60),
+            window_seconds=60,
+            fail_closed=True
+        )
+    except RateLimiterError:
+        current_app.logger.error("Rate limiter service unavailable for template preview")
+        return jsonify({
+            "success": False,
+            "message": "Rate limiting service temporarily unavailable. Please retry later."
+        }), 503
+
     if not is_allowed:
         resp = jsonify({
             "success": False,
@@ -198,16 +219,25 @@ def preview_template_general():
     return jsonify(result), status_code
 
 
-@templates_bp.route("/<string:template_id>/preview", methods=["POST"])
+@templates_bp.route("/<string:template_id>/preview", methods=["GET", "POST"])
 @require_permissions("organization:templates:read")
 def preview_template_by_id(template_id):
     user_id = g.current_user.get("user_id") or g.current_user.get("email") or "anonymous"
-    is_allowed, retry_after = DistributedRateLimiter.check_rate_limit(
-        dimension="template_preview",
-        identifier=str(user_id),
-        limit=current_app.config.get("RATE_LIMIT_TEMPLATE_PREVIEW_RPM", 60),
-        window_seconds=60
-    )
+    try:
+        is_allowed, retry_after = DistributedRateLimiter.check_rate_limit(
+            dimension="template_preview",
+            identifier=str(user_id),
+            limit=current_app.config.get("RATE_LIMIT_TEMPLATE_PREVIEW_RPM", 60),
+            window_seconds=60,
+            fail_closed=True
+        )
+    except RateLimiterError:
+        current_app.logger.error("Rate limiter service unavailable for template preview by id")
+        return jsonify({
+            "success": False,
+            "message": "Rate limiting service temporarily unavailable. Please retry later."
+        }), 503
+
     if not is_allowed:
         resp = jsonify({
             "success": False,

@@ -18,4 +18,5 @@ boto3
 jinja2
 twilio
 bleach
+tinycss2
 premailer

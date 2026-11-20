@@ -175,12 +175,21 @@ function showToast(msg, type = "info") {
 
 function openModal(id) {
   const m = document.getElementById(id);
-  if (m) m.classList.add("active");
+  if (m) {
+    m.classList.add("active");
+    document.body.style.overflow = "hidden";
+  }
 }
 
 function closeModal(id) {
   const m = document.getElementById(id);
-  if (m) m.classList.remove("active");
+  if (m) {
+    m.classList.remove("active");
+    const anyActive = document.querySelector(".modal.active");
+    if (!anyActive) {
+      document.body.style.overflow = "";
+    }
+  }
 }
 
 async function initApp() {

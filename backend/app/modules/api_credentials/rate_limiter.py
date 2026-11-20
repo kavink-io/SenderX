@@ -52,7 +52,8 @@ class DistributedRateLimiter:
         dimension: str,
         identifier: str,
         limit: Optional[int] = None,
-        window_seconds: int = 60
+        window_seconds: int = 60,
+        fail_closed: bool = False
     ) -> Tuple[bool, int]:
         """
         Check and record an access attempt in a sliding window.
@@ -66,14 +67,14 @@ class DistributedRateLimiter:
         max_allowed = limit if limit is not None else cls.DEFAULT_LIMITS.get(dimension, 120)
         key = f"ratelimit:{dimension}:{identifier}"
         now = time.time()
-        client = cls._get_redis()
-
-        if client is None:
-            if cls._is_production():
-                raise RateLimiterError("Distributed rate limiter unavailable in production mode")
-            return True, 0
 
         try:
+            client = cls._get_redis()
+            if client is None:
+                if fail_closed or cls._is_production():
+                    raise RateLimiterError("Distributed rate limiter unavailable")
+                return True, 0
+
             pipe = client.pipeline()
             # 1. Remove entries older than window
             pipe.zremrangebyscore(key, 0, now - window_seconds)
@@ -102,8 +103,8 @@ class DistributedRateLimiter:
             return True, 0
 
         except (redis.RedisError, ConnectionError, OSError) as exc:
-            if cls._is_production():
-                raise RateLimiterError(f"Redis rate limiter failed in production: {exc}") from exc
+            if fail_closed or cls._is_production():
+                raise RateLimiterError(f"Distributed rate limiter unavailable: {exc}") from exc
             if has_app_context():
                 current_app.logger.warning(f"Rate limiting skipped due to Redis error: {exc}")
             return True, 0

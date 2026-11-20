@@ -4,6 +4,7 @@ import re
 import uuid
 
 from flask import current_app
+from app.modules.dead_letters.sanitizer import sanitize_dlq_error
 
 
 class DeadLetterRepository:
@@ -147,7 +148,8 @@ class DeadLetterRepository:
         # Always explicitly preserve tenant ownership.
         snapshot["organization_id"] = trusted_organization_id
 
-        snapshot["last_error"] = str(error)
+        clean_error = sanitize_dlq_error(error)
+        snapshot["last_error"] = clean_error
         snapshot["dead_letter_status"] = "PENDING_REVIEW"
         snapshot["dead_lettered_at"] = now
         snapshot["manual_retry_count"] = manual_retry_count
@@ -161,7 +163,7 @@ class DeadLetterRepository:
             ),
             "retry_count": retry_count,
             "manual_retry_cycle": manual_retry_count,
-            "error": str(error),
+            "error": clean_error,
             "dead_lettered_at": now
         }
 

@@ -7,6 +7,15 @@ inspects Gmail/Outlook compatibility, generates plain text, and provides starter
 import re
 from typing import Any, Dict, List, Optional, Tuple
 from premailer import Premailer, transform
+import cssutils._fetch
+import cssutils.util
+
+# Strictly neutralize cssutils URL fetcher to eliminate any outbound DNS or network requests
+def _network_isolated_fetcher(url):
+    return None
+
+cssutils._fetch._defaultFetcher = _network_isolated_fetcher
+cssutils.util._defaultFetcher = _network_isolated_fetcher
 
 
 # ==============================================================================
@@ -322,6 +331,18 @@ def compile_email_template(
         else:
             merged_html = f"<style>\n{raw_css}\n</style>\n{merged_html}"
 
+    # Strip dangerous external resource tags and all @import variations before Premailer processing
+    # to completely eliminate DNS lookups (socket.getaddrinfo) inside cssutils
+    merged_html = re.sub(r"<link\b[^>]*>", "", merged_html, flags=re.IGNORECASE | re.DOTALL)
+    merged_html = re.sub(r"<base\b[^>]*>", "", merged_html, flags=re.IGNORECASE | re.DOTALL)
+    merged_html = re.sub(
+        r"@(?:/\*.*?\*/|\s)*\\?[0-9a-fA-F]*\s*i\s*m\s*p\s*o\s*r\s*t\b[^;{}]*(?:;|\Z)",
+        "",
+        merged_html,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+    merged_html = re.sub(r"@import\b[^;{}]*(?:;|\Z)", "", merged_html, flags=re.IGNORECASE | re.DOTALL)
+
     # Inlining with premailer: preserve @media and responsive blocks with no network calls
     try:
         p = Premailer(
@@ -350,6 +371,10 @@ def compile_email_template(
 
     # Collect compatibility warnings
     warnings = EmailCompatibilityInspector.inspect(raw_html, raw_css)
+
+    # Sanitize at final HTML boundary: enforce CSS property allowlist on all inlined elements
+    from app.modules.templates.security import sanitize_html_css_boundary
+    compiled_html = sanitize_html_css_boundary(compiled_html)
 
     return {
         "compiled_html": compiled_html,

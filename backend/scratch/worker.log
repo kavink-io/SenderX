@@ -1,0 +1,45 @@
+ 
+ -------------- test_worker_9218@Kavins-LOQ v5.7.0 (collider)
+--- ***** ----- 
+-- ******* ---- Windows-11-10.0.26300-SP0 2026-11-20 15:43:54
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         app:0x1c914081a90
+- ** ---------- .> transport:   amqp://guest:**@localhost:5672//
+- ** ---------- .> results:     redis://localhost:6379/0
+- *** --- * --- .> concurrency: 12 (solo)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** ----- 
+ -------------- [queues]
+                .> test_isolation_queue exchange=test_isolation_queue(direct) key=test_isolation_queue
+                
+
+[tasks]
+  . senderx.process_message
+  . senderx.retry_test_task
+  . senderx.send_auth_otp_email
+
+[2026-11-20 15:43:54,184: INFO/MainProcess] Connected to amqp://guest:**@127.0.0.1:5672//
+[2026-11-20 15:43:54,268: INFO/MainProcess] test_worker_9218@Kavins-LOQ ready.
+[2026-11-20 15:43:54,270: INFO/MainProcess] Task senderx.process_message[3dc6eefa-8f2c-4c89-bb85-42e9538a3651] received
+[2026-11-20 15:43:54,289: INFO/MainProcess] Task senderx.process_message[3dc6eefa-8f2c-4c89-bb85-42e9538a3651] succeeded in 0.01906530000087514s: {'success': False, 'message': 'Message not found'}
+[2026-11-20 15:43:54,289: INFO/MainProcess] Task senderx.process_message[04c5232f-be0b-4424-a6e5-dac0a3a49686] received
+[2026-11-20 15:43:54,293: INFO/MainProcess] Task senderx.process_message[04c5232f-be0b-4424-a6e5-dac0a3a49686] succeeded in 0.003025200001502526s: {'success': False, 'message': 'Message not found'}
+[2026-11-20 15:43:54,293: INFO/MainProcess] Task senderx.process_message[df3791d8-5565-4167-a6a2-2259ea151b43] received
+[2026-11-20 15:43:54,295: INFO/MainProcess] Task senderx.process_message[df3791d8-5565-4167-a6a2-2259ea151b43] succeeded in 0.0023533999992650934s: {'success': False, 'message': 'Message not found'}
+[2026-11-20 15:43:54,296: INFO/MainProcess] Task senderx.process_message[3d7d3bbe-3e16-4e24-ad16-29b6c26cd757] received
+[2026-11-20 15:43:54,298: INFO/MainProcess] Task senderx.process_message[3d7d3bbe-3e16-4e24-ad16-29b6c26cd757] succeeded in 0.0024498999991919845s: {'success': False, 'message': 'Message not found'}
+[2026-11-20 15:43:57,028: INFO/MainProcess] Task senderx.process_message[8ae4f012-e430-4f3f-a782-0a41161f69b7] received
+[2026-11-20 15:43:57,040: WARNING/MainProcess] [2026-11-20 15:43:57,040] INFO in tasks: Processing message: msg_wfail_5f1c61 | Organization: 852058f4-3e74-42f7-9ebd-7e8c8e6bb843
+[2026-11-20 15:43:57,040: INFO/MainProcess] Processing message: msg_wfail_5f1c61 | Organization: 852058f4-3e74-42f7-9ebd-7e8c8e6bb843
+[2026-11-20 15:43:57,040: WARNING/MainProcess] [2026-11-20 15:43:57,040] ERROR in tasks: Message processing error: msg_wfail_5f1c61 | Retry: 0 | Error: SendGrid API failure: auth SG.[REDACTED_API_KEY] failed with JWT [REDACTED_JWT] and password=[REDACTED]
+[2026-11-20 15:43:57,040: ERROR/MainProcess] Message processing error: msg_wfail_5f1c61 | Retry: 0 | Error: SendGrid API failure: auth SG.[REDACTED_API_KEY] failed with JWT [REDACTED_JWT] and password=[REDACTED]
+[2026-11-20 15:43:57,043: WARNING/MainProcess] [2026-11-20 15:43:57,043] ERROR in tasks: Permanent failure for message msg_wfail_5f1c61: SendGrid API failure: auth SG.[REDACTED_API_KEY] failed with JWT [REDACTED_JWT] and password=[REDACTED]
+[2026-11-20 15:43:57,043: ERROR/MainProcess] Permanent failure for message msg_wfail_5f1c61: SendGrid API failure: auth SG.[REDACTED_API_KEY] failed with JWT [REDACTED_JWT] and password=[REDACTED]
+[2026-11-20 15:43:57,045: INFO/MainProcess] Task senderx.process_message[8ae4f012-e430-4f3f-a782-0a41161f69b7] succeeded in 0.01732380000066769s: {'success': False, 'message_id': 'msg_wfail_5f1c61', 'status': 'FAILED', 'retry_count': 0, 'error': 'SendGrid API failure: auth SG.[REDACTED_API_KEY] failed with JWT [REDACTED_JWT] and password=[REDACTED]'}
+[2026-11-20 15:43:58,036: INFO/MainProcess] Task senderx.process_message[0adfad74-a967-42fc-8e5f-392e32631440] received
+[2026-11-20 15:43:58,046: WARNING/MainProcess] [2026-11-20 15:43:58,046] INFO in tasks: Processing message: msg_wsucc_36477a | Organization: 852058f4-3e74-42f7-9ebd-7e8c8e6bb843
+[2026-11-20 15:43:58,046: INFO/MainProcess] Processing message: msg_wsucc_36477a | Organization: 852058f4-3e74-42f7-9ebd-7e8c8e6bb843
+[2026-11-20 15:43:58,049: WARNING/MainProcess] [2026-11-20 15:43:58,049] INFO in tasks: Message msg_wsucc_36477a accepted by provider mock
+[2026-11-20 15:43:58,049: INFO/MainProcess] Message msg_wsucc_36477a accepted by provider mock
+[2026-11-20 15:43:58,052: INFO/MainProcess] Task senderx.process_message[0adfad74-a967-42fc-8e5f-392e32631440] succeeded in 0.015851500000280794s: {'success': True, 'message_id': 'msg_wsucc_36477a', 'status': 'SENT', 'provider': 'mock', 'provider_message_id': 'mock-email-581f150c-4646-4e9a-aa28-cc929f6fd67a'}

@@ -60,6 +60,17 @@ class MockEmailAdapter(BaseChannelAdapter):
                 retryable=False
             )
 
+        if scenario == "secret_leak_failure":
+            secret_msg = data.get(
+                "mock_error_message",
+                "SendGrid API connection failure: auth header SG.v29skd920skd920skd920.abcdefghijklmnopqrstuvwxyz12345 failed, JWT token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c rejected, password=SuperSecretAdminPass123!"
+            )
+            raise ProviderError(
+                secret_msg,
+                status_code=500,
+                retryable=False
+            )
+
         if scenario == "temporary_failure":
             raise ProviderError(
                 "Simulated temporary failure: SMTP connection timeout",
@@ -77,6 +88,7 @@ class MockEmailAdapter(BaseChannelAdapter):
         if scenario not in [
             "success",
             "permanent_failure",
+            "secret_leak_failure",
             "temporary_failure",
             "temporary_then_success"
         ]:

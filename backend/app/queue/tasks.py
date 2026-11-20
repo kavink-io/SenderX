@@ -9,6 +9,7 @@ from app.modules.messages.repository import MessageRepository
 from app.modules.dead_letters.repository import DeadLetterRepository
 
 from app.adapters.adapter_registry import AdapterRegistry
+from app.modules.dead_letters.sanitizer import sanitize_dlq_error
 
 
 @shared_task(
@@ -250,7 +251,7 @@ def process_message(self, message_id):
     except Exception as error:
 
         retry_count = self.request.retries
-        error_message = str(error)
+        error_message = sanitize_dlq_error(str(error))
 
         current_app.logger.error(
             "Message processing error: %s | Retry: %s | Error: %s",
