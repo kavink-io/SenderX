@@ -201,7 +201,6 @@ class TestEmployeeBusinessIdManagement:
             json={
                 "name": "Auto User One",
                 "email": f"auto1_{suffix}@test.io",
-                "password": "Password123456!",
                 "role_ids": [identity_test_context["role_a_dev"]]
             },
             headers=headers
@@ -218,7 +217,6 @@ class TestEmployeeBusinessIdManagement:
             json={
                 "name": "Manual User",
                 "email": f"manual_{suffix}@test.io",
-                "password": "Password123456!",
                 "employee_code": "SPECIAL-999",
                 "role_ids": [identity_test_context["role_a_dev"]]
             },
@@ -238,7 +236,6 @@ class TestEmployeeBusinessIdManagement:
             json={
                 "name": "Manual User Base",
                 "email": f"manual_base_{suffix}@test.io",
-                "password": "Password123456!",
                 "employee_code": "SPECIAL-999",
                 "role_ids": [identity_test_context["role_a_dev"]]
             },
@@ -251,7 +248,6 @@ class TestEmployeeBusinessIdManagement:
             json={
                 "name": "Manual User Duplicate",
                 "email": f"manual_dup_{suffix}@test.io",
-                "password": "Password123456!",
                 "employee_code": "SPECIAL-999",
                 "role_ids": [identity_test_context["role_a_dev"]]
             },
@@ -270,7 +266,6 @@ class TestEmployeeBusinessIdManagement:
             json={
                 "name": "Org B User",
                 "email": f"org_b_user_{suffix}@test.io",
-                "password": "Password123456!",
                 "employee_code": "SPECIAL-999"
             },
             headers=headers_b
@@ -288,7 +283,6 @@ class TestEmployeeBusinessIdManagement:
             json={
                 "name": "Immutable Test User",
                 "email": f"imm_{suffix}@test.io",
-                "password": "Password123456!",
                 "employee_code": "IMM-001"
             },
             headers=headers

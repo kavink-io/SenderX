@@ -1,7 +1,7 @@
 """
 SenderX Template Repository
 MongoDB data access for email templates and historical template versions.
-Enforces multi-tenant isolation.
+Enforces multi-tenant isolation and case-insensitive name uniqueness.
 """
 
 from typing import Any, Dict, List, Optional
@@ -25,6 +25,8 @@ class TemplateRepository:
     @classmethod
     def create(cls, template: Dict[str, Any]) -> Dict[str, Any]:
         """Insert a new template document."""
+        if "name" in template and "name_lower" not in template:
+            template["name_lower"] = template["name"].strip().lower()
         cls._collection().insert_one(template)
         return cls.find_by_id(template["template_id"], organization_id=template.get("organization_id"))
 
@@ -37,11 +39,31 @@ class TemplateRepository:
         return cls._collection().find_one(query, {"_id": 0})
 
     @classmethod
-    def find_by_name(cls, name: str, organization_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Retrieve a template by exact name within the organization."""
-        query = {"name": name}
+    def find_by_name(
+        cls,
+        name: str,
+        organization_id: Optional[str] = None,
+        exclude_archived_or_deleted: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a template by case-insensitive name within the organization.
+        Optionally ignores ARCHIVED and DELETED templates.
+        """
+        clean_name = name.strip()
+        name_lower = clean_name.lower()
+
+        query: Dict[str, Any] = {
+            "$or": [
+                {"name_lower": name_lower},
+                {"name": {"$regex": f"^{re.escape(clean_name)}$", "$options": "i"}}
+            ]
+        }
         if organization_id is not None:
             query["organization_id"] = organization_id
+
+        if exclude_archived_or_deleted:
+            query["status"] = {"$nin": ["DELETED", "ARCHIVED"]}
+
         return cls._collection().find_one(query, {"_id": 0})
 
     @classmethod
@@ -61,6 +83,9 @@ class TemplateRepository:
 
         if status:
             query["status"] = status.upper().strip()
+        else:
+            # By default do not return soft-deleted templates
+            query["status"] = {"$ne": "DELETED"}
 
         if category:
             query["category"] = category.lower().strip()
@@ -100,22 +125,21 @@ class TemplateRepository:
         if organization_id is not None:
             query["organization_id"] = organization_id
 
+        if "name" in update_fields:
+            update_fields["name_lower"] = update_fields["name"].strip().lower()
+
         res = cls._collection().update_one(query, {"$set": update_fields})
         return res.modified_count > 0
 
     @classmethod
     def delete(cls, template_id: str, organization_id: Optional[str] = None) -> bool:
-        """Permanently delete a template."""
+        """Soft delete a template and mark status as DELETED."""
         query = {"template_id": template_id}
         if organization_id is not None:
             query["organization_id"] = organization_id
 
-        res = cls._collection().delete_one(query)
-        if res.deleted_count > 0:
-            # Also clean up historical version records for this template
-            cls._versions_collection().delete_many(query)
-            return True
-        return False
+        res = cls._collection().update_one(query, {"$set": {"status": "DELETED"}})
+        return res.modified_count > 0
 
     # --------------------------------------------------
     # VERSION HISTORY

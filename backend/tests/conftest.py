@@ -6,8 +6,8 @@ import bcrypt
 LIVE_DB_NAME = "SenderX_db"
 TEST_DB_NAME = "SenderX_test"
 
-# Support TEST_MONGO_URI env var, defaulting to Config.MONGO_URI
-test_mongo_uri = os.environ.get("TEST_MONGO_URI")
+# Support TEST_MONGO_URI env var, defaulting to local MongoDB instance
+test_mongo_uri = os.environ.get("TEST_MONGO_URI", "mongodb://localhost:27017")
 if test_mongo_uri:
     if "localhost:27017" in test_mongo_uri and "directConnection" not in test_mongo_uri:
         sep = "&" if "?" in test_mongo_uri else "?"

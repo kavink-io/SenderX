@@ -223,7 +223,6 @@ def test_manual_employee_id_creation_success(client, setup_tenants):
             "name": "Alice Developer",
             "email": f"alice-{uuid.uuid4().hex[:6]}@acme.com",
             "employee_code": "TECH-999",
-            "password": "Password1234!@",
             "role_ids": [ctx["role_a"]["role_id"]]
         }
     )
@@ -246,7 +245,6 @@ def test_missing_employee_id_rejected(client, setup_tenants):
         json={
             "name": "Bob Tester",
             "email": f"bob-{uuid.uuid4().hex[:6]}@acme.com",
-            "password": "Password1234!@",
             "role_ids": [ctx["role_a"]["role_id"]]
         }
     )
@@ -261,7 +259,6 @@ def test_missing_employee_id_rejected(client, setup_tenants):
             "name": "Bob Tester",
             "email": f"bob2-{uuid.uuid4().hex[:6]}@acme.com",
             "employee_code": "   ",
-            "password": "Password1234!@",
             "role_ids": [ctx["role_a"]["role_id"]]
         }
     )
@@ -282,7 +279,6 @@ def test_duplicate_employee_id_rejected_in_same_org(client, setup_tenants):
             "name": "Charlie First",
             "email": f"charlie1-{uuid.uuid4().hex[:6]}@acme.com",
             "employee_code": "CORP-101",
-            "password": "Password1234!@",
             "role_ids": [ctx["role_a"]["role_id"]]
         }
     )
@@ -296,7 +292,6 @@ def test_duplicate_employee_id_rejected_in_same_org(client, setup_tenants):
             "name": "Charlie Second",
             "email": f"charlie2-{uuid.uuid4().hex[:6]}@acme.com",
             "employee_code": "CORP-101",
-            "password": "Password1234!@",
             "role_ids": [ctx["role_a"]["role_id"]]
         }
     )
@@ -318,7 +313,6 @@ def test_same_employee_id_accepted_in_different_orgs(client, setup_tenants):
             "name": "Dev in Org A",
             "email": f"dev-a-{uuid.uuid4().hex[:6]}@acme.com",
             "employee_code": "SHARED-DEV-777",
-            "password": "Password1234!@",
             "role_ids": [ctx["role_a"]["role_id"]]
         }
     )
@@ -333,7 +327,6 @@ def test_same_employee_id_accepted_in_different_orgs(client, setup_tenants):
             "name": "Dev in Org B",
             "email": f"dev-b-{uuid.uuid4().hex[:6]}@beta.com",
             "employee_code": "SHARED-DEV-777",
-            "password": "Password1234!@"
         }
     )
     assert res_b.status_code == 201
@@ -353,7 +346,6 @@ def test_employee_id_preserved_on_role_change_and_update(client, setup_tenants):
             "name": "David Engineer",
             "email": f"david-{uuid.uuid4().hex[:6]}@acme.com",
             "employee_code": "ENG-500",
-            "password": "Password1234!@",
             "role_ids": [ctx["role_a"]["role_id"]]
         }
     )
@@ -388,7 +380,6 @@ def test_employee_id_immutability(client, setup_tenants):
             "name": "Eva Staff",
             "email": f"eva-{uuid.uuid4().hex[:6]}@acme.com",
             "employee_code": "STAFF-01",
-            "password": "Password1234!@",
             "role_ids": [ctx["role_a"]["role_id"]]
         }
     )
@@ -430,7 +421,6 @@ def test_role_change_permission_replacement_immediate(client, setup_tenants):
             "name": "Sync Tester",
             "email": emp_email,
             "employee_code": "SYNC-001",
-            "password": "Password1234!@",
             "role_ids": [ctx["role_a"]["role_id"]]
         }
     )
@@ -439,6 +429,7 @@ def test_role_change_permission_replacement_immediate(client, setup_tenants):
 
     # Log in as employee and get access token
     with client.application.app_context():
+        UserRepository._collection().update_one({"user_id": emp_id}, {"$set": {"status": "ACTIVE", "is_active": True}})
         emp_token = create_access_token(
             identity=emp_id,
             additional_claims={
@@ -503,7 +494,6 @@ def test_application_scope_synchronization(client, setup_tenants):
             "name": "App Scope Tester",
             "email": emp_email,
             "employee_code": "SCOPE-001",
-            "password": "Password1234!@",
             "role_assignments": [
                 {"role_id": ctx["role_a"]["role_id"], "application_id": ctx["app1"]["application_id"]}
             ]
@@ -513,6 +503,7 @@ def test_application_scope_synchronization(client, setup_tenants):
     emp_id = create_res.get_json()["data"]["user_id"]
 
     with client.application.app_context():
+        UserRepository._collection().update_one({"user_id": emp_id}, {"$set": {"status": "ACTIVE", "is_active": True}})
         emp_token = create_access_token(
             identity=emp_id,
             additional_claims={
@@ -577,7 +568,6 @@ def test_cross_organization_role_assignment_rejected(client, setup_tenants):
             "name": "Intruder",
             "email": f"intruder-{uuid.uuid4().hex[:6]}@acme.com",
             "employee_code": "INTR-001",
-            "password": "Password1234!@",
             "role_ids": [role_b_custom["role_id"]]
         }
     )
@@ -677,13 +667,13 @@ def test_org_admin_and_employee_profile_preserved(client, setup_tenants):
             "name": "Jane Employee",
             "email": f"jane-{uuid.uuid4().hex[:6]}@beta.com",
             "employee_code": "BETA-STAFF-12",
-            "password": "Password1234!@"
         }
     )
     assert res_emp_create.status_code == 201
     jane_id = res_emp_create.get_json()["data"]["user_id"]
 
     with client.application.app_context():
+        UserRepository._collection().update_one({"user_id": jane_id}, {"$set": {"status": "ACTIVE", "is_active": True}})
         jane_token = create_access_token(
             identity=jane_id,
             additional_claims={

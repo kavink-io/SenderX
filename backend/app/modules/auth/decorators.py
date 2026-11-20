@@ -240,6 +240,23 @@ def require_permissions(*required_permissions):
                 effective_permissions.add("organization:dlq:retry")
             if "organization:dlq:retry" in granted_permissions:
                 effective_permissions.add("organization:dead_letters:manage")
+            # Template permission aliases
+            if "organization:templates:manage" in granted_permissions:
+                effective_permissions.update([
+                    "organization:templates:create",
+                    "organization:templates:read",
+                    "templates.read",
+                    "templates.create",
+                    "templates.update",
+                    "templates.publish",
+                    "templates.delete"
+                ])
+            if "organization:templates:read" in granted_permissions:
+                effective_permissions.add("templates.read")
+            if "templates.read" in granted_permissions:
+                effective_permissions.add("organization:templates:read")
+            if any(p in granted_permissions for p in ["templates.create", "templates.update", "templates.publish", "templates.delete"]):
+                effective_permissions.add("organization:templates:manage")
 
             missing_permissions = (
                 set(required_permissions) - effective_permissions

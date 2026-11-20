@@ -37,9 +37,13 @@ class MessageService:
         elif isinstance(recipients, list) and len(recipients) == 1:
             payload["recipient"] = recipients[0]
 
+        # Normalize channel to lowercase
+        if payload.get("channel") and isinstance(payload["channel"], str):
+            payload["channel"] = payload["channel"].lower().strip()
+
         # Extract template parameters if provided
         template_id = payload.get("template_id")
-        template_vars = payload.get("template_variables")
+        template_vars = payload.get("template_variables") if payload.get("template_variables") is not None else payload.get("variables")
         template_version = payload.get("template_version")
 
         # Also support template params specified inside payload["data"]
@@ -47,9 +51,65 @@ class MessageService:
             if not template_id:
                 template_id = payload["data"].get("template_id")
             if template_vars is None:
-                template_vars = payload["data"].get("template_variables")
+                template_vars = payload["data"].get("template_variables") if payload["data"].get("template_variables") is not None else payload["data"].get("variables")
             if template_version is None:
                 template_version = payload["data"].get("template_version")
+
+        # Ensure payload has a data dict
+        if "data" not in payload or not isinstance(payload.get("data"), dict):
+            payload["data"] = {
+                k: v for k, v in payload.items()
+                if k not in ("recipient", "channel", "provider", "application_id", "template_id", "template_variables", "template_version", "variables")
+            }
+
+        # Conflict check: cannot specify template_id and raw HTML body together (5.6.5)
+        raw_html = None
+        if isinstance(payload.get("data"), dict):
+            raw_html = payload["data"].get("html") or payload["data"].get("html_body")
+        if not raw_html:
+            raw_html = payload.get("html") or payload.get("html_body")
+
+        if template_id and raw_html and str(raw_html).strip():
+            return {
+                "success": False,
+                "status_code": 422,
+                "message": "Conflicting message body specification: cannot provide both 'template_id' and raw 'html'/'html_body'. Please choose either a template or provide raw HTML content.",
+                "errors": ["Choose either template_id or raw HTML body"]
+            }
+
+        # Threat scan on incoming payload fields (script tags, event handlers, javascript:, CR/LF in subject/recipient)
+        from app.validators.dynamic_json_validator import DynamicJSONValidator
+        _, threats = DynamicJSONValidator.scan_for_markup_and_threats(payload)
+        if threats:
+            return {
+                "success": False,
+                "status_code": 422,
+                "message": f"Dangerous input pattern detected: {'; '.join(threats)}",
+                "errors": threats
+            }
+
+        # Raw HTML inspection & sanitization on email channel when no template_id is used (5.6.1 Item 6)
+        if not template_id and payload.get("channel") == "email" and raw_html:
+            from app.modules.templates.security import TemplateSecurityInspector
+            html_findings = TemplateSecurityInspector.inspect_html(str(raw_html))
+            if html_findings:
+                return {
+                    "success": False,
+                    "status_code": 422,
+                    "message": f"Dangerous HTML pattern detected in email body: {'; '.join(html_findings)}",
+                    "errors": html_findings
+                }
+            # Sanitize rich HTML using allowlist
+            sanitized_html = TemplateSecurityInspector.sanitize_rich_html(str(raw_html))
+            if isinstance(payload.get("data"), dict):
+                if "html" in payload["data"]:
+                    payload["data"]["html"] = sanitized_html
+                if "html_body" in payload["data"]:
+                    payload["data"]["html_body"] = sanitized_html
+            if "html" in payload:
+                payload["html"] = sanitized_html
+            if "html_body" in payload:
+                payload["html_body"] = sanitized_html
 
         template_metadata = None
 
@@ -65,6 +125,7 @@ class MessageService:
             if not render_res["success"]:
                 return {
                     "success": False,
+                    "status_code": render_res.get("status_code", 422),
                     "message": render_res.get("message", "Template resolution failed"),
                     "errors": [render_res.get("message", "Template resolution failed")]
                 }

@@ -17,3 +17,5 @@ certifi
 boto3
 jinja2
 twilio
+bleach
+premailer

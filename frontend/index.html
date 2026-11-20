@@ -1970,69 +1970,148 @@
     </div>
   </div>
 
-  <!-- Template Editor Modal -->
-  <div id="modal-template-editor" class="modal">
-    <div class="modal-card modal-lg">
-      <div class="modal-header">
-        <h4 id="tpl-modal-title">Create Email Template</h4>
-        <button class="btn-close" onclick="closeModal('modal-template-editor')">&times;</button>
+  <!-- 7. Email Template Studio Modal (Phase 5 Task 5.6) -->
+  <div id="modal-template-editor" class="modal" data-unsaved="false">
+    <div class="modal-card modal-xl" style="max-width: 1240px; width: 96vw; max-height: 94vh; display: flex; flex-direction: column; padding: 18px;">
+      <div class="modal-header" style="margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <h4 id="tpl-modal-title" style="margin: 0;">Email Template Studio</h4>
+          <span class="badge badge-scope" id="tpl-modal-badge">DRAFT</span>
+        </div>
+        <button class="btn-close" onclick="closeTemplateStudioModal()">&times;</button>
       </div>
-      <form id="form-template-editor">
+
+      <!-- Top Metadata Toolbar -->
+      <form id="form-template-editor" onsubmit="event.preventDefault();" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
         <input type="hidden" id="tpl-edit-id" />
-        <div class="form-row">
-          <div class="form-group col-half">
-            <label>Template Name *</label>
-            <input type="text" id="tpl-name" required placeholder="Welcome Onboarding Email" />
+        
+        <div style="display: grid; grid-template-columns: 2fr 1fr 2fr; gap: 12px; margin-bottom: 10px;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="font-size: 0.75rem;">Template Name * (2-80 chars)</label>
+            <input type="text" id="tpl-name" required placeholder="e.g. Transactional Order Confirmation" style="padding: 6px 10px; font-size: 0.85rem;" oninput="markTemplateDirty()" />
           </div>
-          <div class="form-group col-half">
-            <label>Category</label>
-            <select id="tpl-category">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="font-size: 0.75rem;">Category</label>
+            <select id="tpl-category" style="padding: 6px 10px; font-size: 0.85rem;" onchange="markTemplateDirty()">
               <option value="general">General</option>
-              <option value="transactional">Transactional</option>
+              <option value="transactional" selected>Transactional</option>
               <option value="notifications">Notifications</option>
               <option value="marketing">Marketing</option>
               <option value="alerts">Alerts</option>
             </select>
           </div>
-        </div>
-        <div class="form-group">
-          <label>Description</label>
-          <input type="text" id="tpl-description" placeholder="Brief summary of what this template is for" />
-        </div>
-        <div class="form-group">
-          <label>Subject Line Template * (Jinja2 expressions supported: {{ user_name }})</label>
-          <input type="text" id="tpl-subject" required placeholder="Welcome to {{ app_name }}, {{ user_name }}!" />
-        </div>
-
-        <div class="form-group">
-          <label>Dynamic Variables (JSON array of definitions: name, required, default, sample_value)</label>
-          <textarea id="tpl-variables-json" rows="3" class="code-area" placeholder='[{"name": "user_name", "required": true, "sample_value": "Alex"}, {"name": "app_name", "required": false, "default": "SenderX"}]'>[]</textarea>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group col-half">
-            <label>Optional Header (HTML / Text)</label>
-            <textarea id="tpl-header" rows="2" class="code-area" placeholder="<header><img src='logo.png' /></header>"></textarea>
-          </div>
-          <div class="form-group col-half">
-            <label>Optional Footer (HTML / Text)</label>
-            <textarea id="tpl-footer" rows="2" class="code-area" placeholder="<footer>&copy; 2026 SenderX Inc.</footer>"></textarea>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="font-size: 0.75rem;">Subject Line Template *</label>
+            <input type="text" id="tpl-subject" required placeholder="e.g. {{ brand_name }}: Your order {{ order_id }} is confirmed" style="padding: 6px 10px; font-size: 0.85rem;" oninput="onTemplateContentChanged()" />
           </div>
         </div>
 
-        <div class="form-group">
-          <label>HTML Body (Jinja2 Sandboxed)</label>
-          <textarea id="tpl-html-body" rows="8" class="code-area" placeholder="<h1>Hello, {{ user_name }}!</h1><p>Thank you for joining {{ app_name }}.</p>"></textarea>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; flex-wrap: wrap;">
+          <div class="form-group" style="flex: 1; min-width: 250px; margin-bottom: 0;">
+            <input type="text" id="tpl-description" placeholder="Optional description (e.g. Sent when user triggers an order checkout)..." style="padding: 5px 10px; font-size: 0.8rem;" oninput="markTemplateDirty()" />
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-starter-layout" onclick="insertStarterLayout()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px; vertical-align: middle;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              Start from Starter Layout
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="runStudioValidation()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px; vertical-align: middle;"><polyline points="20 6 9 17 4 12"/></svg>
+              Check Compatibility
+            </button>
+            <label style="font-size: 0.775rem; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; margin: 0; cursor: pointer;">
+              <input type="checkbox" id="tpl-strict-variables" onchange="markTemplateDirty()" />
+              Strict Variables Mode
+            </label>
+          </div>
         </div>
 
-        <div class="form-group">
-          <label>Plain-Text Body (Jinja2 Sandboxed)</label>
-          <textarea id="tpl-plain-body" rows="4" class="code-area" placeholder="Hello {{ user_name }}! Thank you for joining {{ app_name }}."></textarea>
+        <!-- Validation & Security Alert Banner -->
+        <div id="tpl-editor-error-alert" style="display: none; padding: 10px 14px; border-radius: 8px; font-size: 0.825rem; margin-bottom: 10px; line-height: 1.4;"></div>
+
+        <!-- 2-Column Main Studio Workspace -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; flex: 1; min-height: 420px; overflow: hidden;">
+          
+          <!-- LEFT COLUMN: CODE EDITOR & VARIABLES -->
+          <div style="display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-surface);">
+            <!-- Editor Sub-Tabs -->
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding: 4px 8px; background: rgba(0,0,0,0.15);">
+              <div style="display: flex; gap: 4px;">
+                <button type="button" class="btn btn-sm btn-subtab active" id="btn-tab-html" onclick="switchStudioEditorTab('html')">HTML Source</button>
+                <button type="button" class="btn btn-sm btn-subtab" id="btn-tab-css" onclick="switchStudioEditorTab('css')">CSS Stylesheet</button>
+              </div>
+              <span style="font-size: 0.725rem; color: var(--text-muted);" id="tpl-char-count">HTML: 0 KB | CSS: 0 KB</span>
+            </div>
+
+            <!-- Code Editors Area -->
+            <div style="flex: 1; min-height: 200px; display: flex; flex-direction: column; position: relative;">
+              <textarea id="tpl-html-body" class="code-area" style="flex: 1; width: 100%; border: none; border-radius: 0; font-family: var(--font-mono); font-size: 0.8rem; resize: none; padding: 10px;" placeholder="Write table-based HTML email source..." oninput="onTemplateContentChanged()"></textarea>
+              <textarea id="tpl-css" class="code-area" style="display: none; flex: 1; width: 100%; border: none; border-radius: 0; font-family: var(--font-mono); font-size: 0.8rem; resize: none; padding: 10px;" placeholder="/* Write CSS styles to be compiled and inlined into HTML elements... */" oninput="onTemplateContentChanged()"></textarea>
+            </div>
+
+            <!-- Variables Panel (Bottom of Left Column) -->
+            <div style="border-top: 1px solid var(--border-color); max-height: 190px; display: flex; flex-direction: column; background: rgba(0,0,0,0.2);">
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border-color);">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600; color: var(--text-secondary);">Declared & Detected Variables</span>
+                  <span class="badge badge-scope" id="tpl-var-count-badge" style="font-size: 0.7rem;">0 detected</span>
+                </div>
+                <button type="button" class="btn btn-secondary btn-xs" onclick="addCustomStudioVariable()">+ Add Variable</button>
+              </div>
+              <div id="tpl-variables-list" style="overflow-y: auto; flex: 1; padding: 6px 10px; font-size: 0.775rem;">
+                <em style="color: var(--text-muted);">No variables detected yet. Type {{ variable_name }} in subject or HTML.</em>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT COLUMN: LIVE SANDBOXED PREVIEW & COMPATIBILITY -->
+          <div style="display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-surface);">
+            <!-- Preview Controls Bar -->
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding: 4px 8px; background: rgba(0,0,0,0.15);">
+              <div style="display: flex; gap: 4px; align-items: center;">
+                <button type="button" class="btn btn-sm btn-subtab active" id="btn-preview-html" onclick="switchStudioPreviewMode('html')">HTML View</button>
+                <button type="button" class="btn btn-sm btn-subtab" id="btn-preview-text" onclick="switchStudioPreviewMode('text')">Plain Text</button>
+              </div>
+              <div style="display: flex; gap: 4px; align-items: center;">
+                <span style="font-size: 0.725rem; color: var(--text-muted); margin-right: 4px;">Viewport:</span>
+                <button type="button" class="btn btn-secondary btn-xs active" id="btn-viewport-600" onclick="setStudioPreviewViewport('600')">600px Desktop</button>
+                <button type="button" class="btn btn-secondary btn-xs" id="btn-viewport-320" onclick="setStudioPreviewViewport('320')">320px Mobile</button>
+                <button type="button" class="btn btn-secondary btn-xs" onclick="updateStudioLivePreview()" title="Refresh Preview">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Subject Preview Bar -->
+            <div style="padding: 6px 10px; background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border-color); font-size: 0.8rem; display: flex; gap: 6px; align-items: center;">
+              <span style="color: var(--text-muted); font-size: 0.725rem; text-transform: uppercase;">Subject:</span>
+              <strong id="tpl-rendered-subject-display" style="color: var(--text-primary); font-weight: 500;">-</strong>
+            </div>
+
+            <!-- Preview Display Container -->
+            <div style="flex: 1; display: flex; justify-content: center; align-items: flex-start; overflow-y: auto; padding: 10px; background: #cbd5e1; position: relative;">
+              <!-- Sandboxed iframe: NO allow-scripts! completely secure isolated rendering -->
+              <iframe id="tpl-preview-iframe" sandbox="allow-same-origin" style="width: 600px; max-width: 100%; height: 100%; min-height: 280px; border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.15); background: #ffffff; transition: width 0.2s ease;"></iframe>
+              <pre id="tpl-preview-text" style="display: none; width: 100%; height: 100%; margin: 0; background: var(--bg-surface); color: var(--text-primary); padding: 12px; font-family: var(--font-mono); font-size: 0.8rem; overflow: auto; border-radius: 4px;"></pre>
+            </div>
+
+            <!-- Compatibility Warnings Box (Bottom of Right Column) -->
+            <div id="tpl-compat-warnings-box" style="border-top: 1px solid var(--border-color); max-height: 90px; overflow-y: auto; padding: 6px 10px; background: rgba(0,0,0,0.25); font-size: 0.725rem;">
+              <div style="color: var(--text-muted);">Email client compatibility: No warnings.</div>
+            </div>
+          </div>
         </div>
 
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-template-editor')">Cancel</button>
-          <button type="submit" class="btn btn-primary" id="btn-save-template">Save Draft</button>
+        <!-- Studio Modal Actions -->
+        <div class="modal-actions" style="margin-top: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div style="font-size: 0.75rem; color: var(--text-muted);" id="tpl-save-status">
+            Unsaved changes will be prompted on Esc
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" class="btn btn-secondary" onclick="closeTemplateStudioModal()">Cancel</button>
+            <button type="button" class="btn btn-primary" id="btn-save-draft" onclick="submitTemplateStudio(false)">Save Draft</button>
+            <button type="button" class="btn btn-success" id="btn-save-publish" onclick="submitTemplateStudio(true)">Save & Publish</button>
+          </div>
         </div>
       </form>
     </div>
@@ -2397,6 +2476,7 @@
         <div style="display: flex; align-items: center; gap: 10px;">
           <h4 style="margin: 0;">Message Lifecycle & Delivery Details</h4>
           <span class="badge" id="modal-msg-status-badge">-</span>
+          <span class="badge" id="modal-msg-markup-badge" style="display:none; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">Contains Markup</span>
         </div>
         <button class="btn-close" onclick="closeModal('modal-msg-details')">&times;</button>
       </div>

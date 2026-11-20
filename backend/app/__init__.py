@@ -118,8 +118,13 @@ def create_app():
     url_prefix="/api/v1/analytics"
     )
     app.register_blueprint(
-    templates_bp,
-    url_prefix="/api/v1/templates"
+        templates_bp,
+        url_prefix="/api/v1/templates"
+    )
+    app.register_blueprint(
+        templates_bp,
+        url_prefix="/api/v1/email-templates",
+        name="email_templates"
     )
     app.register_blueprint(
     media_bp,

@@ -13,6 +13,7 @@ import pytest
 import bcrypt
 
 from app.modules.users.repository import UserRepository
+import bcrypt
 from app.modules.organizations.role_repository import RoleRepository
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.users.audit_repository import SecurityAuditRepository
@@ -196,11 +197,16 @@ def test_employee_soft_delete_lifecycle_and_invariants(client, setup_task5_4_con
     emp_res = client.post("/api/v1/users/", json={
         "name": "Charlie Developer",
         "email": "charlie.dev@task54-a.com",
-        "employee_code": "DEV-101",
-        "password": "CharlieDev123!Safe"
+        "employee_code": "DEV-101"
     }, headers=headers_a)
     assert emp_res.status_code == 201
     emp_id = emp_res.json["data"]["user_id"]
+    with app.app_context():
+        UserRepository._collection().update_one({"user_id": emp_id}, {"$set": {
+            "status": "ACTIVE",
+            "is_active": True,
+            "password_hash": bcrypt.hashpw(b"CharlieDev123!Safe", bcrypt.gensalt(rounds=4)).decode("utf-8")
+        }})
 
     # 2. Login as the newly created employee
     login_emp = client.post("/api/v1/auth/login", json={
@@ -277,7 +283,6 @@ def test_deletion_protections(client, setup_task5_4_context):
         "name": "Temp Manager",
         "email": "temp.mgr@task54-a.com",
         "employee_code": "MGR-999",
-        "password": "SafePassword123!",
         "role_ids": ["role_task54_admin_a"]
     }, headers=headers_a2)
     assert emp_res.status_code == 201
@@ -314,7 +319,6 @@ def test_employee_id_and_email_reuse_after_deletion(client, setup_task5_4_contex
         "name": "Reused Identity User",
         "email": "reusable.emp@task54-a.com",
         "employee_code": "REUSE-001",
-        "password": "Password123!456"
     }, headers=headers_a)
     assert res1.status_code == 201
     first_id = res1.json["data"]["user_id"]
@@ -324,7 +328,6 @@ def test_employee_id_and_email_reuse_after_deletion(client, setup_task5_4_contex
         "name": "Another User",
         "email": "reusable.emp@task54-a.com",
         "employee_code": "REUSE-001",
-        "password": "Password123!456"
     }, headers=headers_a)
     assert dup_res.status_code == 409
 
@@ -336,12 +339,17 @@ def test_employee_id_and_email_reuse_after_deletion(client, setup_task5_4_contex
     res2 = client.post("/api/v1/users/", json={
         "name": "New Person Reused Identity",
         "email": "reusable.emp@task54-a.com",
-        "employee_code": "REUSE-001",
-        "password": "BrandNewPassword123!"
+        "employee_code": "REUSE-001"
     }, headers=headers_a)
     assert res2.status_code == 201
     second_id = res2.json["data"]["user_id"]
     assert second_id != first_id
+    with app.app_context():
+        UserRepository._collection().update_one({"user_id": second_id}, {"$set": {
+            "status": "ACTIVE",
+            "is_active": True,
+            "password_hash": bcrypt.hashpw(b"BrandNewPassword123!", bcrypt.gensalt(rounds=4)).decode("utf-8")
+        }})
 
     # 5. Verify new user can log in with new password
     login_new = client.post("/api/v1/auth/login", json={
@@ -366,7 +374,6 @@ def test_query_filtering_deleted_hidden_by_default(client, setup_task5_4_context
         "name": "Ghost User",
         "email": "ghost.user@task54-a.com",
         "employee_code": "GHOST-001",
-        "password": "SafePassword123!"
     }, headers=headers_a)
     assert res.status_code == 201
     ghost_id = res.json["data"]["user_id"]
@@ -407,7 +414,6 @@ def test_audit_log_write_time_snapshots_and_filters(client, setup_task5_4_contex
         "name": "Audit Snapshot Target",
         "email": "audit.target@task54-a.com",
         "employee_code": "AUDIT-007",
-        "password": "SuperSecretPassword123!"
     }, headers=headers_a)
     assert emp_res.status_code == 201
     target_id = emp_res.json["data"]["user_id"]
@@ -613,7 +619,6 @@ def test_employee_department_and_phone_lifecycle(client, setup_task5_4_context):
         "name": "Dev Specialist",
         "email": "dev.specialist@task54-a.com",
         "employee_code": "DEV-501",
-        "password": "Password123!456",
         "department": "Platform Engineering",
         "phone": "+1 650 555 0199"
     }, headers=headers_a)
@@ -644,7 +649,6 @@ def test_employee_department_and_phone_lifecycle(client, setup_task5_4_context):
         "name": "General Employee",
         "email": "general.emp@task54-a.com",
         "employee_code": "GEN-502",
-        "password": "Password123!456"
     }, headers=headers_a)
     assert empty_res.status_code == 201
     assert empty_res.json["data"]["department"] is None
@@ -667,7 +671,6 @@ def test_employee_department_and_phone_validation_rules(client, setup_task5_4_co
         "name": "Short Dept",
         "email": "short.dept@task54-a.com",
         "employee_code": "DEP-001",
-        "password": "Password123!456",
         "department": "X"
     }, headers=headers_a)
     assert res_short.status_code == 400
@@ -678,7 +681,6 @@ def test_employee_department_and_phone_validation_rules(client, setup_task5_4_co
         "name": "Long Dept",
         "email": "long.dept@task54-a.com",
         "employee_code": "DEP-002",
-        "password": "Password123!456",
         "department": "A" * 65
     }, headers=headers_a)
     assert res_long.status_code == 400
@@ -689,7 +691,6 @@ def test_employee_department_and_phone_validation_rules(client, setup_task5_4_co
         "name": "Bad Phone",
         "email": "bad.phone@task54-a.com",
         "employee_code": "PHO-001",
-        "password": "Password123!456",
         "phone": "invalid-phone-abc"
     }, headers=headers_a)
     assert res_bad_phone.status_code == 400

@@ -137,6 +137,7 @@ class UserService:
     def create_user(cls, data, organization_id, actor_id=None, actor_email=None):
         if not isinstance(data, dict):
             return {"success": False, "message": "Invalid request body"}
+
         if "password" in data:
             return {
                 "success": False,

@@ -8,6 +8,7 @@ from app.modules.auth.decorators import require_permissions
 messages_bp = Blueprint("messages", __name__)
 
 
+@messages_bp.route("", methods=["POST"])
 @messages_bp.route("/", methods=["POST"])
 @require_permissions("organization:messages:create")
 def create_message():
@@ -49,11 +50,12 @@ def create_message():
     )
 
     if not result["success"]:
+        status_code = result.get("status_code", 400)
         return jsonify({
             "success": False,
             "message": result.get("message", "Message validation failed"),
             "errors": result.get("errors", [result.get("message")] if result.get("message") else [])
-        }), 400
+        }), status_code
 
     return jsonify({
         "success": True,
@@ -93,6 +95,7 @@ def get_message(message_id):
     }), 200
 
 
+@messages_bp.route("", methods=["GET"])
 @messages_bp.route("/", methods=["GET"])
 @require_permissions("organization:messages:read")
 def get_all_messages():

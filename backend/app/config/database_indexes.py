@@ -134,10 +134,25 @@ def ensure_database_indexes(app=None, force=False):
 
     # 8. Templates
     db["templates"].create_index([("template_id", pymongo.ASCENDING)], unique=True)
-    db["templates"].create_index(
-        [("organization_id", pymongo.ASCENDING), ("name", pymongo.ASCENDING)],
-        unique=True
-    )
+    try:
+        db["templates"].create_index(
+            [("organization_id", pymongo.ASCENDING), ("name_lower", pymongo.ASCENDING)],
+            unique=True,
+            partialFilterExpression={"status": {"$in": ["ACTIVE", "DRAFT"]}, "name_lower": {"$type": "string"}}
+        )
+    except pymongo.errors.OperationFailure as e:
+        if "IndexKeySpecsConflict" in str(e) or getattr(e, "code", None) == 86:
+            try:
+                db["templates"].drop_index("organization_id_1_name_lower_1")
+            except Exception:
+                pass
+            db["templates"].create_index(
+                [("organization_id", pymongo.ASCENDING), ("name_lower", pymongo.ASCENDING)],
+                unique=True,
+                partialFilterExpression={"status": {"$in": ["ACTIVE", "DRAFT"]}, "name_lower": {"$type": "string"}}
+            )
+        else:
+            raise
     db["templates"].create_index([("organization_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
     db["templates"].create_index([("organization_id", pymongo.ASCENDING), ("category", pymongo.ASCENDING)])
     db["templates"].create_index([("organization_id", pymongo.ASCENDING), ("updated_at", pymongo.DESCENDING)])

@@ -396,7 +396,6 @@ def test_self_role_protection_for_org_admin_and_employees(client):
         json={
             "name": "Jane Employee",
             "email": f"emp_{uuid.uuid4().hex[:6]}@tenant.io",
-            "password": "EmployeePassword123!",
             "employee_code": f"EMP-{uuid.uuid4().hex[:6].upper()}",
             "role_ids": [custom_role["role_id"]]
         }
@@ -413,6 +412,13 @@ def test_self_role_protection_for_org_admin_and_employees(client):
     assert update_emp.status_code == 200
 
     # Employee logs in
+    with client.application.app_context():
+        import bcrypt
+        UserRepository._collection().update_one({"user_id": emp_data["user_id"]}, {"$set": {
+            "status": "ACTIVE",
+            "is_active": True,
+            "password_hash": bcrypt.hashpw(b"EmployeePassword123!", bcrypt.gensalt(rounds=4)).decode("utf-8")
+        }})
     emp_login = client.post("/api/v1/auth/login", json={
         "email": emp_data["email"],
         "password": "EmployeePassword123!"

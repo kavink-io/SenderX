@@ -25,9 +25,17 @@ class SenderXApi(Api):
 
 
 api = SenderXApi(
-    title="SenderX API",
+    title="SenderX API & Email Template Studio",
     version="1.0",
-    description="Multi-Channel Communication Platform",
+    description=(
+        "SenderX Multi-Channel Communication Platform & Email Template Studio.\n\n"
+        "Security & Template Guidelines:\n"
+        "- Plain Text Default: All incoming variable values are treated as plain text, auto-escaped, and never executed.\n"
+        "- Markup Detection: String fields containing markup are recorded with 'contains_markup' metadata.\n"
+        "- Threat Rejection: Dangerous patterns (script tags, event handlers, javascript: URLs, CR/LF in subject) return HTTP 422.\n"
+        "- Rich Content: 'body_html' is sanitized via an allowlist sanitizer only when declared as 'rich'.\n"
+        "- Conflict Prevention: Cannot supply both 'template_id' and raw 'html'/'html_body' in message dispatch (HTTP 422)."
+    ),
     doc="/docs"
 )
 

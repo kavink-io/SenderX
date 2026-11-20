@@ -210,7 +210,6 @@ def test_employee_creation_and_listing(client, setup_org_context):
         "name": "Alice Support",
         "email": alice_email,
         "employee_code": alice_code,
-        "password": "StrongPassword123!",
         "role_ids": [support_role_id],
         "role_assignments": [{"role_id": support_role_id, "application_id": ctx["app_crm"]}]
     }, headers=headers)
@@ -273,11 +272,12 @@ def test_custom_role_lifecycle_and_safe_deletion(client, setup_org_context):
         "name": "Bob Analyst",
         "email": f"bob.analyst.{ctx['suffix']}@orga.com",
         "employee_code": f"BOB-{ctx['suffix']}",
-        "password": "StrongPassword123!",
         "role_ids": [temp_role_id]
     }, headers=headers)
     assert emp_res.status_code == 201
     bob_id = emp_res.json["data"]["user_id"]
+    with client.application.app_context():
+        UserRepository._collection().update_one({"user_id": bob_id}, {"$set": {"status": "ACTIVE", "is_active": True}})
 
     # 4. Safe deletion invariant: Role CANNOT be deleted while assigned to active employee
     del_res = client.delete(f"/api/v1/users/roles/{temp_role_id}", headers=headers)
@@ -330,13 +330,13 @@ def test_application_scoped_permissions_enforcement(client, setup_org_context, a
         "name": "Scoped Specialist Charlie",
         "email": f"charlie.crm.{ctx['suffix']}@orga.com",
         "employee_code": f"CHARLIE-{ctx['suffix']}",
-        "password": "StrongPassword123!",
         "role_assignments": [{"role_id": crm_role_id, "application_id": ctx["app_crm"]}]
     }, headers=headers_admin)
     assert emp_res.status_code == 201
     charlie_id = emp_res.json["data"]["user_id"]
 
     with app.app_context():
+        UserRepository._collection().update_one({"user_id": charlie_id}, {"$set": {"status": "ACTIVE", "is_active": True}})
         token_charlie = create_access_token(
             identity=charlie_id,
             additional_claims={"account_type": "ORGANIZATION_USER", "role": "CRM_TEMPLATE_MANAGER"}

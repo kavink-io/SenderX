@@ -345,7 +345,6 @@ class TestEmployeeCodeEdgeCases:
         res = client.post("/api/v1/users/", json={
             "name": "Whitespace Employee",
             "email": f"ws_{suffix}@test.io",
-            "password": "Password123456!",
             "employee_code": "   EMP-TRIM-001   ",
             "role_ids": []
         }, headers=headers)
@@ -365,7 +364,6 @@ class TestEmployeeCodeEdgeCases:
         res1 = client.post("/api/v1/users/", json={
             "name": "Case Base Employee",
             "email": f"case1_{suffix}@test.io",
-            "password": "Password123456!",
             "employee_code": f"CASE-DUP-{suffix.upper()}",
             "role_ids": []
         }, headers=headers)
@@ -375,7 +373,6 @@ class TestEmployeeCodeEdgeCases:
         res2 = client.post("/api/v1/users/", json={
             "name": "Case Duplicate Employee",
             "email": f"case2_{suffix}@test.io",
-            "password": "Password123456!",
             "employee_code": f"case-dup-{suffix.lower()}",
             "role_ids": []
         }, headers=headers)
@@ -391,7 +388,6 @@ class TestEmployeeCodeEdgeCases:
         res_short = client.post("/api/v1/users/", json={
             "name": "Short ID",
             "email": f"short_{suffix}@test.io",
-            "password": "Password123456!",
             "employee_code": "AB",
             "role_ids": []
         }, headers=headers)
@@ -403,7 +399,6 @@ class TestEmployeeCodeEdgeCases:
         res_long = client.post("/api/v1/users/", json={
             "name": "Long ID",
             "email": f"long_{suffix}@test.io",
-            "password": "Password123456!",
             "employee_code": long_code,
             "role_ids": []
         }, headers=headers)
@@ -415,7 +410,6 @@ class TestEmployeeCodeEdgeCases:
         res_40 = client.post("/api/v1/users/", json={
             "name": "Exact 40 ID",
             "email": f"exact40_{suffix}@test.io",
-            "password": "Password123456!",
             "employee_code": exact_40,
             "role_ids": []
         }, headers=headers)
@@ -439,7 +433,6 @@ class TestEmployeeCodeEdgeCases:
             res = client.post("/api/v1/users/", json={
                 "name": "Invalid Code User",
                 "email": f"inv_{uuid.uuid4().hex[:6]}@test.io",
-                "password": "Password123456!",
                 "employee_code": inv_code,
                 "role_ids": []
             }, headers=headers)
@@ -458,7 +451,6 @@ class TestEmployeeCodeEdgeCases:
         res_a = client.post("/api/v1/users/", json={
             "name": "Shared User Org A",
             "email": f"shared_a_{hardening_context['suffix']}@test.io",
-            "password": "Password123456!",
             "employee_code": shared_code,
             "role_ids": []
         }, headers=headers_a)
@@ -469,7 +461,6 @@ class TestEmployeeCodeEdgeCases:
         res_b = client.post("/api/v1/users/", json={
             "name": "Shared User Org B",
             "email": f"shared_b_{hardening_context['suffix']}@test.io",
-            "password": "Password123456!",
             "employee_code": shared_code,
             "role_ids": []
         }, headers=headers_b)

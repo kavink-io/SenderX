@@ -2813,3 +2813,47 @@ select option {
     padding: 6px 8px 8px 8px;
   }
 }
+
+/* EMAIL TEMPLATE STUDIO STYLES (Phase 5 Task 5.6) */
+.modal-xl {
+  max-width: 1240px !important;
+  width: 96vw !important;
+  border-radius: 12px;
+}
+
+.btn-subtab {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  padding: 4px 10px;
+  font-size: 0.775rem;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-subtab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.btn-subtab.active {
+  background: var(--accent-blue, #2563eb);
+  color: #ffffff !important;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.3);
+}
+
+.btn-xs {
+  padding: 3px 8px;
+  font-size: 0.725rem;
+  border-radius: 4px;
+}
+
+.btn-xs.active {
+  background: var(--accent-blue, #2563eb);
+  color: #ffffff !important;
+  border-color: var(--accent-blue, #2563eb);
+}
+

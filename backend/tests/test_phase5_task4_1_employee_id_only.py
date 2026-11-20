@@ -192,7 +192,6 @@ def test_manual_employee_id_creation(client, emp_test_context):
     payload = {
         "name": "Manual Employee 1",
         "email": f"manual1_{suffix}@test.io",
-        "password": "Password123!@#",
         "employee_code": "CUSTOM-EMP-001",
         "role_ids": [role_id]
     }
@@ -220,7 +219,6 @@ def test_automatic_employee_id_generation(client, emp_test_context):
     payload = {
         "name": "Auto Employee 1",
         "email": f"auto1_{suffix}@test.io",
-        "password": "Password123!@#",
         "role_ids": [role_id]
     }
 
@@ -241,7 +239,6 @@ def test_intra_org_duplicate_id_rejection(client, emp_test_context):
     payload = {
         "name": "Duplicate Employee",
         "email": f"dup_{suffix}@test.io",
-        "password": "Password123!@#",
         "employee_code": "CUSTOM-EMP-001",
         "role_ids": [role_id]
     }
@@ -264,7 +261,6 @@ def test_cross_org_duplicate_id_allowed(client, emp_test_context):
     payload = {
         "name": "Beta Employee With Same Code",
         "email": f"beta_same_code_{suffix}@test.io",
-        "password": "Password123!@#",
         "employee_code": "CUSTOM-EMP-001"
     }
 
@@ -317,7 +313,6 @@ def test_non_reuse_of_deactivated_ids(client, emp_test_context):
         "name": "Deactivate Me",
         "email": f"deact_{suffix}@test.io",
         "employee_code": f"DEACT-{suffix}",
-        "password": "Password123!@#",
         "role_ids": [role_id]
     }, headers=headers)
     assert res1.status_code == 201
@@ -333,7 +328,6 @@ def test_non_reuse_of_deactivated_ids(client, emp_test_context):
         "name": "Next Employee",
         "email": f"next_{suffix}@test.io",
         "employee_code": f"NEXT-{suffix}",
-        "password": "Password123!@#",
         "role_ids": [role_id]
     }, headers=headers)
     assert res2.status_code == 201
@@ -353,7 +347,6 @@ def test_search_by_employee_id(client, emp_test_context):
     client.post("/api/v1/users/", json={
         "name": "Search Target",
         "email": f"search_{suffix}@test.io",
-        "password": "Password123!@#",
         "employee_code": "CUSTOM-EMP-001",
         "role_ids": [role_id]
     }, headers=headers)

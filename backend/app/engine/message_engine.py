@@ -28,6 +28,8 @@ class MessageEngine:
             "data": payload["data"],
             "provider": payload.get("provider"),
             "application_id": payload.get("application_id"),
+            "contains_markup": validation.get("contains_markup", False),
+            "validation_notes": ["contains_markup"] if validation.get("contains_markup") else [],
             "status": "CREATED",
             "created_at": datetime.now(
                 timezone.utc

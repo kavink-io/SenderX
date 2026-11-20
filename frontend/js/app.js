@@ -2013,6 +2013,12 @@ async function openMessageDetailsModal(messageId) {
       badgeEl.innerHTML = statusText;
     }
 
+    const markupBadge = document.getElementById("modal-msg-markup-badge");
+    if (markupBadge) {
+      const hasMarkup = m.contains_markup || (m.validation_notes && m.validation_notes.includes("contains_markup"));
+      markupBadge.style.display = hasMarkup ? "inline-block" : "none";
+    }
+
     // Provider info
     const provInfoBox = document.getElementById("modal-msg-provider-info");
     const provIdEl = document.getElementById("modal-msg-provider-id");
@@ -5209,11 +5215,6 @@ async function executeDeleteOrganization() {
   }
 }
 
-// Global listener for 401/403 permission denied to re-fetch context
-window.addEventListener("sx_permission_denied", async (e) => {
-  console.warn("Received 401/403 permission denied event. Refreshing dashboard context.");
-  await loadDashboardContext();
-});
 
 // 6. User Deactivation Handler
 function handleDeactivateUser(userId, userName) {
@@ -5295,6 +5296,7 @@ async function loadOrgTemplates() {
         } else if (t.status === "ACTIVE") {
           actions = `
             <button class="btn btn-secondary btn-sm" onclick="editTemplate('${t.template_id}')">Edit</button>
+            <button class="btn btn-secondary btn-sm" onclick="useTemplateInComposer('${t.template_id}')">Use in Composer</button>
             <button class="btn btn-secondary btn-sm" onclick="viewTemplateVersions('${t.template_id}')">Versions</button>
             ${actions}
             <button class="btn btn-outline btn-sm" onclick="archiveTemplate('${t.template_id}')">Archive</button>
@@ -5329,19 +5331,494 @@ async function loadOrgTemplates() {
   }
 }
 
+// -----------------------------------------------------------------------------
+// EMAIL TEMPLATE STUDIO (Phase 5 Task 5.6)
+// -----------------------------------------------------------------------------
+
+let studioIsDirty = false;
+let studioDeclaredVariables = [];
+let studioPreviewDebounceTimer = null;
+let studioCurrentPreviewMode = "html";
+
+function markTemplateDirty() {
+  studioIsDirty = true;
+  const statusEl = document.getElementById("tpl-save-status");
+  if (statusEl) {
+    statusEl.innerHTML = '<span style="color: #fbbf24;">● Unsaved changes</span> (Esc will prompt before discard)';
+  }
+}
+
+function clearTemplateDirty() {
+  studioIsDirty = false;
+  const statusEl = document.getElementById("tpl-save-status");
+  if (statusEl) {
+    statusEl.textContent = "All changes saved";
+  }
+}
+
+function switchStudioEditorTab(tab) {
+  const htmlBtn = document.getElementById("btn-tab-html");
+  const cssBtn = document.getElementById("btn-tab-css");
+  const htmlArea = document.getElementById("tpl-html-body");
+  const cssArea = document.getElementById("tpl-css");
+
+  if (tab === "css") {
+    htmlBtn.classList.remove("active");
+    cssBtn.classList.add("active");
+    htmlArea.style.display = "none";
+    cssArea.style.display = "block";
+  } else {
+    cssBtn.classList.remove("active");
+    htmlBtn.classList.add("active");
+    cssArea.style.display = "none";
+    htmlArea.style.display = "block";
+  }
+}
+
+function switchStudioPreviewMode(mode) {
+  studioCurrentPreviewMode = mode;
+  const htmlBtn = document.getElementById("btn-preview-html");
+  const textBtn = document.getElementById("btn-preview-text");
+  const iframe = document.getElementById("tpl-preview-iframe");
+  const textPre = document.getElementById("tpl-preview-text");
+
+  if (mode === "text") {
+    htmlBtn.classList.remove("active");
+    textBtn.classList.add("active");
+    iframe.style.display = "none";
+    textPre.style.display = "block";
+  } else {
+    textBtn.classList.remove("active");
+    htmlBtn.classList.add("active");
+    textPre.style.display = "none";
+    iframe.style.display = "block";
+  }
+}
+
+function setStudioPreviewViewport(width) {
+  const btn600 = document.getElementById("btn-viewport-600");
+  const btn320 = document.getElementById("btn-viewport-320");
+  const iframe = document.getElementById("tpl-preview-iframe");
+
+  if (width === "320") {
+    btn600.classList.remove("active");
+    btn320.classList.add("active");
+    iframe.style.width = "320px";
+  } else {
+    btn320.classList.remove("active");
+    btn600.classList.add("active");
+    iframe.style.width = "600px";
+  }
+}
+
+function onTemplateContentChanged() {
+  markTemplateDirty();
+  updateStudioCharCounts();
+  syncStudioDetectedVariables();
+
+  // Debounce live preview update (350ms)
+  if (studioPreviewDebounceTimer) clearTimeout(studioPreviewDebounceTimer);
+  studioPreviewDebounceTimer = setTimeout(() => {
+    updateStudioLivePreview();
+  }, 350);
+}
+
+function updateStudioCharCounts() {
+  const htmlVal = document.getElementById("tpl-html-body")?.value || "";
+  const cssVal = document.getElementById("tpl-css")?.value || "";
+  const htmlKb = (new Blob([htmlVal]).size / 1024).toFixed(1);
+  const cssKb = (new Blob([cssVal]).size / 1024).toFixed(1);
+
+  const countEl = document.getElementById("tpl-char-count");
+  if (countEl) {
+    countEl.textContent = `HTML: ${htmlKb} KB / 200 KB | CSS: ${cssKb} KB / 50 KB`;
+    if (parseFloat(htmlKb) > 200 || parseFloat(cssKb) > 50) {
+      countEl.style.color = "#ef4444";
+    } else {
+      countEl.style.color = "var(--text-muted)";
+    }
+  }
+}
+
+function syncStudioDetectedVariables() {
+  const subjectVal = document.getElementById("tpl-subject")?.value || "";
+  const htmlVal = document.getElementById("tpl-html-body")?.value || "";
+  const cssVal = document.getElementById("tpl-css")?.value || "";
+  const fullText = subjectVal + " " + htmlVal + " " + cssVal;
+
+  const varRegex = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*\|[^\}]+)?\s*\}\}/g;
+  const detectedNames = new Set();
+  let m;
+  while ((m = varRegex.exec(fullText)) !== null) {
+    detectedNames.add(m[1]);
+  }
+
+  // Update existing declared variables and add new detected ones
+  const existingMap = new Map();
+  studioDeclaredVariables.forEach((v) => existingMap.set(v.name, v));
+
+  const updatedList = [];
+  detectedNames.forEach((name) => {
+    if (existingMap.has(name)) {
+      updatedList.push(existingMap.get(name));
+      existingMap.delete(name);
+    } else {
+      // Auto-inferred defaults based on name convention
+      let inferredType = "text";
+      if (name.includes("url") || name.includes("link")) inferredType = "url";
+      if (name.includes("color")) inferredType = "color";
+      if (name === "body_html") inferredType = "rich";
+
+      let sampleVal = `Sample ${name}`;
+      if (inferredType === "url") sampleVal = "https://example.com/click";
+      if (inferredType === "color") sampleVal = "#2563eb";
+
+      updatedList.push({
+        name,
+        type: inferredType,
+        required: true,
+        sample_value: sampleVal,
+        max_length: 1000
+      });
+    }
+  });
+
+  // Keep any manually added custom variables that aren't yet referenced in text
+  existingMap.forEach((v) => {
+    if (v._manual) {
+      updatedList.push(v);
+    }
+  });
+
+  studioDeclaredVariables = updatedList;
+  renderStudioVariablesPanel();
+}
+
+function renderStudioVariablesPanel() {
+  const container = document.getElementById("tpl-variables-list");
+  const countBadge = document.getElementById("tpl-var-count-badge");
+  if (!container) return;
+
+  if (countBadge) {
+    countBadge.textContent = `${studioDeclaredVariables.length} variable${studioDeclaredVariables.length === 1 ? "" : "s"}`;
+  }
+
+  if (studioDeclaredVariables.length === 0) {
+    container.innerHTML = '<em style="color: var(--text-muted); padding: 8px; display: block;">No variables detected yet. Type {{ variable_name }} in subject, HTML, or CSS.</em>';
+    return;
+  }
+
+  container.innerHTML = studioDeclaredVariables.map((v, idx) => `
+    <div style="display: grid; grid-template-columns: 140px 85px 75px 1fr 24px; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+      <div>
+        <strong style="color: var(--accent-cyan); font-family: var(--font-mono); font-size: 0.775rem;">{{ ${escapeHtml(v.name)} }}</strong>
+      </div>
+      <div>
+        <select onchange="updateStudioVarProp(${idx}, 'type', this.value)" style="width: 100%; padding: 2px 4px; font-size: 0.725rem;">
+          <option value="text" ${v.type === "text" ? "selected" : ""}>Text</option>
+          <option value="url" ${v.type === "url" ? "selected" : ""}>HTTPS URL</option>
+          <option value="color" ${v.type === "color" ? "selected" : ""}>Hex Color</option>
+          <option value="rich" ${v.type === "rich" ? "selected" : ""}>Rich HTML</option>
+        </select>
+      </div>
+      <div style="text-align: center;">
+        <label style="font-size: 0.7rem; cursor: pointer; display: flex; align-items: center; gap: 3px; justify-content: center; margin: 0;">
+          <input type="checkbox" ${v.required ? "checked" : ""} onchange="updateStudioVarProp(${idx}, 'required', this.checked)" />
+          Req
+        </label>
+      </div>
+      <div>
+        <input type="text" value="${escapeHtml(v.sample_value || "")}" placeholder="Preview sample value..." style="width: 100%; padding: 2px 6px; font-size: 0.75rem;" oninput="updateStudioVarProp(${idx}, 'sample_value', this.value, true)" />
+      </div>
+      <div>
+        <button type="button" class="btn btn-danger btn-xs" style="padding: 1px 5px; font-size: 0.7rem;" onclick="removeStudioVariable(${idx})" title="Remove Variable">&times;</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+function updateStudioVarProp(idx, prop, value, debouncePreview = false) {
+  if (studioDeclaredVariables[idx]) {
+    studioDeclaredVariables[idx][prop] = value;
+    markTemplateDirty();
+    if (debouncePreview) {
+      if (studioPreviewDebounceTimer) clearTimeout(studioPreviewDebounceTimer);
+      studioPreviewDebounceTimer = setTimeout(() => updateStudioLivePreview(), 300);
+    } else {
+      updateStudioLivePreview();
+    }
+  }
+}
+
+function addCustomStudioVariable() {
+  const name = prompt("Enter new variable name (alphanumeric and underscore):");
+  if (!name) return;
+  const clean = name.trim();
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(clean)) {
+    showToast("Invalid variable name. Must start with letter/underscore and contain letters/numbers/underscores only.", "danger");
+    return;
+  }
+  if (studioDeclaredVariables.some((v) => v.name === clean)) {
+    showToast(`Variable '{{ ${clean} }}' already exists`, "warning");
+    return;
+  }
+  studioDeclaredVariables.push({
+    name: clean,
+    type: "text",
+    required: true,
+    sample_value: `Sample ${clean}`,
+    max_length: 1000,
+    _manual: true
+  });
+  markTemplateDirty();
+  renderStudioVariablesPanel();
+  updateStudioLivePreview();
+}
+
+function removeStudioVariable(idx) {
+  studioDeclaredVariables.splice(idx, 1);
+  markTemplateDirty();
+  renderStudioVariablesPanel();
+  updateStudioLivePreview();
+}
+
+async function insertStarterLayout() {
+  const htmlArea = document.getElementById("tpl-html-body");
+  const cssArea = document.getElementById("tpl-css");
+  if (htmlArea.value.trim() && !confirm("Replace current editor contents with the responsive 600px transactional starter layout?")) {
+    return;
+  }
+
+  try {
+    const res = await ApiClient.getStarterLayout();
+    if (res.success && res.data) {
+      document.getElementById("tpl-subject").value = res.data.subject || "Welcome to {{ brand_name }}!";
+      htmlArea.value = res.data.html;
+      cssArea.value = res.data.css;
+      studioDeclaredVariables = res.data.variables || [];
+      markTemplateDirty();
+      updateStudioCharCounts();
+      renderStudioVariablesPanel();
+      await updateStudioLivePreview();
+      showToast("Responsive 600px starter layout loaded successfully!", "success");
+    }
+  } catch (err) {
+    showToast("Could not load starter layout: " + err.message, "danger");
+  }
+}
+
+async function updateStudioLivePreview() {
+  const subject = document.getElementById("tpl-subject")?.value || "";
+  const html_body = document.getElementById("tpl-html-body")?.value || "";
+  const css = document.getElementById("tpl-css")?.value || "";
+
+  // Collect sample data
+  const sample_data = {};
+  studioDeclaredVariables.forEach((v) => {
+    sample_data[v.name] = v.sample_value !== undefined ? v.sample_value : (v.default !== undefined ? v.default : `[${v.name}]`);
+  });
+
+  const payload = {
+    subject,
+    html_body,
+    css,
+    variables: studioDeclaredVariables,
+    sample_data
+  };
+
+  const iframe = document.getElementById("tpl-preview-iframe");
+  const textPre = document.getElementById("tpl-preview-text");
+  const subjectDisplay = document.getElementById("tpl-rendered-subject-display");
+  const warningsBox = document.getElementById("tpl-compat-warnings-box");
+
+  try {
+    const res = await ApiClient.previewTemplateDraft(payload);
+    if (res.success && res.data) {
+      if (subjectDisplay) subjectDisplay.textContent = res.data.rendered_subject || "-";
+      if (iframe) iframe.srcdoc = res.data.rendered_html || "<p style='color:#999;padding:20px;'>No rendered content</p>";
+      if (textPre) textPre.textContent = res.data.rendered_plain_text || "No plain text content";
+
+      // Render compatibility warnings
+      const warnings = res.data.compatibility_warnings || [];
+      if (warningsBox) {
+        if (warnings.length === 0) {
+          warningsBox.innerHTML = '<span style="color: #4ade80;">✓ Email client compatibility: No warnings detected (Gmail & Outlook compatible).</span>';
+        } else {
+          warningsBox.innerHTML = `
+            <div style="color: #fbbf24; font-weight: 600; margin-bottom: 2px;">⚠️ Compatibility Warnings (${warnings.length}):</div>
+            <ul style="margin: 0; padding-left: 16px; color: var(--text-secondary); line-height: 1.3;">
+              ${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}
+            </ul>
+          `;
+        }
+      }
+    }
+  } catch (err) {
+    // If preview fails on syntax/security error, display message gracefully in preview pane
+    if (iframe) {
+      iframe.srcdoc = `<div style="color:#ef4444;font-family:sans-serif;padding:16px;"><strong>Preview Error:</strong> ${escapeHtml(err.message)}</div>`;
+    }
+  }
+}
+
+async function runStudioValidation() {
+  const alertEl = document.getElementById("tpl-editor-error-alert");
+  const name = document.getElementById("tpl-name")?.value.trim() || "";
+  const subject = document.getElementById("tpl-subject")?.value.trim() || "";
+  const html_body = document.getElementById("tpl-html-body")?.value || "";
+  const css = document.getElementById("tpl-css")?.value || "";
+
+  const payload = {
+    name,
+    subject,
+    html_body,
+    css,
+    variables: studioDeclaredVariables
+  };
+
+  try {
+    const res = await ApiClient.validateTemplate(payload);
+    if (alertEl) {
+      alertEl.style.display = "block";
+      if (res.success && res.data.valid) {
+        alertEl.style.background = "rgba(74, 222, 128, 0.12)";
+        alertEl.style.border = "1px solid rgba(74, 222, 128, 0.3)";
+        alertEl.style.color = "#4ade80";
+        alertEl.innerHTML = `
+          <strong>✓ Valid Template:</strong> Passed all security checks and syntax validation.
+          Found ${res.data.detected_variables.length} variable(s), ${res.data.compatibility_warnings.length} compatibility note(s).
+        `;
+      } else {
+        alertEl.style.background = "rgba(239, 68, 68, 0.12)";
+        alertEl.style.border = "1px solid rgba(239, 68, 68, 0.3)";
+        alertEl.style.color = "#f87171";
+
+        const errItems = [];
+        (res.data.security_findings || []).forEach((f) => errItems.push(`Security: ${f}`));
+        (res.data.syntax_errors || []).forEach((e) => errItems.push(`Syntax: ${e}`));
+        if (res.data.undeclared_variables && res.data.undeclared_variables.length > 0) {
+          errItems.push(`Undeclared Variables: {{ ${res.data.undeclared_variables.join(" }}, {{ ")} }}`);
+        }
+
+        alertEl.innerHTML = `
+          <strong>Validation Issues Found:</strong>
+          <ul style="margin: 4px 0 0 16px; padding: 0;">
+            ${errItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+          </ul>
+        `;
+      }
+    }
+  } catch (err) {
+    if (alertEl) {
+      alertEl.style.display = "block";
+      alertEl.style.background = "rgba(239, 68, 68, 0.12)";
+      alertEl.style.border = "1px solid rgba(239, 68, 68, 0.3)";
+      alertEl.style.color = "#f87171";
+      alertEl.textContent = `Validation failed: ${err.message}`;
+    }
+  }
+}
+
+async function submitTemplateStudio(publish = false) {
+  const alertEl = document.getElementById("tpl-editor-error-alert");
+  if (alertEl) alertEl.style.display = "none";
+
+  const editId = document.getElementById("tpl-edit-id").value;
+  const name = document.getElementById("tpl-name").value.trim();
+  const category = document.getElementById("tpl-category").value;
+  const description = document.getElementById("tpl-description").value.trim();
+  const subject = document.getElementById("tpl-subject").value.trim();
+  const html_body = document.getElementById("tpl-html-body").value;
+  const css = document.getElementById("tpl-css").value;
+  const strict_variables = document.getElementById("tpl-strict-variables").checked;
+
+  if (!name || name.length < 2 || name.length > 80) {
+    showStudioError("Template name is required and must be between 2 and 80 characters.");
+    return;
+  }
+
+  if (!subject) {
+    showStudioError("Email template requires a non-empty subject line.");
+    return;
+  }
+
+  const payload = {
+    name,
+    category,
+    description,
+    channel: "email",
+    subject,
+    html_body,
+    css,
+    variables: studioDeclaredVariables,
+    strict_variables
+  };
+
+  try {
+    let res;
+    if (editId) {
+      res = await ApiClient.updateTemplate(editId, payload);
+      if (res.success && publish) {
+        res = await ApiClient.publishTemplate(editId);
+      }
+    } else {
+      res = await ApiClient.createTemplate(payload);
+      if (res.success && publish && res.data?.template_id) {
+        res = await ApiClient.publishTemplate(res.data.template_id);
+      }
+    }
+
+    if (res.success) {
+      clearTemplateDirty();
+      closeModal("modal-template-editor");
+      showToast(publish ? "Template saved and published successfully!" : "Template draft saved successfully!", "success");
+      await loadOrgTemplates();
+    } else {
+      showStudioError(res.message || "Failed to save template");
+    }
+  } catch (err) {
+    showStudioError(err.message || "An error occurred while saving the template");
+  }
+}
+
+function showStudioError(msg) {
+  const alertEl = document.getElementById("tpl-editor-error-alert");
+  if (alertEl) {
+    alertEl.style.display = "block";
+    alertEl.style.background = "rgba(239, 68, 68, 0.12)";
+    alertEl.style.border = "1px solid rgba(239, 68, 68, 0.3)";
+    alertEl.style.color = "#f87171";
+    alertEl.textContent = msg;
+  }
+  showToast(msg, "danger");
+}
+
 function openCreateTemplateModal() {
-  document.getElementById("tpl-modal-title").textContent = "Create Email Template";
+  document.getElementById("tpl-modal-title").textContent = "Email Template Studio";
+  document.getElementById("tpl-modal-badge").textContent = "NEW DRAFT";
   document.getElementById("tpl-edit-id").value = "";
   document.getElementById("tpl-name").value = "";
-  document.getElementById("tpl-category").value = "general";
+  document.getElementById("tpl-category").value = "transactional";
   document.getElementById("tpl-description").value = "";
   document.getElementById("tpl-subject").value = "";
-  document.getElementById("tpl-header").value = "";
-  document.getElementById("tpl-footer").value = "";
   document.getElementById("tpl-html-body").value = "";
-  document.getElementById("tpl-plain-body").value = "";
-  document.getElementById("tpl-variables-json").value = "[]";
-  document.getElementById("btn-save-template").textContent = "Save Draft";
+  document.getElementById("tpl-css").value = "";
+  document.getElementById("tpl-strict-variables").checked = false;
+
+  const alertEl = document.getElementById("tpl-editor-error-alert");
+  if (alertEl) alertEl.style.display = "none";
+
+  studioDeclaredVariables = [];
+  clearTemplateDirty();
+  switchStudioEditorTab("html");
+  switchStudioPreviewMode("html");
+  setStudioPreviewViewport("600");
+  updateStudioCharCounts();
+  renderStudioVariablesPanel();
+
+  const iframe = document.getElementById("tpl-preview-iframe");
+  if (iframe) iframe.srcdoc = "<div style='color:#94a3b8;font-family:sans-serif;padding:30px;text-align:center;'>Start typing HTML or click 'Start from Starter Layout' to begin.</div>";
+
   openModal("modal-template-editor");
 }
 
@@ -5354,88 +5831,70 @@ async function editTemplate(templateId) {
     }
 
     const t = res.data;
-    document.getElementById("tpl-modal-title").textContent = `Edit Template (${t.status} v${t.version})`;
+    document.getElementById("tpl-modal-title").textContent = `Email Template Studio — ${t.name}`;
+    document.getElementById("tpl-modal-badge").textContent = `${t.status} v${t.version}`;
     document.getElementById("tpl-edit-id").value = t.template_id;
     document.getElementById("tpl-name").value = t.name || "";
     document.getElementById("tpl-category").value = t.category || "general";
     document.getElementById("tpl-description").value = t.description || "";
     document.getElementById("tpl-subject").value = t.subject || "";
-    document.getElementById("tpl-header").value = t.header || "";
-    document.getElementById("tpl-footer").value = t.footer || "";
     document.getElementById("tpl-html-body").value = t.html_body || "";
-    document.getElementById("tpl-plain-body").value = t.plain_text_body || "";
-    document.getElementById("tpl-variables-json").value = JSON.stringify(t.variables || [], null, 2);
-    document.getElementById("btn-save-template").textContent = t.status === "ACTIVE" ? "Update (Bumps Version)" : "Save Changes";
+    document.getElementById("tpl-css").value = t.css || "";
+    document.getElementById("tpl-strict-variables").checked = Boolean(t.strict_variables);
+
+    const alertEl = document.getElementById("tpl-editor-error-alert");
+    if (alertEl) alertEl.style.display = "none";
+
+    studioDeclaredVariables = t.variables || [];
+    clearTemplateDirty();
+    switchStudioEditorTab("html");
+    switchStudioPreviewMode("html");
+    setStudioPreviewViewport("600");
+    updateStudioCharCounts();
+    renderStudioVariablesPanel();
 
     openModal("modal-template-editor");
+    await updateStudioLivePreview();
   } catch (err) {
     showToast(err.message, "danger");
   }
 }
 
-function setupTemplateEditorForm() {
-  const form = document.getElementById("form-template-editor");
-  if (!form) return;
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const editId = document.getElementById("tpl-edit-id").value;
-    const name = document.getElementById("tpl-name").value.trim();
-    const category = document.getElementById("tpl-category").value;
-    const description = document.getElementById("tpl-description").value.trim();
-    const subject = document.getElementById("tpl-subject").value.trim();
-    const header = document.getElementById("tpl-header").value;
-    const footer = document.getElementById("tpl-footer").value;
-    const html_body = document.getElementById("tpl-html-body").value;
-    const plain_text_body = document.getElementById("tpl-plain-body").value;
-
-    let variables = [];
-    const varsRaw = document.getElementById("tpl-variables-json").value.trim();
-    if (varsRaw) {
-      try {
-        variables = JSON.parse(varsRaw);
-        if (!Array.isArray(variables)) {
-          showToast("Dynamic variables must be a JSON array of objects", "danger");
-          return;
-        }
-      } catch (err) {
-        showToast("Invalid JSON in dynamic variables: " + err.message, "danger");
-        return;
-      }
+function closeTemplateStudioModal() {
+  if (studioIsDirty) {
+    if (!confirm("You have unsaved changes in this template. Are you sure you want to discard them?")) {
+      return;
     }
-
-    const payload = {
-      name,
-      category,
-      description,
-      subject,
-      header,
-      footer,
-      html_body,
-      plain_text_body,
-      variables
-    };
-
-    try {
-      let res;
-      if (editId) {
-        res = await ApiClient.updateTemplate(editId, payload);
-      } else {
-        res = await ApiClient.createTemplate(payload);
-      }
-
-      if (res.success) {
-        showToast(res.message || "Template saved successfully!", "success");
-        closeModal("modal-template-editor");
-        await loadOrgTemplates();
-      } else {
-        showToast(res.message || "Failed to save template", "danger");
-      }
-    } catch (err) {
-      showToast(err.message, "danger");
-    }
-  });
+  }
+  clearTemplateDirty();
+  closeModal("modal-template-editor");
 }
+
+function useTemplateInComposer(templateId) {
+  switchTab("tab-org-messages");
+  switchMessageSubtab("composer");
+  const chanSelect = document.getElementById("msg-channel");
+  if (chanSelect) chanSelect.value = "email";
+  handleChannelChange("email");
+
+  const tplSelect = document.getElementById("msg-template-select");
+  if (tplSelect) {
+    tplSelect.value = templateId;
+    handleTemplateSelect(templateId);
+  }
+  showToast("Template loaded into Message Composer!", "success");
+}
+
+// Global keyboard accessibility: Esc key prompts if dirty in Template Studio
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    const studioModal = document.getElementById("modal-template-editor");
+    if (studioModal && studioModal.classList.contains("active")) {
+      e.preventDefault();
+      closeTemplateStudioModal();
+    }
+  }
+});
 
 async function openTemplatePreview(templateId) {
   try {

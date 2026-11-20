@@ -114,7 +114,7 @@ const ApiClient = {
         if (refreshed) {
           headers["Authorization"] = `Bearer ${this.getAccessToken()}`;
           const retryRes = await fetch(url, { ...options, headers });
-          if (retryRes.status === 401 || retryRes.status === 403) {
+          if ((retryRes.status === 401 || retryRes.status === 403) && !endpoint.includes("/users/me/dashboard-context")) {
             window.dispatchEvent(new CustomEvent("sx_permission_denied", {
               detail: { status: retryRes.status, endpoint }
             }));
@@ -123,14 +123,16 @@ const ApiClient = {
         } else {
           this.clearTokens();
           window.dispatchEvent(new CustomEvent("sx_logout"));
-          window.dispatchEvent(new CustomEvent("sx_permission_denied", {
-            detail: { status: 401, endpoint }
-          }));
+          if (!endpoint.includes("/users/me/dashboard-context")) {
+            window.dispatchEvent(new CustomEvent("sx_permission_denied", {
+              detail: { status: 401, endpoint }
+            }));
+          }
           throw new Error("Session expired. Please sign in again.");
         }
       }
 
-      if (response.status === 403) {
+      if (response.status === 403 && !endpoint.includes("/users/me/dashboard-context")) {
         window.dispatchEvent(new CustomEvent("sx_permission_denied", {
           detail: { status: 403, endpoint }
         }));
@@ -675,5 +677,23 @@ const ApiClient = {
 
   async getTemplateVersion(templateId, version) {
     return await this.request(`/templates/${templateId}/versions/${version}`);
+  },
+
+  async validateTemplate(data) {
+    return await this.request("/templates/validate", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
+
+  async previewTemplateDraft(data) {
+    return await this.request("/templates/preview", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
+
+  async getStarterLayout() {
+    return await this.request("/templates/starter-layout");
   }
 };
