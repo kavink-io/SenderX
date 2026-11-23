@@ -1,0 +1,35 @@
+# Python virtual environment
+backend/venv/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Git
+.git/
+**/.git/
+
+# Node dependencies and builds
+**/node_modules/
+**/dist/
+**/build/
+**/.next/
+**/coverage/
+
+# Generated files
+**/*.log
+**/*.tmp
+**/*.bak
+
+# Runtime and test data
+**/uploads/
+**/media_storage/
+**/temp/
+**/tmp/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

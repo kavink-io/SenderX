@@ -153,12 +153,16 @@ def create_app():
     # Serve static frontend application and assets
     import os
     from flask import send_from_directory, request
-    frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend"))
+    frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist"))
+    if os.path.exists(os.path.join(frontend_dist, "index.html")):
+        frontend_dir = frontend_dist
+    else:
+        frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend"))
 
     @app.after_request
     def set_cache_headers(response):
         # Prevent browser disk caching of root SPA index page and assets to avoid stale script cache
-        if request.path in ["/", "/index.html"] or request.path.startswith("/js/") or request.path.startswith("/css/"):
+        if request.path in ["/", "/index.html"] or request.path.startswith("/js/") or request.path.startswith("/css/") or request.path.startswith("/assets/"):
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
@@ -167,6 +171,10 @@ def create_app():
     @app.route("/")
     def index():
         return send_from_directory(frontend_dir, "index.html")
+
+    @app.route("/assets/<path:filename>")
+    def serve_assets(filename):
+        return send_from_directory(os.path.join(frontend_dir, "assets"), filename)
 
     @app.route("/css/<path:filename>")
     def serve_css(filename):

@@ -565,24 +565,17 @@ class TemplateSandboxRunner:
                         raise ValueError(f"Filter argument error in {name}: '{filter_node.name}({arg.value})' exceeds safe limit (max 1000)")
 
     @classmethod
-    def render(
+    def render_in_process(
         cls,
         template_text: str,
         context: Dict[str, Any],
         autoescape: bool = True
     ) -> str:
         """
-        Render template string with strict limits on output size and execution time.
-        Uses streaming chunk generation to abort immediately if limits are breached.
+        Internal in-process streaming render (used by isolated runner subprocess).
         """
         if not template_text:
             return ""
-
-        cls.inspect_ast(template_text)
-
-        # Validate input context variable count and nesting depth
-        if context:
-            validate_context_structure(context)
 
         env = SenderXSandboxedEnvironment(autoescape=autoescape)
 
@@ -620,6 +613,38 @@ class TemplateSandboxRunner:
             raise ValueError(f"Template rendering exceeded time limit ({elapsed:.2f}s > {MAX_RENDER_SECONDS}s)")
 
         return rendered
+
+    @classmethod
+    def render(
+        cls,
+        template_text: str,
+        context: Dict[str, Any],
+        autoescape: bool = True,
+        timeout: Optional[float] = None,
+        **kwargs
+    ) -> str:
+        """
+        Render template string using an isolated OS process boundary with hard preemption.
+        Performs fast in-process AST inspection and context structure validation first,
+        then delegates execution to IsolatedTemplateRenderer.
+        """
+        if not template_text:
+            return ""
+
+        cls.inspect_ast(template_text)
+
+        # Validate input context variable count and nesting depth
+        if context:
+            validate_context_structure(context)
+
+        from app.modules.templates.isolated_executor import IsolatedTemplateRenderer
+        return IsolatedTemplateRenderer.render(
+            template_text=template_text,
+            context=context or {},
+            autoescape=autoescape,
+            timeout=timeout,
+            **kwargs
+        )
 
 
 # ==============================================================================
