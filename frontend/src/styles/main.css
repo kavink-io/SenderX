@@ -627,8 +627,16 @@ select option {
   padding: 20px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid var(--glass-border-subtle);
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
 .sidebar-nav {
@@ -673,6 +681,13 @@ select option {
   align-items: center;
   gap: 10px;
   font-family: inherit;
+  text-decoration: none;
+}
+
+.nav-item:hover,
+.nav-item:focus,
+.nav-item.active {
+  text-decoration: none;
 }
 
 .nav-icon {
@@ -843,6 +858,11 @@ select option {
   color: var(--text-secondary);
 }
 
+.page-body-breadcrumb {
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
 .breadcrumb-nav span.separator {
   color: var(--text-muted);
   font-size: 0.7rem;
@@ -970,6 +990,60 @@ select option {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+.icon-btn-sm {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+}
+
+.icon-btn-success {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+
+.icon-btn-success:hover {
+  background: #d1fae5;
+  color: #065f46;
+  border-color: #6ee7b7;
+}
+
+[data-theme="dark"] .icon-btn-success {
+  background: rgba(16, 185, 129, 0.14);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+[data-theme="dark"] .icon-btn-success:hover {
+  background: rgba(16, 185, 129, 0.24);
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.5);
+}
+
+.icon-btn-danger {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.icon-btn-danger:hover {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: #f87171;
+}
+
+[data-theme="dark"] .icon-btn-danger {
+  background: rgba(255, 100, 124, 0.14);
+  color: var(--status-error);
+  border-color: rgba(255, 100, 124, 0.3);
+}
+
+[data-theme="dark"] .icon-btn-danger:hover {
+  background: rgba(255, 100, 124, 0.24);
+  color: #ff8fa3;
+  border-color: rgba(255, 100, 124, 0.5);
+}
+
 .notification-badge-dot {
   position: absolute;
   top: 8px;
@@ -1046,13 +1120,24 @@ select option {
 .user-profile-pill {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 4px 12px 4px 5px;
+  gap: 8px;
+  padding: 6px 14px;
   background: var(--bg-secondary);
   border: 1px solid var(--glass-border);
   border-radius: 20px;
+  cursor: pointer;
   transition: all 0.2s ease;
   box-shadow: var(--shadow-sm);
+}
+
+.user-profile-pill .user-email {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .user-profile-pill:hover {
@@ -2639,12 +2724,12 @@ select option {
     padding: 16px 12px;
   }
 
-  .user-details {
-    display: none;
+  .user-profile-pill {
+    padding: 5px 12px;
   }
 
-  .user-profile-pill {
-    padding: 4px;
+  .user-profile-pill .user-email {
+    max-width: 140px;
   }
 
   .modal-card {
@@ -2681,7 +2766,7 @@ select option {
     align-items: center;
   }
 
-  .breadcrumb-nav {
+  .top-nav .breadcrumb-nav {
     display: none;
   }
 

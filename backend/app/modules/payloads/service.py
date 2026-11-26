@@ -224,7 +224,8 @@ class PayloadService:
 
         message_res = MessageService.create_message(
             payload=dispatch_payload,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_id=application_id,
         )
 
         if not message_res.get("success"):

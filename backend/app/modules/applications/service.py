@@ -73,7 +73,8 @@ class ApplicationService:
     @classmethod
     def get_application(cls, application_id: str, organization_id: str) -> Optional[Dict[str, Any]]:
         """Fetch application strictly scoped to organization."""
-        return ApplicationRepository.find_by_id(application_id, organization_id=organization_id)
+        app = ApplicationRepository.find_by_id(application_id, organization_id=organization_id)
+        return None if app and app.get("deleted_at") else app
 
     @classmethod
     def list_applications(
@@ -210,6 +211,9 @@ class ApplicationService:
         if not app:
             return {"success": False, "status_code": 404, "message": "Application not found"}
 
+        if app.get("deleted_at"):
+            return {"success": False, "status_code": 409, "message": "A deleted application cannot be reactivated"}
+
         if app.get("status") == ApplicationStatus.ACTIVE:
             return {"success": True, "status_code": 200, "message": "Application is already active"}
 
@@ -224,6 +228,26 @@ class ApplicationService:
             "success": True,
             "status_code": 200,
             "message": "Application activated successfully. Note that previously revoked credentials remain revoked."
+        }
+
+    @classmethod
+    def delete_application(cls, application_id: str, organization_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Soft-delete an application and revoke its credentials without deleting history."""
+        app = ApplicationRepository.find_by_id(application_id, organization_id=organization_id)
+        if not app:
+            return {"success": False, "status_code": 404, "message": "Application not found"}
+        if app.get("deleted_at"):
+            return {"success": True, "status_code": 200, "message": "Application is already deleted"}
+
+        deactivated = cls.deactivate_application(application_id, organization_id, user_id)
+        if not deactivated.get("success"):
+            return deactivated
+        ApplicationRepository.mark_deleted(application_id, organization_id, user_id)
+        return {
+            "success": True,
+            "status_code": 200,
+            "message": "Application soft-deleted; credentials revoked and history retained.",
+            "revoked_credentials_count": deactivated.get("revoked_credentials_count", 0),
         }
 
     @classmethod

@@ -39,8 +39,8 @@ services:
       - "5672:5672"
       - "15672:15672"
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_APP_USER:-senderx_app}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_APP_PASSWORD:?Set RABBITMQ_APP_PASSWORD in the deployment environment}
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -67,8 +67,8 @@ services:
       AUTH_OTP_EMAIL_PROVIDER: ${AUTH_OTP_EMAIL_PROVIDER:-}
       MONGO_URI: ${MONGO_URI:-mongodb://mongodb:27017}
       MONGO_DB: ${MONGO_DB:-senderx}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_APP_USER:-senderx_app}:${RABBITMQ_APP_PASSWORD:?Set RABBITMQ_APP_PASSWORD in the deployment environment}@rabbitmq:5672//
       SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
       SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
@@ -104,8 +104,8 @@ services:
       AUTH_OTP_EMAIL_PROVIDER: ${AUTH_OTP_EMAIL_PROVIDER:-}
       MONGO_URI: ${MONGO_URI:-mongodb://mongodb:27017}
       MONGO_DB: ${MONGO_DB:-senderx}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_APP_USER:-senderx_app}:${RABBITMQ_APP_PASSWORD:?Set RABBITMQ_APP_PASSWORD in the deployment environment}@rabbitmq:5672//
       SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
       SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}

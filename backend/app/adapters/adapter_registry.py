@@ -35,7 +35,7 @@ class AdapterRegistry:
     TEAMS_PROVIDERS = {"mock", "teams", "microsoft_teams", "graph", "msteams"}
 
     @classmethod
-    def get_adapter(cls, provider: str, channel: Optional[str] = None, organization_id: Optional[str] = None):
+    def get_adapter(cls, provider: str, channel: Optional[str] = None, organization_id: Optional[str] = None, **kwargs):
         """
         Resolve and instantiate the appropriate adapter for a channel, provider, and tenant.
         Strictly enforces tenant credentials and never silently falls back to mock in production.
@@ -325,16 +325,40 @@ class AdapterRegistry:
                 )
 
             credentials = None
-            for p_key in (provider, "meta", "whatsapp", "whatsapp_cloud"):
+            # 1. Try organization-specific WhatsApp Cloud API integration repository first
+            if organization_id:
                 try:
-                    credentials = ProviderConfigService.get_decrypted_configuration(
-                        p_key,
-                        organization_id=organization_id
+                    from app.modules.whatsapp.service import WhatsAppIntegrationService
+                    credentials = WhatsAppIntegrationService.resolve_credentials_for_dispatch(
+                        organization_id=organization_id,
+                        integration_id=kwargs.get("integration_id") or kwargs.get("whatsapp_integration_id"),
+                        from_phone_number_id=kwargs.get("from_phone_number_id") or kwargs.get("from")
                     )
-                    if credentials:
-                        break
+                except ValueError as wa_err:
+                    err_str = str(wa_err)
+                    if (
+                        "Multiple active WhatsApp integrations" in err_str
+                        or "not found or access denied" in err_str
+                        or "is disconnected or inactive" in err_str
+                        or "sender phone number ID" in err_str
+                    ):
+                        raise
+                    credentials = None
                 except Exception:
                     credentials = None
+
+            # 2. Fall back to centralized / legacy provider_configs if not configured in whatsapp_integrations
+            if not credentials:
+                for p_key in (provider, "meta", "whatsapp", "whatsapp_cloud"):
+                    try:
+                        credentials = ProviderConfigService.get_decrypted_configuration(
+                            p_key,
+                            organization_id=organization_id
+                        )
+                        if credentials:
+                            break
+                    except Exception:
+                        credentials = None
 
             access_token = credentials.get("access_token") if credentials else None
             phone_number_id = credentials.get("phone_number_id") if credentials else None

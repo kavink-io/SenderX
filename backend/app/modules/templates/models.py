@@ -51,14 +51,31 @@ class TemplateCreateModel(BaseModel):
     strict_variables: Optional[bool] = Field(False, description="Whether to reject undeclared variable keys on dispatch")
     header: Optional[str] = Field(None, max_length=64 * 1024)
     footer: Optional[str] = Field(None, max_length=64 * 1024)
+    status: Optional[str] = Field(None, description="Initial template status (DRAFT, PUBLISHED, or ACTIVE)")
 
     @model_validator(mode="before")
     @classmethod
     def remap_html_field(cls, values):
         if isinstance(values, dict):
-            if "html" in values and "html_body" not in values:
-                values["html_body"] = values.get("html")
+            values = dict(values)
+            if "html_body" not in values:
+                if "html" in values:
+                    values["html_body"] = values.get("html")
+                elif "html_content" in values:
+                    values["html_body"] = values.get("html_content")
+            if "css" not in values and "css_content" in values:
+                values["css"] = values.get("css_content")
         return values
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not str(v).strip():
+            return None
+        clean = str(v).strip().upper()
+        if clean not in ("DRAFT", "PUBLISHED", "ACTIVE"):
+            raise ValueError(f"Invalid template status '{v}'. Allowed values are DRAFT, PUBLISHED, ACTIVE.")
+        return clean
 
     @field_validator("name")
     @classmethod
@@ -98,6 +115,17 @@ class TemplateUpdateModel(BaseModel):
     strict_variables: Optional[bool] = None
     header: Optional[str] = Field(None, max_length=64 * 1024)
     footer: Optional[str] = Field(None, max_length=64 * 1024)
+    status: Optional[str] = Field(None, description="Target template status (DRAFT, PUBLISHED, or ACTIVE)")
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not str(v).strip():
+            return None
+        clean = str(v).strip().upper()
+        if clean not in ("DRAFT", "PUBLISHED", "ACTIVE"):
+            raise ValueError(f"Invalid template status '{v}'. Allowed values are DRAFT, PUBLISHED, ACTIVE.")
+        return clean
 
     @field_validator("name")
     @classmethod
@@ -119,8 +147,14 @@ class TemplateUpdateModel(BaseModel):
     @classmethod
     def remap_html_field(cls, values):
         if isinstance(values, dict):
-            if "html" in values and "html_body" not in values:
-                values["html_body"] = values.get("html")
+            values = dict(values)
+            if "html_body" not in values:
+                if "html" in values:
+                    values["html_body"] = values.get("html")
+                elif "html_content" in values:
+                    values["html_body"] = values.get("html_content")
+            if "css" not in values and "css_content" in values:
+                values["css"] = values.get("css_content")
         return values
 
 
@@ -137,8 +171,14 @@ class TemplatePreviewModel(BaseModel):
     @classmethod
     def remap_html_field(cls, values):
         if isinstance(values, dict):
-            if "html" in values and "html_body" not in values:
-                values["html_body"] = values.get("html")
+            values = dict(values)
+            if "html_body" not in values:
+                if "html" in values:
+                    values["html_body"] = values.get("html")
+                elif "html_content" in values:
+                    values["html_body"] = values.get("html_content")
+            if "css" not in values and "css_content" in values:
+                values["css"] = values.get("css_content")
         return values
 
 
@@ -154,6 +194,12 @@ class TemplateValidateModel(BaseModel):
     @classmethod
     def remap_html_field(cls, values):
         if isinstance(values, dict):
-            if "html" in values and "html_body" not in values:
-                values["html_body"] = values.get("html")
+            values = dict(values)
+            if "html_body" not in values:
+                if "html" in values:
+                    values["html_body"] = values.get("html")
+                elif "html_content" in values:
+                    values["html_body"] = values.get("html_content")
+            if "css" not in values and "css_content" in values:
+                values["css"] = values.get("css_content")
         return values

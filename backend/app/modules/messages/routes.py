@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify, g
 
 from app.modules.messages.service import MessageService
 from app.modules.auth.decorators import require_permissions
+from app.modules.api_credentials.decorators import require_api_key_or_token
 
 
 messages_bp = Blueprint("messages", __name__)
@@ -10,7 +11,7 @@ messages_bp = Blueprint("messages", __name__)
 
 @messages_bp.route("", methods=["POST"])
 @messages_bp.route("/", methods=["POST"])
-@require_permissions("organization:messages:create")
+@require_api_key_or_token(required_permissions=["organization:messages:create"])
 def create_message():
 
     payload = request.get_json(silent=True)
@@ -21,11 +22,25 @@ def create_message():
             "message": "Valid JSON body is required"
         }), 400
 
+    # External credentials must state an explicit channel; silently routing to
+    # the service's legacy email default can send to the wrong provider.
+    if getattr(g, "auth_type", None) == "API_KEY" and not (
+        isinstance(payload.get("channel"), str) and payload.get("channel").strip()
+    ):
+        return jsonify({
+            "success": False,
+            "message": "channel is required for API credential requests",
+            "errors": ["Provide an explicit channel such as whatsapp, email, or sms"],
+        }), 422
+
     organization_id = g.current_organization["organization_id"]
 
     # Resolve application_id and enforce employee application scoping
     user_app_scopes = getattr(g, "user_application_ids", None)
     app_id = payload.get("application_id") or request.headers.get("X-Application-ID") or getattr(g, "current_application_id", None)
+    credential_app_id = getattr(g, "current_application_id", None) if getattr(g, "auth_type", None) == "API_KEY" else None
+    if credential_app_id and app_id and str(app_id).strip() != str(credential_app_id).strip():
+        return jsonify({"success": False, "message": "Application ID does not match the API credential"}), 403
 
     if user_app_scopes:
         if not app_id:
@@ -65,11 +80,13 @@ def create_message():
 
 
 @messages_bp.route("/<string:message_id>", methods=["GET"])
-@require_permissions("organization:messages:read")
+@require_api_key_or_token(required_permissions=["organization:messages:read"])
 def get_message(message_id):
 
     organization_id = g.current_organization["organization_id"]
     user_app_scopes = getattr(g, "user_application_ids", None)
+    if getattr(g, "auth_type", None) == "API_KEY":
+        user_app_scopes = [g.current_application_id]
 
     message = MessageService.get_message(
         message_id,
@@ -247,7 +264,7 @@ def whatsapp_webhook_event():
     """
     signature = request.headers.get("X-Hub-Signature-256")
     raw_payload = request.get_data()
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
 
     result = MessageService.handle_whatsapp_webhook(
         raw_payload=raw_payload,

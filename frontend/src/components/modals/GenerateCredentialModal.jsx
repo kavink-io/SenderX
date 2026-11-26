@@ -22,13 +22,13 @@ export default function GenerateCredentialModal({ isOpen, onClose, apps, onGener
     try {
       const res = await ApiClient.createCredential({
         application_id: applicationId,
-        name: name.trim() || undefined,
+        name: name.trim() || 'API Key',
         environment,
       });
 
-      if (res.success && (res.data?.raw_key || res.data?.secret_key)) {
+      const rawSecret = res.data?.raw_key || res.data?.secret_key || res.data?.api_key || res.raw_key || res.api_key;
+      if (res.success && rawSecret) {
         showToast('API Credential generated!', 'success');
-        const rawSecret = res.data.raw_key || res.data.secret_key;
         setName('');
         onGenerated(rawSecret, name.trim() || 'API Key');
         onClose();

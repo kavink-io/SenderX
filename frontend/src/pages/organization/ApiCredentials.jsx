@@ -32,7 +32,7 @@ export default function ApiCredentials() {
         setCredentials(credsRes.data?.items || credsRes.data || []);
       }
       if (appsRes?.success) {
-        setApps(appsRes.data?.items || []);
+        setApps(Array.isArray(appsRes.data) ? appsRes.data : (appsRes.data?.items || []));
       }
     } catch (err) {
       console.error('Failed to load credentials:', err);
@@ -54,9 +54,10 @@ export default function ApiCredentials() {
 
     try {
       const res = await ApiClient.rotateCredential(credId, cred.environment || 'live');
-      if (res.success && (res.data?.raw_key || res.data?.secret_key)) {
+      const rawSecret = res.data?.raw_key || res.data?.secret_key || res.data?.api_key || res.raw_key || res.api_key;
+      if (res.success && rawSecret) {
         showToast('Credential rotated successfully!', 'success');
-        setRevealedSecret(res.data.raw_key || res.data.secret_key);
+        setRevealedSecret(rawSecret);
         setRevealedKeyName(cred.name || 'Rotated Key');
         fetchCredentials();
       } else {

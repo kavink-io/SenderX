@@ -332,47 +332,66 @@ class MessageRepository:
         error_message=None,
         organization_id=None
     ):
-        now = cls._now()
+        if not provider_message_id:
+            return False
+
         query = {"provider_message_id": provider_message_id}
         if organization_id is not None:
             query["organization_id"] = organization_id
 
-        doc = cls._collection().find_one(query)
-        if not doc:
-            return False
+        collection = cls._collection()
+        status_rank = {"ACCEPTED": 0, "QUEUED": 0, "PROCESSING": 0, "SENT": 1, "DELIVERED": 2, "READ": 3}
 
-        old_status = doc.get("status")
+        # Compare-and-set prevents concurrent callbacks from overwriting a newer
+        # state. Re-read on a race so a later state can still advance correctly.
+        for _ in range(5):
+            doc = collection.find_one(query)
+            if not doc:
+                return False
 
-        update_fields = {
-            "status": new_status,
-            "updated_at": now
-        }
-        if raw_status:
-            update_fields["provider_status"] = raw_status
-        if error_code is not None:
-            update_fields["delivery_error_code"] = str(error_code)
-        if error_message is not None:
-            update_fields["delivery_error_message"] = str(error_message)
+            old_status = doc.get("status")
+            if old_status == new_status and (not raw_status or doc.get("provider_status") == raw_status):
+                return True
 
-        history_entry = {
-            "from": old_status,
-            "to": new_status,
-            "timestamp": now,
-            "source": "provider_callback"
-        }
-        if raw_status:
-            history_entry["raw_status"] = raw_status
-        if error_message:
-            history_entry["reason"] = str(error_message)
+            if old_status in ("DELIVERED", "READ"):
+                old_rank = status_rank.get(old_status, 0)
+                new_rank = status_rank.get(new_status, 0)
+                if new_rank <= old_rank:
+                    return False
 
-        res = cls._collection().update_one(
-            query,
-            {
-                "$set": update_fields,
-                "$push": {"status_history": history_entry}
+            now = cls._now()
+            update_fields = {"status": new_status, "updated_at": now}
+            if raw_status:
+                update_fields["provider_status"] = raw_status
+            if error_code is not None:
+                update_fields["delivery_error_code"] = str(error_code)
+            if error_message is not None:
+                update_fields["delivery_error_message"] = str(error_message)
+
+            history_entry = {
+                "from": old_status,
+                "to": new_status,
+                "timestamp": now,
+                "source": "provider_callback"
             }
-        )
-        return res.modified_count > 0
+            if raw_status:
+                history_entry["raw_status"] = raw_status
+            if error_message:
+                history_entry["reason"] = str(error_message)
+
+            compare_query = dict(query)
+            if "status" in doc:
+                compare_query["status"] = old_status
+            else:
+                compare_query["status"] = {"$exists": False}
+            res = collection.update_one(
+                compare_query,
+                {"$set": update_fields, "$push": {"status_history": history_entry}}
+            )
+            if res.modified_count > 0:
+                return True
+
+        return False
 
     # --------------------------------------------------
     # MANUAL RETRY

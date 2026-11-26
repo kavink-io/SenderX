@@ -112,11 +112,132 @@ def process_message(self, message_id):
         if not provider and channel not in ("email", "sms", "whatsapp", "microsoft_teams", "teams"):
             raise ValueError("Message provider is required")
 
+        extra_kwargs = {}
+        whatsapp_integration = None
+        whatsapp_legacy_template = False
+        whatsapp_data = None
+        if channel == "whatsapp":
+            data_dict = message.get("data") if isinstance(message.get("data"), dict) else {}
+            whatsapp_data = data_dict
+            int_id = (
+                message.get("whatsapp_integration_id")
+                or message.get("integration_id")
+                or data_dict.get("whatsapp_integration_id")
+                or data_dict.get("integration_id")
+            )
+            from_phone = (
+                message.get("from_phone_number_id")
+                or message.get("from")
+                or data_dict.get("from_phone_number_id")
+                or data_dict.get("from")
+            )
+            if int_id:
+                extra_kwargs["integration_id"] = str(int_id).strip()
+            if from_phone:
+                extra_kwargs["from_phone_number_id"] = str(from_phone).strip()
+
+            # Enforce Meta's 24-hour customer service window at dispatch time,
+            # using the tenant's connected integration and provider timestamps.
+            from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+            from app.modules.messages.service import MessageService
+
+            integration = None
+            if int_id:
+                integration = WhatsAppIntegrationRepository.find_by_id(
+                    str(int_id).strip(), organization_id=organization_id,
+                    include_deleted=False,
+                )
+            elif from_phone:
+                integration = WhatsAppIntegrationRepository.find_by_phone_number_id(
+                    str(from_phone).strip(), organization_id=organization_id,
+                    include_deleted=False,
+                )
+            else:
+                integrations = WhatsAppIntegrationRepository.find_active_by_organization(organization_id)
+                if len(integrations) == 1:
+                    integration = integrations[0]
+
+            is_template_message = (
+                str(data_dict.get("type") or "").strip().lower() == "template"
+                or bool(data_dict.get("template") or data_dict.get("template_name"))
+            )
+            if (not integration or integration.get("status") != "CONNECTED") and is_template_message and not int_id and not from_phone:
+                # Preserve the legacy organization-level provider configuration path
+                # only when this organization has never managed a WhatsApp integration.
+                # Platform/global credentials and implicit fallback are not sufficient
+                # to establish a safe tenant boundary here.
+                known_integrations = WhatsAppIntegrationRepository.find_all_by_organization(
+                    organization_id, include_deleted=True
+                )
+                provider_keys = [provider, "meta", "whatsapp", "whatsapp_cloud"]
+                has_org_credentials = False
+                for provider_key in dict.fromkeys(key for key in provider_keys if key):
+                    configured = current_app.mongo_db["provider_configs"].find_one({
+                        "provider": str(provider_key).lower().strip(),
+                        "organization_id": organization_id,
+                        "configured": True,
+                    }, {"_id": 1})
+                    if configured:
+                        from app.modules.provider_config.service import ProviderConfigService
+                        scoped_credentials = ProviderConfigService.get_decrypted_configuration(
+                            str(provider_key).lower().strip(), organization_id=organization_id
+                        )
+                        has_org_credentials = bool(
+                            isinstance(scoped_credentials, dict)
+                            and scoped_credentials.get("access_token")
+                            and scoped_credentials.get("phone_number_id")
+                        )
+                        if has_org_credentials:
+                            break
+                if not known_integrations and has_org_credentials:
+                    whatsapp_legacy_template = True
+
+            if (not integration or integration.get("status") != "CONNECTED") and not whatsapp_legacy_template:
+                raise ValueError(
+                    "Cannot verify WhatsApp customer service window: a connected tenant integration is required."
+                )
+            whatsapp_integration = integration
+
+            interactive = data_dict.get("interactive") if isinstance(data_dict.get("interactive"), dict) else {}
+            interactive_type = str(interactive.get("type") or "").strip().lower()
+            if interactive_type in {"product", "product_list", "catalog_message"}:
+                if not integration or integration.get("status") != "CONNECTED":
+                    raise ValueError("WhatsApp product and catalog messages require a connected tenant integration")
+                configured_catalog_id = integration.get("catalog_id")
+                if not configured_catalog_id:
+                    raise ValueError("WhatsApp product and catalog messages require a catalog ID configured on the selected integration")
+                action = interactive.get("action")
+                if not isinstance(action, dict):
+                    raise ValueError("WhatsApp product and catalog messages require a valid interactive action")
+                if interactive_type in {"product", "product_list"}:
+                    supplied_catalog_id = action.get("catalog_id")
+                    if supplied_catalog_id is not None and str(supplied_catalog_id).strip() != str(configured_catalog_id).strip():
+                        raise ValueError("Message catalog_id does not match the selected WhatsApp integration catalog")
+                    # The selected tenant integration is authoritative for the Meta catalog.
+                    action["catalog_id"] = str(configured_catalog_id)
+
         adapter = AdapterRegistry.get_adapter(
             provider=provider,
             channel=channel,
-            organization_id=organization_id
+            organization_id=organization_id,
+            **extra_kwargs
         )
+
+        # Final tenant-scoped window query is deliberately adjacent to send().
+        # It runs on every task attempt, so delayed/retried messages see the latest
+        # persisted inbound customer timestamp.
+        if channel == "whatsapp" and not whatsapp_legacy_template:
+            from app.modules.messages.service import MessageService
+
+            window = MessageService.check_whatsapp_customer_service_window(
+                recipient=message.get("recipient"),
+                organization_id=organization_id,
+                phone_number_id=whatsapp_integration.get("phone_number_id"),
+                integration_id=whatsapp_integration.get("integration_id"),
+                data=whatsapp_data,
+            )
+            if not window["allowed"]:
+                raise ValueError(window["reason"])
 
         result = adapter.send(message)
 

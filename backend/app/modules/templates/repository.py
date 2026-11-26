@@ -82,7 +82,11 @@ class TemplateRepository:
             query["organization_id"] = organization_id
 
         if status:
-            query["status"] = status.upper().strip()
+            norm_status = status.upper().strip()
+            if norm_status in ("PUBLISHED", "ACTIVE"):
+                query["status"] = {"$in": ["PUBLISHED", "ACTIVE"]}
+            else:
+                query["status"] = norm_status
         else:
             # By default do not return soft-deleted templates
             query["status"] = {"$ne": "DELETED"}
@@ -129,7 +133,7 @@ class TemplateRepository:
             update_fields["name_lower"] = update_fields["name"].strip().lower()
 
         res = cls._collection().update_one(query, {"$set": update_fields})
-        return res.modified_count > 0
+        return res.matched_count > 0
 
     @classmethod
     def delete(cls, template_id: str, organization_id: Optional[str] = None) -> bool:

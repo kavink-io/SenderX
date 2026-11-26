@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from '../components/layout/Sidebar';
 import TopNav from '../components/layout/TopNav';
 import MobileBackdrop from '../components/layout/MobileBackdrop';
 import UserProfileModal from '../components/modals/UserProfileModal';
+import { useAuth } from '../context/AuthContext';
+import { getPageMeta } from '../utils/navigation';
 
 export default function DashboardLayout() {
+  const location = useLocation();
+  const { isPlatformAdmin, dashboardContext } = useAuth();
+  const { title: pageTitle } = getPageMeta(location.pathname);
+  const orgName = isPlatformAdmin ? 'Platform' : (dashboardContext?.organization?.name || 'Organization');
   const [isDesktop, setIsDesktop] = useState(() => {
     return typeof window !== 'undefined' ? window.innerWidth > 1024 : true;
   });
@@ -42,6 +48,7 @@ export default function DashboardLayout() {
       <Sidebar
         isOpen={isDesktop ? isSidebarOpen : isMobileDrawerOpen}
         onClose={handleCloseMobileDrawer}
+        onToggle={handleToggleSidebar}
         onOpenProfile={() => setIsProfileModalOpen(true)}
       />
       {!isDesktop && (
@@ -52,10 +59,18 @@ export default function DashboardLayout() {
       )}
       <div className={`main-content-wrapper ${isSidebarOpen ? 'sidebar-open' : 'sidebar-collapsed'}`}>
         <TopNav
+          isSidebarOpen={isDesktop ? isSidebarOpen : isMobileDrawerOpen}
           onToggleSidebar={handleToggleSidebar}
           onOpenProfile={() => setIsProfileModalOpen(true)}
         />
         <main className="page-container">
+          <nav className="breadcrumb-nav page-body-breadcrumb" id="breadcrumb-container" aria-label="Breadcrumb">
+            <span>SenderX</span>
+            <span className="separator">/</span>
+            <span id="breadcrumb-org-name">{orgName}</span>
+            <span className="separator">/</span>
+            <span className="current" id="breadcrumb-current-tab">{pageTitle}</span>
+          </nav>
           <Outlet />
         </main>
       </div>

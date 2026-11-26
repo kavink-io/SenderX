@@ -125,15 +125,18 @@ def test_detailed_health_check(app, client):
     """Verify /detailed returns a complete dictionary with all components."""
     with patch.object(app.redis_client, "ping", return_value=True):
         with patch("kombu.Connection") as mock_conn_cls:
-            mock_conn = MagicMock()
-            mock_conn.connected = True
-            mock_conn_cls.return_value.__enter__.return_value = mock_conn
+            # Don't let Celery's broadcast initialize its producer pool while
+            # kombu.Connection is mocked; the pool limit is process-global.
+            with patch.object(app.celery.control, "ping", return_value=[]):
+                mock_conn = MagicMock()
+                mock_conn.connected = True
+                mock_conn_cls.return_value.__enter__.return_value = mock_conn
 
-            res = client.get("/api/v1/health/detailed")
-            data = res.get_json()
-            assert "flask" in data["data"]
-            assert "mongodb" in data["data"]
-            assert "redis" in data["data"]
-            assert "rabbitmq" in data["data"]
-            assert "celery_workers" in data["data"]
-            assert "timestamp" in data
+                res = client.get("/api/v1/health/detailed")
+                data = res.get_json()
+                assert "flask" in data["data"]
+                assert "mongodb" in data["data"]
+                assert "redis" in data["data"]
+                assert "rabbitmq" in data["data"]
+                assert "celery_workers" in data["data"]
+                assert "timestamp" in data

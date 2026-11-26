@@ -185,6 +185,22 @@ def test_setup(app):
             }
         )
 
+        # Register Org A WhatsApp Integration for multi-tenant webhook tests
+        from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+        WhatsAppIntegrationRepository.create({
+            "integration_id": str(uuid.uuid4()),
+            "organization_id": org_a,
+            "waba_id": "WABA_1001",
+            "phone_number_id": "10023456789",
+            "display_phone_number": "+15550001111",
+            "verified_name": "Org A Business",
+            "quality_rating": "GREEN",
+            "code_verification_status": "VERIFIED",
+            "status": "CONNECTED",
+            "onboarding_method": "MANUAL",
+            "created_by": user_admin_a
+        })
+
         return {
             "org_a": org_a,
             "org_b": org_b,
@@ -268,6 +284,45 @@ def test_whatsapp_media_models_and_limits():
     valid, err = validate_media_file("image", mime_type="application/pdf")
     assert valid is False
     assert "MIME type 'application/pdf' is not supported for image" in err
+
+
+@pytest.mark.parametrize(
+    ("media_type", "url"),
+    [
+        ("image", "https://example.com/photo.jpg"),
+        ("video", "https://example.com/clip.mp4"),
+        ("audio", "https://example.com/voice.ogg"),
+        ("document", "https://example.com/report.pdf"),
+    ],
+)
+def test_whatsapp_explicit_media_url_alias_infers_and_maps_type(media_type, url):
+    """Dedicated media URL aliases infer the corresponding Meta message type."""
+    payload = WhatsAppPayloadValidator.validate_and_format(
+        message={
+            "recipient": "+15551234567",
+            "data": {f"{media_type}_url": url},
+        }
+    )
+
+    assert payload["type"] == media_type
+    assert payload[media_type]["link"] == url
+
+
+def test_whatsapp_media_url_alias_requires_unambiguous_type():
+    with pytest.raises(ValueError, match="Could not determine WhatsApp message type"):
+        WhatsAppPayloadValidator.validate_and_format(
+            recipient="+15551234567",
+            data={"media_url": "https://example.com/file"},
+        )
+
+    with pytest.raises(ValueError, match="only one type-specific"):
+        WhatsAppPayloadValidator.validate_and_format(
+            recipient="+15551234567",
+            data={
+                "image_url": "https://example.com/photo.jpg",
+                "video_url": "https://example.com/clip.mp4",
+            },
+        )
 
 
 def test_whatsapp_location_and_contacts_models():
@@ -375,6 +430,542 @@ def test_whatsapp_interactive_reply_buttons_and_lists():
     )
     assert list_payload["interactive"]["type"] == "list"
     assert list_payload["interactive"]["action"]["button"] == "View Menu"
+
+
+def test_whatsapp_single_product_payload_mapping_and_optional_content():
+    payload = WhatsAppPayloadValidator.validate_and_format(
+        recipient="15551234567",
+        data={
+            "type": "interactive",
+            "interactive": {
+                "type": "product",
+                "action": {
+                    "catalog_id": "1234567890123",
+                    "product_retailer_id": "SKU-RED-42",
+                },
+            },
+        },
+    )
+    assert payload["type"] == "interactive"
+    assert payload["interactive"] == {
+        "type": "product",
+        "action": {"catalog_id": "1234567890123", "product_retailer_id": "SKU-RED-42"},
+    }
+
+    with_optional_content = WhatsAppPayloadValidator.validate_and_format(
+        recipient="15551234567",
+        data={
+            "type": "interactive",
+            "interactive": {
+                "type": "product",
+                "body": {"text": "A product for you"},
+                "footer": {"text": "While supplies last"},
+                "action": {"catalog_id": "1234567890123", "product_retailer_id": "SKU-RED-42"},
+            },
+        },
+    )
+    assert with_optional_content["interactive"]["body"] == {"text": "A product for you"}
+    assert with_optional_content["interactive"]["footer"] == {"text": "While supplies last"}
+
+
+@pytest.mark.parametrize(
+    ("action", "error"),
+    [
+        ({"product_retailer_id": "SKU-RED-42"}, "numeric catalog_id"),
+        ({"catalog_id": "1234567890123"}, "non-empty product_retailer_id"),
+        ({"catalog_id": "not-numeric", "product_retailer_id": "SKU-RED-42"}, "numeric catalog_id"),
+        ({"catalog_id": "1234567890123", "product_retailer_id": "  "}, "non-empty product_retailer_id"),
+    ],
+)
+def test_whatsapp_single_product_rejects_invalid_identifiers(action, error):
+    with pytest.raises(ValueError, match=error):
+        WhatsAppPayloadValidator.validate_and_format(
+            recipient="15551234567",
+            data={"type": "interactive", "interactive": {"type": "product", "action": action}},
+        )
+
+
+def test_whatsapp_unknown_interactive_type_is_rejected():
+    with pytest.raises(ValueError, match="type"):
+        WhatsAppPayloadValidator.validate_and_format(
+            recipient="15551234567",
+            data={"type": "interactive", "interactive": {"type": "made_up", "action": {}}},
+        )
+
+
+def _product_list_payload(product_count=2, sections=None):
+    products = [
+        {"product_retailer_id": f"sku-{index}"}
+        for index in range(product_count)
+    ]
+    return {
+        "type": "interactive",
+        "interactive": {
+            "type": "product_list",
+            "header": {"type": "text", "text": "Featured products"},
+            "body": {"text": "Choose a product"},
+            "footer": {"text": "Availability varies"},
+            "action": {
+                "catalog_id": "1234567890123",
+                "sections": sections if sections is not None else [{"title": "Featured", "product_items": products}],
+            },
+        },
+    }
+
+
+def test_whatsapp_multi_product_maps_multiple_sections_and_accepts_30_items():
+    sections = [
+        {"title": "First", "product_items": [{"product_retailer_id": "sku-1"}]},
+        {"title": "Second", "product_items": [{"product_retailer_id": f"sku-{i}"} for i in range(2, 31)]},
+    ]
+    payload = WhatsAppPayloadValidator.validate_and_format(
+        recipient="15551234567", data=_product_list_payload(30, sections)
+    )
+    interactive = payload["interactive"]
+    assert interactive["type"] == "product_list"
+    assert interactive["header"] == {"type": "text", "text": "Featured products"}
+    assert interactive["action"]["catalog_id"] == "1234567890123"
+    assert len(interactive["action"]["sections"]) == 2
+    assert sum(len(section["product_items"]) for section in interactive["action"]["sections"]) == 30
+
+
+@pytest.mark.parametrize(
+    ("data", "error"),
+    [
+        (_product_list_payload(31), "at most 30"),
+        (_product_list_payload(0, [{"title": "Empty", "product_items": []}]), "at least one product"),
+        (_product_list_payload(1, [{"title": "Bad", "product_items": [{"product_retailer_id": " "}]}]), "non-empty product_retailer_id"),
+        (_product_list_payload(1, [{"title": "A" * 25, "product_items": [{"product_retailer_id": "sku"}]}]), "titles must be 1-24"),
+    ],
+)
+def test_whatsapp_multi_product_rejects_invalid_sections_and_boundaries(data, error):
+    with pytest.raises(ValueError, match=error):
+        WhatsAppPayloadValidator.validate_and_format(recipient="15551234567", data=data)
+
+
+def test_whatsapp_multi_product_requires_text_header_and_body():
+    data = _product_list_payload()
+    data["interactive"].pop("header")
+    with pytest.raises(ValueError, match="text header"):
+        WhatsAppPayloadValidator.validate_and_format(recipient="15551234567", data=data)
+
+    data = _product_list_payload()
+    data["interactive"].pop("body")
+    with pytest.raises(ValueError, match="require a body"):
+        WhatsAppPayloadValidator.validate_and_format(recipient="15551234567", data=data)
+
+
+def test_whatsapp_full_catalog_mapping_and_thumbnail_validation():
+    data = {
+        "type": "interactive",
+        "interactive": {
+            "type": "catalog_message",
+            "body": {"text": "Browse our catalog"},
+            "footer": {"text": "Tap to explore"},
+            "action": {"name": "catalog_message", "parameters": {"thumbnail_product_retailer_id": "SKU-1"}},
+        },
+    }
+    payload = WhatsAppPayloadValidator.validate_and_format(recipient="15551234567", data=data)
+    assert payload["interactive"]["action"] == {
+        "name": "catalog_message",
+        "parameters": {"thumbnail_product_retailer_id": "SKU-1"},
+    }
+
+    data["interactive"]["action"]["parameters"]["thumbnail_product_retailer_id"] = "  "
+    with pytest.raises(ValueError, match="non-empty product_retailer_id"):
+        WhatsAppPayloadValidator.validate_and_format(recipient="15551234567", data=data)
+
+
+def test_whatsapp_product_catalog_dispatch_uses_selected_integration_catalog(app, test_setup):
+    from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+    from app.queue.tasks import process_message
+
+    org_id = test_setup["org_a"]
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(org_id)
+        WhatsAppIntegrationRepository.update(
+            integration["integration_id"], org_id, {"catalog_id": "999888777666"}
+        )
+        message = {
+            "message_id": "catalog-dispatch-" + uuid.uuid4().hex,
+            "organization_id": org_id,
+            "channel": "whatsapp",
+            "provider": "meta",
+            "recipient": "15559876543",
+            "integration_id": integration["integration_id"],
+            "data": {"type": "interactive", "interactive": {
+                "type": "product", "action": {
+                    "catalog_id": "999888777666", "product_retailer_id": "sku-1"
+                }
+            }},
+            "status": "QUEUED", "retry_count": 0,
+        }
+        adapter = MagicMock()
+        adapter.send.return_value = {"success": True, "provider": "meta", "provider_message_id": "wamid.catalog"}
+        with patch("app.modules.messages.repository.MessageRepository.find_by_id", return_value=message), \
+             patch("app.modules.messages.repository.MessageRepository.update_status", return_value=True), \
+             patch("app.modules.messages.repository.MessageRepository.mark_sent", return_value=True), \
+             patch("app.modules.dead_letters.repository.DeadLetterRepository.find_by_message_id", return_value=None), \
+             patch("app.adapters.adapter_registry.AdapterRegistry.get_adapter", return_value=adapter), \
+             patch.object(MessageService, "check_whatsapp_customer_service_window", return_value={"allowed": True}):
+            result = process_message.apply(args=[message["message_id"]]).result
+
+    assert result["success"] is True
+    dispatched = adapter.send.call_args.args[0]["data"]["interactive"]["action"]
+    assert dispatched["catalog_id"] == "999888777666"
+
+
+def test_whatsapp_product_catalog_dispatch_rejects_missing_or_cross_integration_catalog(app, test_setup):
+    from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+    from app.queue.tasks import process_message
+
+    org_id = test_setup["org_a"]
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(org_id)
+        WhatsAppIntegrationRepository.update(integration["integration_id"], org_id, {"catalog_id": "111222333444"})
+        message = {
+            "message_id": "catalog-reject-" + uuid.uuid4().hex,
+            "organization_id": org_id, "channel": "whatsapp", "provider": "meta",
+            "recipient": "15559876543", "integration_id": integration["integration_id"],
+            "data": {"type": "interactive", "interactive": {
+                "type": "product", "action": {
+                    "catalog_id": "999888777666", "product_retailer_id": "sku-1"
+                }
+            }},
+            "status": "QUEUED", "retry_count": 0,
+        }
+        with patch("app.modules.messages.repository.MessageRepository.find_by_id", return_value=message), \
+             patch("app.modules.messages.repository.MessageRepository.update_status", return_value=True), \
+             patch("app.modules.messages.repository.MessageRepository.mark_failed", return_value=True), \
+             patch("app.adapters.adapter_registry.AdapterRegistry.get_adapter") as make_adapter:
+            result = process_message.apply(args=[message["message_id"]]).result
+
+    assert result["success"] is False
+    make_adapter.assert_not_called()
+
+
+def test_whatsapp_product_catalog_dispatch_rejects_missing_tenant_catalog(app, test_setup):
+    from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+    from app.queue.tasks import process_message
+
+    org_id = test_setup["org_a"]
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(org_id)
+        WhatsAppIntegrationRepository.update(integration["integration_id"], org_id, {"catalog_id": None})
+        message = {
+            "message_id": "catalog-unconfigured-" + uuid.uuid4().hex,
+            "organization_id": org_id, "channel": "whatsapp", "provider": "meta",
+            "recipient": "15559876543", "integration_id": integration["integration_id"],
+            "data": {"type": "interactive", "interactive": {
+                "type": "product", "action": {
+                    "catalog_id": "999888777666", "product_retailer_id": "sku-1"
+                }
+            }},
+            "status": "QUEUED", "retry_count": 0,
+        }
+        with patch("app.modules.messages.repository.MessageRepository.find_by_id", return_value=message), \
+             patch("app.modules.messages.repository.MessageRepository.update_status", return_value=True), \
+             patch("app.modules.messages.repository.MessageRepository.mark_failed", return_value=True), \
+             patch("app.adapters.adapter_registry.AdapterRegistry.get_adapter") as make_adapter:
+            result = process_message.apply(args=[message["message_id"]]).result
+
+    assert result["success"] is False
+    make_adapter.assert_not_called()
+
+
+def test_whatsapp_product_catalog_dispatch_rejects_other_organization_integration(app, test_setup):
+    from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+    from app.queue.tasks import process_message
+
+    org_a, org_b = test_setup["org_a"], test_setup["org_b"]
+    with app.app_context():
+        other_tenant_integration_id = "wai-cross-tenant-" + uuid.uuid4().hex
+        message = {
+            "message_id": "catalog-cross-org-" + uuid.uuid4().hex,
+            "organization_id": org_a, "channel": "whatsapp", "provider": "meta",
+            "recipient": "15559876543", "integration_id": other_tenant_integration_id,
+            "data": {"type": "interactive", "interactive": {
+                "type": "product", "action": {
+                    "catalog_id": "999888777666", "product_retailer_id": "sku-1"
+                }
+            }},
+            "status": "QUEUED", "retry_count": 0,
+        }
+        with patch("app.modules.messages.repository.MessageRepository.find_by_id", return_value=message), \
+             patch("app.modules.messages.repository.MessageRepository.update_status", return_value=True), \
+             patch("app.modules.messages.repository.MessageRepository.mark_failed", return_value=True), \
+             patch("app.modules.whatsapp.repository.WhatsAppIntegrationRepository.find_by_id", return_value=None) as find_integration, \
+             patch("app.adapters.adapter_registry.AdapterRegistry.get_adapter") as make_adapter:
+            result = process_message.apply(args=[message["message_id"]]).result
+
+    assert result["success"] is False
+    make_adapter.assert_not_called()
+    assert any(call.kwargs.get("organization_id") == org_a for call in find_integration.call_args_list)
+
+
+def test_whatsapp_catalog_configuration_is_numeric_clearable_and_tenant_scoped(app, test_setup):
+    from app.modules.whatsapp.models import WhatsAppIntegrationUpdateSchema
+    from app.modules.whatsapp.service import WhatsAppIntegrationService
+
+    assert WhatsAppIntegrationUpdateSchema(catalog_id="123456789").catalog_id == "123456789"
+    cleared = WhatsAppIntegrationUpdateSchema(catalog_id=None)
+    assert "catalog_id" in cleared.model_fields_set and cleared.catalog_id is None
+    with pytest.raises(ValueError, match="digits"):
+        WhatsAppIntegrationUpdateSchema(catalog_id="catalog-name")
+
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(test_setup["org_a"])
+        with pytest.raises(ValueError, match="not found"):
+            WhatsAppIntegrationService.update_integration(
+                integration_id=integration["integration_id"],
+                organization_id=test_setup["org_b"],
+                data={"catalog_id": "123456789"},
+            )
+
+
+def test_whatsapp_interactive_buttons_boundaries_and_normalized_mapping():
+    buttons = [
+        {"type": "reply", "reply": {"id": f"choice_{index}", "title": f"Option {index}"}}
+        for index in range(1, 4)
+    ]
+    buttons[0]["reply"]["id"] = "x" * 256
+    buttons[0]["reply"]["title"] = "T" * 20
+    payload = WhatsAppPayloadValidator.validate_and_format(
+        recipient="15551234567",
+        data={
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "header": {"type": "text", "text": "H" * 60},
+                "body": {"text": "B" * 1024},
+                "footer": {"text": "F" * 60},
+                "action": {"buttons": buttons},
+            },
+        },
+    )
+
+    mapped = payload["interactive"]
+    assert len(mapped["action"]["buttons"]) == 3
+    assert mapped["action"]["buttons"][0]["reply"]["id"] == "x" * 256
+    assert len(mapped["action"]["buttons"][0]["reply"]["title"]) == 20
+    assert len(mapped["body"]["text"]) == 1024
+    assert len(mapped["footer"]["text"]) == 60
+
+
+def test_whatsapp_interactive_button_ids_remain_reusable():
+    payload = WhatsAppPayloadValidator.validate_and_format(
+        recipient="15551234567",
+        data={
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": "Choose"},
+                "action": {"buttons": [
+                    {"type": "reply", "reply": {"id": "shared_action", "title": "First"}},
+                    {"type": "reply", "reply": {"id": "shared_action", "title": "Second"}},
+                ]},
+            },
+        },
+    )
+
+    assert [button["reply"]["id"] for button in payload["interactive"]["action"]["buttons"]] == [
+        "shared_action", "shared_action"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("interactive", "error"),
+    [
+        ({"type": "button", "body": {"text": "Pick"}, "action": {"buttons": []}}, "between 1 and 3"),
+        (
+            {"type": "button", "body": {"text": "Pick"}, "action": {"buttons": [
+                {"type": "reply", "reply": {"id": "x", "title": "T" * 21}}
+            ]}},
+            "title.*1-20",
+        ),
+        (
+            {"type": "button", "body": {"text": "Pick"}, "action": {"buttons": [
+                {"type": "reply", "reply": {"id": " x", "title": "T"}}
+            ]}},
+            "leading or trailing whitespace",
+        ),
+        (
+            {"type": "button", "body": {"text": "Pick"}, "action": {"buttons": [
+                {"type": "reply", "reply": {"id": "x" * 257, "title": "T"}}
+            ]}},
+            "1-256 chars",
+        ),
+        (
+            {"type": "button", "body": {"text": "Pick"}, "action": {"buttons": [
+                {"type": "reply", "reply": {"id": "same", "title": "One"}},
+                {"type": "reply", "reply": {"id": "other", "title": "One"}},
+            ]}},
+            "titles must be unique",
+        ),
+        (
+            {"type": "button", "header": {"type": "image"}, "body": {"text": "Pick"},
+             "action": {"buttons": [{"type": "reply", "reply": {"id": "x", "title": "T"}}]}},
+            "requires matching content",
+        ),
+        (
+            {"type": "button", "body": {"text": "B" * 1025}, "action": {"buttons": [
+                {"type": "reply", "reply": {"id": "x", "title": "T"}}
+            ]}},
+            "exceeds maximum 1024",
+        ),
+    ],
+)
+def test_whatsapp_interactive_buttons_reject_invalid_payloads(interactive, error):
+    with pytest.raises(ValueError, match=error):
+        WhatsAppPayloadValidator.validate_and_format(
+            recipient="15551234567",
+            data={"type": "interactive", "interactive": interactive},
+        )
+
+
+def test_whatsapp_cta_url_button_maps_valid_absolute_url():
+    payload = WhatsAppPayloadValidator.validate_and_format(
+        recipient="15551234567",
+        data={
+            "type": "interactive",
+            "interactive": {
+                "type": "cta_url",
+                "header": {"type": "text", "text": "Order online"},
+                "body": {"text": "Continue to our secure order page"},
+                "footer": {"text": "Example Shop"},
+                "action": {
+                    "name": "cta_url",
+                    "parameters": {
+                        "display_text": "Place order",
+                        "url": "https://shop.example.test/orders?id=123",
+                    },
+                },
+            },
+        },
+    )
+    assert payload["interactive"]["action"] == {
+        "name": "cta_url",
+        "parameters": {
+            "display_text": "Place order",
+            "url": "https://shop.example.test/orders?id=123",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("action", "error"),
+    [
+        ({"name": "wrong", "parameters": {"display_text": "Open", "url": "https://example.test"}}, "must have 'name'"),
+        ({"name": "cta_url", "parameters": None}, "object 'parameters'"),
+        ({"name": "cta_url", "parameters": []}, "object 'parameters'"),
+        ({"name": "cta_url", "parameters": {"display_text": "  ", "url": "https://example.test"}}, "display_text"),
+        ({"name": "cta_url", "parameters": {"display_text": "T" * 21, "url": "https://example.test"}}, "display_text"),
+        ({"name": "cta_url", "parameters": {"display_text": "Open", "url": "javascript:alert(1)"}}, "absolute HTTP or HTTPS URL"),
+        ({"name": "cta_url", "parameters": {"display_text": "Open", "url": "https:///missing-host"}}, "absolute HTTP or HTTPS URL"),
+        ({"name": "cta_url", "parameters": {"display_text": "Open", "url": "https://user:pass@example.test"}}, "absolute HTTP or HTTPS URL"),
+        ({"name": "cta_url", "parameters": {"display_text": "Open", "url": "https://example.test:bad/path"}}, "absolute HTTP or HTTPS URL"),
+    ],
+)
+def test_whatsapp_cta_url_rejects_invalid_action_parameters(action, error):
+    with pytest.raises(ValueError, match=error):
+        WhatsAppPayloadValidator.validate_and_format(
+            recipient="15551234567",
+            data={
+                "type": "interactive",
+                "interactive": {
+                    "type": "cta_url", "body": {"text": "Open this page"}, "action": action,
+                },
+            },
+        )
+
+
+def test_whatsapp_interactive_list_boundaries_and_normalized_mapping():
+    sections = [
+        {
+            "title": f"Section {section_index}",
+            "rows": [{
+                "id": f"row_{section_index}_0",
+                "title": "R" * 24,
+                "description": "D" * 72,
+            }],
+        }
+        for section_index in range(10)
+    ]
+    sections[0]["rows"][0]["id"] = "i" * 200
+    payload = WhatsAppPayloadValidator.validate_and_format(
+        recipient="15551234567",
+        data={
+            "type": "interactive",
+            "interactive": {
+                "type": "list",
+                "header": {"type": "text", "text": "H" * 60},
+                "body": {"text": "B" * 1024},
+                "footer": {"text": "F" * 60},
+                "action": {"button": "C" * 20, "sections": sections},
+            },
+        },
+    )
+
+    mapped = payload["interactive"]
+    assert len(mapped["action"]["sections"]) == 10
+    assert len(mapped["action"]["sections"][0]["rows"][0]["id"]) == 200
+    assert len(mapped["action"]["sections"][0]["rows"][0]["title"]) == 24
+    assert len(mapped["action"]["sections"][0]["rows"][0]["description"]) == 72
+    assert len(mapped["action"]["button"]) == 20
+
+
+@pytest.mark.parametrize(
+    ("action", "header", "footer", "error"),
+    [
+        ({"button": "Menu", "sections": [{"rows": []}]}, None, None, "at least 1 item"),
+        (
+            {"button": "Menu", "sections": [{"rows": [{"id": f"r{i}", "title": "Row"} for i in range(11)]}]},
+            None, None, "at most 10 items|maximum 10 total rows",
+        ),
+        (
+            {"button": "Menu", "sections": [
+                {"rows": [{"id": f"r{i}", "title": "Row"}]} for i in range(11)
+            ]},
+            None, None, "between 1 and 10 sections",
+        ),
+        (
+            {"button": "Menu", "sections": [
+                {"rows": [{"id": "duplicate", "title": "One"}]},
+                {"rows": [{"id": "duplicate", "title": "Two"}]},
+            ]},
+            None, None, "IDs must be unique",
+        ),
+        (
+            {"button": "M" * 21, "sections": [{"rows": [{"id": "r1", "title": "Row"}]}]},
+            None, None, "1-20 characters",
+        ),
+        (
+            {"button": "Menu", "sections": [{"rows": [{"id": "r1", "title": "R" * 25}]}]},
+            None, None, "at most 24 characters",
+        ),
+        (
+            {"button": "Menu", "sections": [{"rows": [{"id": "r1", "title": "Row"}]}]},
+            {"type": "image", "image": {"link": "https://example.com/header.jpg"}}, None,
+            "only a text header",
+        ),
+        (
+            {"button": "Menu", "sections": [{"rows": [{"id": "r1", "title": "Row"}]}]},
+            None, {"text": "F" * 61}, "maximum 60 characters",
+        ),
+    ],
+)
+def test_whatsapp_interactive_lists_reject_invalid_payloads(action, header, footer, error):
+    interactive = {"type": "list", "body": {"text": "Browse"}, "action": action}
+    if header is not None:
+        interactive["header"] = header
+    if footer is not None:
+        interactive["footer"] = footer
+
+    with pytest.raises(ValueError, match=error):
+        WhatsAppPayloadValidator.validate_and_format(
+            recipient="15551234567",
+            data={"type": "interactive", "interactive": interactive},
+        )
 
 
 def test_whatsapp_meta_template_message():
@@ -825,3 +1416,301 @@ def test_whatsapp_mock_vs_production_separation(app):
                 channel="whatsapp",
                 organization_id=str(uuid.uuid4())
             )
+
+
+def _get_test_whatsapp_integration(org_id):
+    from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+
+    integrations = WhatsAppIntegrationRepository.find_active_by_organization(org_id)
+    assert integrations
+    return integrations[0]
+
+
+@pytest.mark.parametrize("offset", [-0.000001, 0, 0.000001])
+def test_whatsapp_customer_service_window_boundaries(app, test_setup, offset):
+    """The exact 24-hour boundary is closed; only timestamps before it are open."""
+    from datetime import datetime, timedelta, timezone
+
+    opened_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    now = opened_at + timedelta(hours=24, seconds=offset)
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(test_setup["org_a"])
+        app.mongo_db["inbound_messages"].insert_one({
+            "_id": "wa-window-" + uuid.uuid4().hex,
+            "organization_id": test_setup["org_a"],
+            "integration_id": integration["integration_id"],
+            "channel": "whatsapp",
+            "phone_number_id": "10023456789",
+            "from_phone": "15559876543",
+            "provider_timestamp": opened_at.timestamp(),
+        })
+        result = MessageService.check_whatsapp_customer_service_window(
+            recipient="+1 (555) 987-6543",
+            organization_id=test_setup["org_a"],
+            phone_number_id="10023456789",
+            integration_id=integration["integration_id"],
+            data={"type": "interactive", "interactive": {}},
+            now=now,
+        )
+    assert result["allowed"] is (offset < 0)
+
+
+def test_whatsapp_customer_service_window_missing_timestamp_and_template(app, test_setup):
+    recipient = "1999" + f"{uuid.uuid4().int % 10**10:010d}"
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(test_setup["org_a"])
+        result = MessageService.check_whatsapp_customer_service_window(
+            recipient=recipient, organization_id=test_setup["org_a"],
+            phone_number_id="10023456789", integration_id=integration["integration_id"], data={"text": "hello"},
+        )
+        template_result = MessageService.check_whatsapp_customer_service_window(
+            recipient=recipient, organization_id=test_setup["org_a"],
+            phone_number_id="10023456789", integration_id=integration["integration_id"],
+            data={"type": "template", "template": {"name": "approved_template"}},
+        )
+    assert result["allowed"] is False
+    assert "no valid inbound customer message timestamp" in result["reason"]
+    assert template_result["allowed"] is True
+
+
+def test_whatsapp_customer_service_window_is_tenant_and_integration_scoped(app, test_setup):
+    from datetime import datetime, timezone
+
+    recipient = "1998" + f"{uuid.uuid4().int % 10**10:010d}"
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(test_setup["org_a"])
+        app.mongo_db["inbound_messages"].insert_one({
+            "_id": "wa-window-tenant-" + uuid.uuid4().hex,
+            "organization_id": test_setup["org_b"],
+            "integration_id": "another-integration",
+            "channel": "whatsapp",
+            "phone_number_id": "10023456789",
+            "from_phone": recipient,
+            "provider_timestamp": datetime.now(timezone.utc).timestamp(),
+        })
+        result = MessageService.check_whatsapp_customer_service_window(
+            recipient=recipient, organization_id=test_setup["org_a"],
+            phone_number_id="10023456789", integration_id=integration["integration_id"], data={"text": "hello"},
+        )
+    assert result["allowed"] is False
+
+
+def test_whatsapp_customer_service_window_ignores_another_integration(app, test_setup):
+    from datetime import datetime, timezone
+
+    recipient = "1997" + f"{uuid.uuid4().int % 10**10:010d}"
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(test_setup["org_a"])
+        app.mongo_db["inbound_messages"].insert_one({
+            "_id": "wa-window-other-integration-" + uuid.uuid4().hex,
+            "organization_id": test_setup["org_a"],
+            "integration_id": "another-integration",
+            "channel": "whatsapp",
+            "phone_number_id": "10023456789",
+            "from_phone": recipient,
+            "provider_timestamp": datetime.now(timezone.utc).timestamp(),
+        })
+        result = MessageService.check_whatsapp_customer_service_window(
+            recipient=recipient,
+            organization_id=test_setup["org_a"],
+            phone_number_id="10023456789",
+            integration_id=integration["integration_id"],
+            data={"text": "hello"},
+        )
+    assert result["allowed"] is False
+
+
+def test_whatsapp_dispatch_window_check_is_adjacent_to_provider_send(app, test_setup):
+    from unittest.mock import patch
+    from app.queue.tasks import process_message
+
+    events = []
+    integration = None
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(test_setup["org_a"])
+        message = {
+            "message_id": "dispatch-window-" + uuid.uuid4().hex,
+            "organization_id": test_setup["org_a"],
+            "channel": "whatsapp",
+            "provider": "meta",
+            "recipient": "15559876543",
+            "data": {"type": "text", "text": "hello"},
+            "integration_id": integration["integration_id"],
+            "status": "QUEUED",
+            "retry_count": 0,
+        }
+
+        class Adapter:
+            def send(self, _message):
+                events.append("provider_send")
+                return {"success": True, "provider": "meta", "provider_message_id": "wamid.dispatch"}
+
+        def make_adapter(**_kwargs):
+            events.append("adapter_created")
+            return Adapter()
+
+        def check_window(**_kwargs):
+            events.append("window_checked")
+            return {"allowed": True}
+
+        with patch("app.modules.messages.repository.MessageRepository.find_by_id", return_value=message), \
+             patch("app.modules.messages.repository.MessageRepository.update_status", return_value=True), \
+             patch("app.modules.messages.repository.MessageRepository.mark_sent", return_value=True), \
+             patch("app.modules.dead_letters.repository.DeadLetterRepository.find_by_message_id", return_value=None), \
+             patch("app.adapters.adapter_registry.AdapterRegistry.get_adapter", side_effect=make_adapter), \
+             patch.object(MessageService, "check_whatsapp_customer_service_window", side_effect=check_window):
+            result = process_message.apply(args=[message["message_id"]]).result
+
+    assert result["success"] is True
+    assert events == ["adapter_created", "window_checked", "provider_send"]
+
+
+def test_manual_retry_rejects_unknown_provider_acceptance(app, monkeypatch):
+    from unittest.mock import patch
+
+    message = {
+        "message_id": "unknown-delivery-" + uuid.uuid4().hex,
+        "organization_id": "org-unknown-delivery",
+        "status": "FAILED",
+        "last_error": "DELIVERY_OUTCOME_UNKNOWN: Meta may have accepted the request",
+    }
+    with app.app_context(), \
+         patch("app.modules.messages.repository.MessageRepository.find_by_id", return_value=message), \
+         patch("app.modules.messages.repository.MessageRepository.requeue_failed_message") as requeue:
+        result = MessageService.retry_message(message["message_id"], message["organization_id"])
+    assert result["success"] is False
+    assert result["status_code"] == 409
+    assert "reconcile delivery status" in result["message"]
+    requeue.assert_not_called()
+
+
+def test_delayed_whatsapp_dispatch_blocks_send_after_window_closes(app, test_setup):
+    from unittest.mock import patch
+    from app.queue.tasks import process_message
+
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(test_setup["org_a"])
+        message = {
+            "message_id": "delayed-window-" + uuid.uuid4().hex,
+            "organization_id": test_setup["org_a"],
+            "channel": "whatsapp",
+            "provider": "meta",
+            "recipient": "15559876543",
+            "data": {"type": "interactive", "interactive": {}},
+            "integration_id": integration["integration_id"],
+            "status": "QUEUED",
+            "retry_count": 0,
+        }
+        with patch("app.modules.messages.repository.MessageRepository.find_by_id", return_value=message), \
+             patch("app.modules.messages.repository.MessageRepository.update_status", return_value=True), \
+             patch("app.modules.messages.repository.MessageRepository.mark_failed", return_value=True), \
+             patch("app.adapters.adapter_registry.AdapterRegistry.get_adapter") as make_adapter, \
+             patch.object(MessageService, "check_whatsapp_customer_service_window", return_value={
+                 "allowed": False,
+                 "reason": "Cannot send a WhatsApp free-form message: the 24-hour customer service window has closed.",
+             }):
+            result = process_message.apply(args=[message["message_id"]]).result
+
+    assert result["success"] is False
+    make_adapter.return_value.send.assert_not_called()
+
+
+def test_legacy_org_scoped_template_dispatch_without_integration_is_preserved(app, test_setup):
+    from unittest.mock import patch
+    from app.queue.tasks import process_message
+
+    org_id = test_setup["org_b"]
+    message = {
+        "message_id": "legacy-template-" + uuid.uuid4().hex,
+        "organization_id": org_id,
+        "channel": "whatsapp",
+        "provider": "meta",
+        "recipient": "15559876543",
+        "data": {"type": "template", "template": {"name": "approved_template", "language": {"code": "en"}}},
+        "status": "QUEUED",
+        "retry_count": 0,
+    }
+    with app.app_context():
+        assert not _get_org_whatsapp_integrations(org_id)
+        ProviderConfigService.save_configuration("meta", {
+            "access_token": "tenant-scoped-test-token",
+            "phone_number_id": "10000000077",
+        }, organization_id=org_id)
+        adapter = MagicMock()
+        adapter.send.return_value = {"success": True, "provider": "meta", "provider_message_id": "wamid.template"}
+        with patch("app.modules.messages.repository.MessageRepository.find_by_id", return_value=message), \
+             patch("app.modules.messages.repository.MessageRepository.update_status", return_value=True), \
+             patch("app.modules.messages.repository.MessageRepository.mark_sent", return_value=True), \
+             patch("app.modules.dead_letters.repository.DeadLetterRepository.find_by_message_id", return_value=None), \
+             patch("app.adapters.adapter_registry.AdapterRegistry.get_adapter", return_value=adapter):
+            result = process_message.apply(args=[message["message_id"]]).result
+
+    assert result["success"] is True
+    adapter.send.assert_called_once_with(message)
+
+
+def test_legacy_template_does_not_use_global_env_credentials_without_tenant_config(app, monkeypatch):
+    from unittest.mock import patch
+    from app.queue.tasks import process_message
+
+    organization_id = "org-no-wa-config-" + uuid.uuid4().hex
+    message = {
+        "message_id": "unscoped-template-" + uuid.uuid4().hex,
+        "organization_id": organization_id,
+        "channel": "whatsapp",
+        "provider": "meta",
+        "recipient": "15559876543",
+        "data": {"type": "template", "template": {"name": "approved_template", "language": {"code": "en"}}},
+        "status": "QUEUED",
+        "retry_count": 0,
+    }
+    monkeypatch.setenv("WHATSAPP_ACCESS_TOKEN", "global-test-token")
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "global-test-phone")
+    with app.app_context():
+        with patch("app.modules.messages.repository.MessageRepository.find_by_id", return_value=message), \
+             patch("app.modules.messages.repository.MessageRepository.update_status", return_value=True), \
+             patch("app.modules.messages.repository.MessageRepository.mark_failed", return_value=True), \
+             patch("app.adapters.adapter_registry.AdapterRegistry.get_adapter") as make_adapter:
+            result = process_message.apply(args=[message["message_id"]]).result
+
+    assert result["success"] is False
+    make_adapter.assert_not_called()
+
+
+def test_whatsapp_window_recheck_observes_new_inbound_timestamp(app, test_setup):
+    from datetime import datetime, timedelta, timezone
+
+    recipient = "1996" + f"{uuid.uuid4().int % 10**10:010d}"
+    now = datetime.now(timezone.utc)
+    with app.app_context():
+        integration = _get_test_whatsapp_integration(test_setup["org_a"])
+        inbound = app.mongo_db["inbound_messages"]
+        record_id = "wa-window-retry-" + uuid.uuid4().hex
+        inbound.insert_one({
+            "_id": record_id,
+            "organization_id": test_setup["org_a"],
+            "integration_id": integration["integration_id"],
+            "channel": "whatsapp",
+            "phone_number_id": integration["phone_number_id"],
+            "from_phone": recipient,
+            "provider_timestamp": (now - timedelta(hours=25)).timestamp(),
+        })
+        first = MessageService.check_whatsapp_customer_service_window(
+            recipient=recipient, organization_id=test_setup["org_a"],
+            phone_number_id=integration["phone_number_id"],
+            integration_id=integration["integration_id"], data={"text": "hello"}, now=now,
+        )
+        inbound.update_one({"_id": record_id}, {"$set": {"provider_timestamp": now.timestamp()}})
+        retry_check = MessageService.check_whatsapp_customer_service_window(
+            recipient=recipient, organization_id=test_setup["org_a"],
+            phone_number_id=integration["phone_number_id"],
+            integration_id=integration["integration_id"], data={"text": "hello"}, now=now,
+        )
+    assert first["allowed"] is False
+    assert retry_check["allowed"] is True
+
+
+def _get_org_whatsapp_integrations(org_id):
+    from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+
+    return WhatsAppIntegrationRepository.find_all_by_organization(org_id, include_deleted=True)

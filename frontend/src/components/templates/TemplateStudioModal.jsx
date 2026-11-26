@@ -1,7 +1,59 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Modal from '../common/Modal';
 import ApiClient from '../../services/api';
 import { useToast } from '../../context/ToastContext';
+
+const DEFAULT_VARIABLES = [
+  { label: 'User Name', name: 'name', type: 'text', tag: '{{ name }}' },
+  { label: 'Company', name: 'company', type: 'text', tag: '{{ company }}' },
+  { label: 'Email', name: 'email', type: 'text', tag: '{{ email }}' },
+  { label: 'Activation Link', name: 'activation_link', type: 'url', tag: '{{ activation_link }}' },
+  { label: 'Unsubscribe', name: 'unsubscribe_link', type: 'url', tag: '{{ unsubscribe_link }}' },
+  { label: 'Current Year', name: 'current_year', type: 'text', tag: '{{ current_year }}' },
+];
+
+const BUILTIN_VAR_META = DEFAULT_VARIABLES.reduce((acc, item) => {
+  acc[item.name] = { name: item.name, type: item.type, required: true };
+  return acc;
+}, {});
+
+function extractTemplateVarNames(...texts) {
+  const found = new Set();
+  const pattern = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*\|[^}]+)?\s*\}\}/g;
+  for (const text of texts) {
+    if (!text) continue;
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      found.add(match[1]);
+    }
+  }
+  return Array.from(found);
+}
+
+function buildDeclaredVariables(subjectText, htmlText, cssText, existingVars = []) {
+  const varMap = new Map();
+
+  for (const v of existingVars || []) {
+    if (v && typeof v === 'object' && v.name) {
+      varMap.set(v.name, { ...v });
+    }
+  }
+
+  const detectedNames = extractTemplateVarNames(subjectText, htmlText, cssText);
+  for (const varName of detectedNames) {
+    if (!varMap.has(varName)) {
+      const preset = BUILTIN_VAR_META[varName];
+      varMap.set(varName, {
+        name: varName,
+        type: preset?.type || (varName.endsWith('_url') || varName.endsWith('_link') ? 'url' : 'text'),
+        required: preset?.required ?? false,
+      });
+    }
+  }
+
+  return Array.from(varMap.values());
+}
 
 export default function TemplateStudioModal({ isOpen, onClose, template, onSaved }) {
   const [activeTab, setActiveTab] = useState('HTML'); // 'HTML' or 'CSS'
@@ -11,34 +63,39 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
   const [category, setCategory] = useState('marketing');
   const [htmlContent, setHtmlContent] = useState('');
   const [cssContent, setCssContent] = useState('');
+  const [declaredVars, setDeclaredVars] = useState([]);
   const [previewHtml, setPreviewHtml] = useState('');
   const [validationResult, setValidationResult] = useState(null);
-  const [customVarName, setCustomVarName] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [savingAction, setSavingAction] = useState(null); // null | 'draft' | 'publish'
   const [isValidating, setIsValidating] = useState(false);
 
   const { showToast } = useToast();
-
-  const DEFAULT_VARIABLES = [
-    { label: 'User Name', tag: '{{ name }}' },
-    { label: 'Company', tag: '{{ company }}' },
-    { label: 'Email', tag: '{{ email }}' },
-    { label: 'Activation Link', tag: '{{ activation_link }}' },
-    { label: 'Unsubscribe', tag: '{{ unsubscribe_link }}' },
-    { label: 'Current Year', tag: '{{ current_year }}' },
-  ];
-
   const [availableVars, setAvailableVars] = useState(DEFAULT_VARIABLES);
 
-  useEffect(() => {
-    if (template) {
-      setName(template.name || '');
-      setDescription(template.description || '');
-      setSubject(template.subject || '');
-      setCategory(template.category || 'marketing');
-      setHtmlContent(template.html_content || template.html || '');
-      setCssContent(template.css_content || template.css || '');
-      setPreviewHtml(template.html_content || template.html || '');
+  const hydrateFromTemplate = useCallback((tmpl) => {
+    if (tmpl) {
+      setName(tmpl.name || '');
+      setDescription(tmpl.description || '');
+      setSubject(tmpl.subject || '');
+      setCategory(tmpl.category || 'marketing');
+      setHtmlContent(tmpl.html_body || tmpl.html_content || tmpl.html || '');
+      setCssContent(tmpl.css || tmpl.css_content || '');
+
+      const savedVars = Array.isArray(tmpl.variables) ? tmpl.variables : [];
+      setDeclaredVars(savedVars);
+
+      // Merge any custom saved variables into pill bar
+      const known = new Set(DEFAULT_VARIABLES.map((v) => v.name));
+      const extras = savedVars
+        .filter((v) => v?.name && !known.has(v.name))
+        .map((v) => ({
+          label: v.name,
+          name: v.name,
+          type: v.type || 'text',
+          tag: `{{ ${v.name} }}`,
+        }));
+      setAvailableVars([...DEFAULT_VARIABLES, ...extras]);
     } else {
       setName('');
       setDescription('');
@@ -46,10 +103,20 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
       setCategory('marketing');
       setHtmlContent('');
       setCssContent('');
-      setPreviewHtml('');
+      setDeclaredVars([]);
+      setAvailableVars(DEFAULT_VARIABLES);
     }
+    setActiveTab('HTML');
     setValidationResult(null);
-  }, [template, isOpen]);
+    setSaveError('');
+    setSavingAction(null);
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      hydrateFromTemplate(template);
+    }
+  }, [template, isOpen, hydrateFromTemplate]);
 
   // Update live preview when HTML or CSS changes
   useEffect(() => {
@@ -64,25 +131,25 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
     showToast(`Inserted ${tag}`, 'info');
   };
 
-  const handleAddCustomVar = (e) => {
-    e.preventDefault();
-    if (!customVarName.trim()) return;
-    const tag = `{{ ${customVarName.trim().replace(/[^a-zA-Z0-9_]/g, '_')} }}`;
-    setAvailableVars((prev) => [...prev, { label: customVarName.trim(), tag }]);
-    setCustomVarName('');
-    showToast(`Added variable ${tag}`, 'success');
-  };
-
   const handleLoadStarter = async () => {
+    setSaveError('');
     try {
       const res = await ApiClient.getStarterLayout();
       if (res?.success && res.data) {
-        setHtmlContent(res.data.html || res.data.html_content || '');
+        setHtmlContent(res.data.html || res.data.html_body || res.data.html_content || '');
         setCssContent(res.data.css || res.data.css_content || '');
         if (res.data.subject) setSubject(res.data.subject);
+        if (Array.isArray(res.data.variables)) {
+          setDeclaredVars((prev) => {
+            const byName = new Map(prev.map((v) => [v.name, v]));
+            for (const sv of res.data.variables) {
+              if (sv?.name) byName.set(sv.name, sv);
+            }
+            return Array.from(byName.values());
+          });
+        }
         showToast('Starter layout applied!', 'success');
       } else {
-        // Fallback starter layout
         setHtmlContent(`<div class="email-container">
   <h1>Welcome to {{ company }}!</h1>
   <p>Hi {{ name }},</p>
@@ -116,52 +183,86 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
 
   const handleValidate = async () => {
     setIsValidating(true);
+    setSaveError('');
     try {
+      const variablesPayload = buildDeclaredVariables(subject, htmlContent, cssContent, declaredVars);
       const res = await ApiClient.validateTemplate({
         name: name.trim() || 'Draft Template',
         subject: subject.trim() || 'Subject',
-        html_content: htmlContent,
-        css_content: cssContent,
+        html_body: htmlContent,
+        css: cssContent,
+        variables: variablesPayload,
       });
 
-      if (res?.success) {
-        setValidationResult({ valid: true, message: 'Template syntax and CSS properties are safe & valid.' });
-        showToast('Template is safe and valid!', 'success');
+      if (res?.success && res.data) {
+        const isValid = Boolean(res.data.valid ?? res.data.isValid);
+        const errors = Array.isArray(res.data.errors) ? res.data.errors : [];
+        const warnings = Array.isArray(res.data.warnings) ? res.data.warnings : [];
+
+        if (isValid) {
+          const warnNote = warnings.length > 0 ? ` (${warnings.length} compatibility warning${warnings.length > 1 ? 's' : ''})` : '';
+          setValidationResult({
+            valid: true,
+            message: `Template syntax and CSS properties are safe & valid.${warnNote}`,
+          });
+          showToast('Template is safe and valid!', 'success');
+        } else {
+          const errMsg = errors.length > 0 ? errors.join('; ') : 'Validation failed.';
+          setValidationResult({ valid: false, message: errMsg });
+          showToast(errMsg, 'error');
+        }
       } else {
-        setValidationResult({ valid: false, message: res?.message || 'Validation failed.' });
-        showToast(res?.message || 'Template has validation errors', 'error');
+        const msg = res?.message || 'Validation failed.';
+        setValidationResult({ valid: false, message: msg });
+        showToast(msg, 'error');
       }
     } catch (err) {
-      setValidationResult({ valid: false, message: err?.message || 'Error executing validation' });
-      showToast(err?.message || 'Validation failed', 'error');
+      const msg = err?.message || 'Error executing validation';
+      setValidationResult({ valid: false, message: msg });
+      showToast(msg, 'error');
     } finally {
       setIsValidating(false);
     }
   };
 
   const handleSave = async (publish = false) => {
-    if (!name.trim()) {
-      showToast('Template name is required (2-80 characters)', 'error');
+    setSaveError('');
+    const trimmedName = name.trim();
+    const trimmedSubject = subject.trim();
+    const trimmedHtml = htmlContent.trim();
+
+    if (!trimmedName || trimmedName.length < 2 || trimmedName.length > 80) {
+      const msg = 'Template name is required (2-80 characters)';
+      setSaveError(msg);
+      showToast(msg, 'error');
       return;
     }
-    if (!subject.trim()) {
-      showToast('Email subject is required', 'error');
+    if (!trimmedSubject) {
+      const msg = 'Email subject is required';
+      setSaveError(msg);
+      showToast(msg, 'error');
       return;
     }
-    if (!htmlContent.trim()) {
-      showToast('HTML content is required', 'error');
+    if (!trimmedHtml) {
+      const msg = 'HTML content is required';
+      setSaveError(msg);
+      showToast(msg, 'error');
       return;
     }
 
-    setIsSaving(true);
+    setSavingAction(publish ? 'publish' : 'draft');
     try {
+      const variablesPayload = buildDeclaredVariables(trimmedSubject, htmlContent, cssContent, declaredVars);
+
       const payload = {
-        name: name.trim(),
+        name: trimmedName,
         description: description.trim(),
-        subject: subject.trim(),
-        category,
-        html_content: htmlContent,
-        css_content: cssContent,
+        subject: trimmedSubject,
+        category: category || 'marketing',
+        channel: 'email',
+        html_body: htmlContent,
+        css: cssContent,
+        variables: variablesPayload,
         status: publish ? 'PUBLISHED' : 'DRAFT',
       };
 
@@ -171,27 +272,59 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
         : await ApiClient.createTemplate(payload);
 
       if (res?.success) {
-        showToast(`Template ${publish ? 'published' : 'saved as draft'} successfully!`, 'success');
-        onSaved();
+        showToast(
+          publish ? 'Template saved & published successfully!' : 'Template saved as draft successfully!',
+          'success'
+        );
+        if (onSaved) await onSaved(res.data);
         onClose();
       } else {
-        showToast(res?.message || 'Failed to save template', 'error');
+        const errMsg = res?.message || 'Failed to save template';
+        setSaveError(errMsg);
+        showToast(errMsg, 'error');
       }
     } catch (err) {
-      showToast(err?.message || 'Error saving template', 'error');
+      const errMsg = err?.message || 'Error saving template';
+      setSaveError(errMsg);
+      showToast(errMsg, 'error');
     } finally {
-      setIsSaving(false);
+      setSavingAction(null);
     }
   };
+
+  const isSaving = savingAction !== null;
+  const standardCategories = ['transactional', 'marketing', 'system', 'general'];
+  const hasCustomCategory = category && !standardCategories.includes(category);
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={template ? `Edit Template: ${template.name}` : 'Email Template Studio'}
+      title={
+        template
+          ? `Edit Template: ${template.name}${template.status ? ` (${template.status})` : ''}`
+          : 'Email Template Studio'
+      }
       maxWidth="min(1200px, 94vw)"
       id="modal-template-editor"
     >
+      {saveError && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: '1rem',
+            padding: '0.65rem 0.9rem',
+            borderRadius: '6px',
+            fontSize: '0.85rem',
+            background: 'rgba(255, 100, 124, 0.1)',
+            border: '1px solid var(--status-error)',
+            color: 'var(--status-error)',
+          }}
+        >
+          {saveError}
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
         <div className="form-group">
           <label>Template Name *</label>
@@ -227,6 +360,8 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
             <option value="transactional">Transactional</option>
             <option value="marketing">Marketing</option>
             <option value="system">System / Alert</option>
+            <option value="general">General</option>
+            {hasCustomCategory && <option value={category}>{category}</option>}
           </select>
         </div>
       </div>
@@ -338,7 +473,7 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
               type="button"
               className="btn btn-secondary btn-sm"
               onClick={handleValidate}
-              disabled={isValidating}
+              disabled={isValidating || isSaving}
             >
               {isValidating ? 'Validating...' : 'Validate Markup'}
             </button>
@@ -380,19 +515,21 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
             type="button"
+            id="btn-save-draft"
             className="btn btn-secondary"
             onClick={() => handleSave(false)}
             disabled={isSaving}
           >
-            {isSaving ? 'Saving...' : 'Save Draft'}
+            {savingAction === 'draft' ? 'Saving...' : 'Save Draft'}
           </button>
           <button
             type="button"
+            id="btn-save-publish"
             className="btn btn-primary"
             onClick={() => handleSave(true)}
             disabled={isSaving}
           >
-            {isSaving ? 'Publishing...' : 'Save & Publish'}
+            {savingAction === 'publish' ? 'Publishing...' : 'Save & Publish'}
           </button>
         </div>
       </div>

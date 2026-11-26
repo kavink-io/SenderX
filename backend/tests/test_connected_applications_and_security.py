@@ -212,6 +212,142 @@ def test_application_registration_and_uniqueness(client, setup_context):
     assert res_b.get_json()["data"]["application_id"] != app_id
 
 
+def test_connected_applications_list_and_api_key_message_access(client, setup_context):
+    """Application listing shape and external message create/status scope stay usable."""
+    headers = setup_context["headers_a1"]
+    organization_id = setup_context["org_a"]
+    name = f"External Messaging App {uuid.uuid4().hex[:6]}"
+    created = client.post(
+        "/api/v1/applications/",
+        json={"name": name, "environment": "all"},
+        headers=headers,
+    )
+    assert created.status_code == 201
+    app_id = created.get_json()["data"]["application_id"]
+
+    listed = client.get("/api/v1/applications/?page=1&limit=100", headers=headers)
+    assert listed.status_code == 200
+    assert isinstance(listed.get_json()["data"], list)
+    assert any(item["application_id"] == app_id for item in listed.get_json()["data"])
+
+    credential = client.post(
+        "/api/v1/api-credentials/",
+        json={"application_id": app_id, "name": "External client key"},
+        headers=headers,
+    )
+    assert credential.status_code == 201
+    api_key = credential.get_json()["data"]["api_key"]
+    api_headers = {"X-API-Key": api_key}
+
+    # Missing explicit routing must be rejected instead of falling back to email.
+    missing_channel = client.post(
+        "/api/v1/messages/",
+        json={"recipient": "15551234567", "data": {"text": "hello"}},
+        headers=api_headers,
+    )
+    assert missing_channel.status_code == 422
+    assert "channel is required" in missing_channel.get_json()["message"]
+
+    with patch("app.modules.messages.service.MessageService.create_message") as create_message:
+        create_message.return_value = {"success": True, "message": {"message_id": "msg_api_key"}}
+        response = client.post(
+            "/api/v1/messages/",
+            json={"channel": "whatsapp", "recipient": "15551234567", "data": {"text": "hello"}},
+            headers=api_headers,
+        )
+        assert response.status_code == 201
+        create_message.assert_called_once()
+        assert create_message.call_args.args[0]["channel"] == "whatsapp"
+        assert create_message.call_args.args[1] == organization_id
+        assert create_message.call_args.kwargs["application_id"] == app_id
+
+        mismatch = client.post(
+            "/api/v1/messages/",
+            json={"channel": "whatsapp", "application_id": "another-app", "recipient": "15551234567", "data": {"text": "hello"}},
+            headers=api_headers,
+        )
+        assert mismatch.status_code == 403
+
+    with patch("app.modules.messages.service.MessageService.get_message") as get_message:
+        get_message.return_value = {"message_id": "msg_api_key", "organization_id": organization_id, "application_id": app_id}
+        status = client.get("/api/v1/messages/msg_api_key", headers=api_headers)
+        assert status.status_code == 200
+        assert get_message.call_args.kwargs["user_application_ids"] == [app_id]
+
+    create_only = client.post(
+        "/api/v1/api-credentials/",
+        json={"application_id": app_id, "name": "Create only", "scopes": ["messages:create"]},
+        headers=headers,
+    ).get_json()["data"]["api_key"]
+    denied_status = client.get("/api/v1/messages/msg_api_key", headers={"X-API-Key": create_only})
+    assert denied_status.status_code == 403
+    assert "messages:read" in denied_status.get_json()["missing_scopes"]
+
+    invalid_scopes = client.post(
+        "/api/v1/api-credentials/",
+        json={"application_id": app_id, "name": "Invalid scope", "scopes": ["organization:configuration:manage"]},
+        headers=headers,
+    )
+    assert invalid_scopes.status_code == 400
+
+    # Exercise the external ingestion path into the existing WhatsApp engine.
+    # Queueing is mocked; this verifies routing and persistence, not Meta delivery.
+    whatsapp_payload = {
+        "channel": "whatsapp",
+        "recipient": "+14155552671",
+        "data": {"type": "text", "text": {"body": "Application API test"}},
+    }
+    with patch("app.modules.messages.service.MessageService.queue_message") as queue_message:
+        queue_message.return_value = {"success": True, "status": "QUEUED"}
+        routed = client.post("/api/v1/payloads/ingest", json=whatsapp_payload, headers=api_headers)
+    assert routed.status_code == 201
+    route_data = routed.get_json()
+    assert route_data["status"] == "ROUTED" and route_data["channel"] == "whatsapp"
+    message_id = route_data["message_id"]
+    status = client.get(f"/api/v1/messages/{message_id}", headers=api_headers)
+    assert status.status_code == 200
+    assert status.get_json()["data"]["application_id"] == app_id
+
+    # Key material is never present in the credential listing response.
+    listed_creds = client.get("/api/v1/api-credentials/", headers=headers).get_json()["data"]
+    assert all("key_hash" not in item and "api_key" not in item and "raw_key" not in item for item in listed_creds)
+    used_credential = next(item for item in listed_creds if item["credential_id"] == credential.get_json()["data"]["credential_id"])
+    assert used_credential["last_used_at"]
+
+
+def test_application_soft_delete_revokes_keys_and_retains_record(client, setup_context, app):
+    headers = setup_context["headers_a1"]
+    org_id = setup_context["org_a"]
+    registered = client.post(
+        "/api/v1/applications/",
+        json={"name": f"Delete Safely {uuid.uuid4().hex[:6]}", "environment": "all"},
+        headers=headers,
+    )
+    app_id = registered.get_json()["data"]["application_id"]
+    credential = client.post(
+        "/api/v1/api-credentials/",
+        json={"application_id": app_id, "name": "Delete test key"},
+        headers=headers,
+    ).get_json()["data"]
+
+    deleted = client.delete(f"/api/v1/applications/{app_id}", headers=headers)
+    assert deleted.status_code == 200
+    assert deleted.get_json()["revoked_credentials_count"] == 1
+    assert client.get(f"/api/v1/applications/{app_id}", headers=headers).status_code == 404
+    assert client.post(f"/api/v1/applications/{app_id}/activate", headers=headers).status_code == 409
+    assert client.get(f"/api/v1/api-credentials/{credential['credential_id']}", headers=headers).get_json()["data"]["status"] == "REVOKED"
+
+    with app.app_context():
+        # Soft deletion keeps data for audit/history and tenant-scoped recovery.
+        doc = app.mongo_db["connected_applications"].find_one({"application_id": app_id, "organization_id": org_id})
+        assert doc is not None and doc.get("deleted_at")
+    visible_ids = [item["application_id"] for item in client.get("/api/v1/applications/", headers=headers).get_json()["data"]]
+    assert app_id not in visible_ids
+
+    # Another organization cannot delete or inspect this application.
+    assert client.delete(f"/api/v1/applications/{app_id}", headers=setup_context["headers_b"]).status_code == 404
+
+
 def test_application_lifecycle_and_cascade_deactivation(client, setup_context):
     """Test update, detail, stats, and cascade deactivation to active credentials."""
     headers = setup_context["headers_a1"]

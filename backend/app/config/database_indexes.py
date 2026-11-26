@@ -225,6 +225,47 @@ def ensure_database_indexes(app=None, force=False):
         ("purpose", pymongo.ASCENDING)
     ])
 
+    # 17. WhatsApp Integrations (Multi-Tenant Cloud API)
+    db["whatsapp_integrations"].create_index([("integration_id", pymongo.ASCENDING)], unique=True)
+    try:
+        db["whatsapp_integrations"].create_index(
+            [("phone_number_id", pymongo.ASCENDING)],
+            unique=True,
+            partialFilterExpression={"deleted_at": None}
+        )
+    except pymongo.errors.OperationFailure:
+        try:
+            db["whatsapp_integrations"].drop_index("phone_number_id_1")
+        except Exception:
+            pass
+        db["whatsapp_integrations"].create_index(
+            [("phone_number_id", pymongo.ASCENDING)],
+            unique=True,
+            partialFilterExpression={"deleted_at": None}
+        )
+    db["whatsapp_integrations"].create_index([("organization_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
+    db["whatsapp_integrations"].create_index([("organization_id", pymongo.ASCENDING), ("deleted_at", pymongo.ASCENDING)])
+    db["whatsapp_integrations"].create_index([("waba_id", pymongo.ASCENDING)])
+    db["whatsapp_integrations"].create_index([("organization_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
+
+    # Flow completion values are encrypted in a dedicated collection. MongoDB
+    # TTL removes only these new encrypted records; historical inbound records
+    # without this schema are left untouched for an explicit migration decision.
+    db["whatsapp_flow_responses"].create_index([("expires_at", pymongo.ASCENDING)], expireAfterSeconds=0)
+    db["whatsapp_flow_responses"].create_index([
+        ("organization_id", pymongo.ASCENDING),
+        ("integration_id", pymongo.ASCENDING),
+        ("provider_message_id", pymongo.ASCENDING),
+    ], unique=True)
+    db["whatsapp_flow_exchange_requests"].create_index([
+        ("organization_id", pymongo.ASCENDING),
+        ("integration_id", pymongo.ASCENDING),
+        ("flow_id", pymongo.ASCENDING),
+    ])
+
+    # 18. Platform Settings (Centralized Meta Platform Configuration)
+    db["platform_settings"].create_index([("setting_key", pymongo.ASCENDING)], unique=True)
+
     _ensured_dbs.add(db_name)
 
 

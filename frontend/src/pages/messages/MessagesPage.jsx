@@ -33,8 +33,10 @@ export default function MessagesPage() {
       });
 
       if (res?.success) {
-        setMessages(res.data?.items || []);
-        setTotalCount(res.data?.total || 0);
+        const msgList = Array.isArray(res.data) ? res.data : (res.data?.items || res.items || []);
+        const total = res.total_count ?? res.pagination?.total ?? res.data?.total ?? msgList.length;
+        setMessages(msgList);
+        setTotalCount(total);
       }
     } catch (err) {
       console.error('Failed to load messages:', err);

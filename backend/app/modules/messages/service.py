@@ -1,6 +1,12 @@
 
+import hashlib
+import hmac
+import logging
+import json
 import os
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timezone, timedelta
+from typing import Any, Dict, List, Optional
 
 from app.engine.message_engine import MessageEngine
 from app.modules.messages.repository import MessageRepository
@@ -8,8 +14,84 @@ from app.engine.status_manager import StatusManager
 from app.modules.templates.service import TemplateService
 from flask import current_app
 
+logger = logging.getLogger(__name__)
+
 
 class MessageService:
+
+    WHATSAPP_CUSTOMER_SERVICE_WINDOW = timedelta(hours=24)
+
+    @staticmethod
+    def _parse_whatsapp_provider_timestamp(timestamp):
+        try:
+            value = float(timestamp)
+            return value if value > 0 else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @classmethod
+    def check_whatsapp_customer_service_window(
+        cls, recipient, organization_id, phone_number_id, integration_id, data, now=None
+    ):
+        """Return whether non-template messages may be sent to this tenant's recipient.
+
+        Only provider-supplied inbound timestamps count. Ingestion time is never
+        used as a fallback, so missing/invalid provider timestamps fail closed.
+        """
+        data = data if isinstance(data, dict) else {}
+        msg_type = str(data.get("type") or "").strip().lower()
+        is_template = msg_type == "template" or bool(data.get("template") or data.get("template_name"))
+        if is_template:
+            return {"allowed": True, "is_template": True, "latest_inbound_at": None}
+
+        if not recipient or not organization_id or not phone_number_id or not integration_id:
+            return {
+                "allowed": False,
+                "is_template": False,
+                "latest_inbound_at": None,
+                "reason": "Cannot verify WhatsApp customer service window: recipient, organization, connected phone number, or integration is missing.",
+            }
+
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now_timestamp = now.timestamp()
+        collection = current_app.mongo_db["inbound_messages"]
+        query = {
+            "channel": "whatsapp",
+            "organization_id": organization_id,
+            "integration_id": str(integration_id).strip(),
+            "phone_number_id": str(phone_number_id).strip(),
+            "from_phone": re.sub(r"\D", "", str(recipient)),
+        }
+        latest = None
+        for record in collection.find(query, {"_id": 0, "provider_timestamp": 1, "raw_data.timestamp": 1}):
+            timestamp = record.get("provider_timestamp")
+            if timestamp is None:
+                raw = record.get("raw_data")
+                timestamp = raw.get("timestamp") if isinstance(raw, dict) else None
+            value = cls._parse_whatsapp_provider_timestamp(timestamp)
+            if value is not None and value <= now_timestamp and (latest is None or value > latest):
+                latest = value
+
+        if latest is None:
+            return {
+                "allowed": False,
+                "is_template": False,
+                "latest_inbound_at": None,
+                "reason": "Cannot send a WhatsApp free-form message: no valid inbound customer message timestamp is available. Use an approved Meta template or wait for a customer message.",
+            }
+
+        opened_at = datetime.fromtimestamp(latest, timezone.utc)
+        is_open = now < opened_at + cls.WHATSAPP_CUSTOMER_SERVICE_WINDOW
+        return {
+            "allowed": is_open,
+            "is_template": False,
+            "latest_inbound_at": opened_at.isoformat(),
+            **({} if is_open else {
+                "reason": "Cannot send a WhatsApp free-form message: the 24-hour customer service window has closed. Use an approved Meta template.",
+            }),
+        }
 
     @classmethod
     def create_message(cls, payload, organization_id, application_id=None):
@@ -368,6 +450,13 @@ class MessageService:
                     "message": "You do not have permission to retry messages for this application scope"
                 }
 
+        if str(message.get("last_error") or "").startswith("DELIVERY_OUTCOME_UNKNOWN:"):
+            return {
+                "success": False,
+                "status_code": 409,
+                "message": "Provider acceptance is uncertain; reconcile delivery status before retrying this message",
+            }
+
         current_status = message.get("status")
 
         if current_status in ("SENT", "DELIVERED", "READ"):
@@ -703,35 +792,28 @@ class MessageService:
                 "message": "hub.verify_token is required"
             }
 
-        # Check configured verify tokens across env and provider_configs
-        valid_tokens = set()
-        env_token = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN") or os.getenv("META_WEBHOOK_VERIFY_TOKEN")
-        if env_token:
-            valid_tokens.add(env_token.strip())
+        if not isinstance(hub_challenge, str) or not hub_challenge:
+            return {
+                "success": False,
+                "status_code": 400,
+                "message": "hub.challenge is required"
+            }
 
-        cfg_token = current_app.config.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN")
-        if cfg_token:
-            valid_tokens.add(cfg_token.strip())
+        from app.modules.whatsapp.service import PlatformSettingsService
+        meta_settings = PlatformSettingsService.get_meta_settings(decrypt=True)
+        expected_token = meta_settings.get("webhook_verify_token")
 
-        # Also inspect stored provider configurations
-        try:
-            collection = current_app.mongo_db["provider_configs"]
-            docs = collection.find({"provider": {"$in": ["meta", "whatsapp", "whatsapp_cloud"]}})
-            for doc in docs:
-                org_id = doc.get("organization_id")
-                try:
-                    decrypted = ProviderConfigService.get_decrypted_configuration(
-                        doc.get("provider"),
-                        organization_id=org_id
-                    )
-                    if decrypted and decrypted.get("webhook_verify_token"):
-                        valid_tokens.add(decrypted["webhook_verify_token"].strip())
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        if not expected_token or not str(expected_token).strip():
+            logger.error("WhatsApp webhook verify token is not configured on platform")
+            return {
+                "success": False,
+                "status_code": 503,
+                "message": "Webhook verify token is not configured on platform"
+            }
 
-        if hub_token.strip() in valid_tokens:
+        provided_token = str(hub_token).strip()
+        expected_token = str(expected_token).strip()
+        if provided_token and hmac.compare_digest(provided_token, expected_token):
             return {
                 "success": True,
                 "status_code": 200,
@@ -745,80 +827,216 @@ class MessageService:
         }
 
     @classmethod
+    def _normalize_whatsapp_interactive_event(
+        cls,
+        message: Dict[str, Any],
+        organization_id: str,
+        integration_id: str,
+        phone_number_id: str,
+    ) -> Dict[str, Any]:
+        """Normalize known interactive responses while retaining unknown types safely."""
+        message_type = str(message.get("type") or "").lower().strip()
+        interactive = message.get("interactive")
+        subtype = None
+        selection = None
+
+        if message_type == "interactive" and isinstance(interactive, dict):
+            subtype = str(interactive.get("type") or "").lower().strip()
+            if subtype in ("button_reply", "list_reply"):
+                candidate = interactive.get(subtype)
+                if isinstance(candidate, dict):
+                    reply_id = candidate.get("id")
+                    title = candidate.get("title")
+                    if isinstance(reply_id, str) and reply_id.strip() and isinstance(title, str) and title.strip():
+                        selection = {
+                            "id": reply_id.strip(),
+                            "title": title.strip(),
+                        }
+                        if subtype == "list_reply" and isinstance(candidate.get("description"), str):
+                            selection["description"] = candidate["description"].strip()
+            elif subtype == "nfm_reply":
+                candidate = interactive.get("nfm_reply")
+                if isinstance(candidate, dict):
+                    response_value = candidate.get("response_json")
+                    if isinstance(response_value, str):
+                        try:
+                            import json
+                            response_value = json.loads(response_value)
+                        except (TypeError, ValueError):
+                            response_value = None
+                    if isinstance(response_value, dict):
+                        selection = {
+                            "response": response_value,
+                            "name": candidate.get("name"),
+                            "body": candidate.get("body"),
+                        }
+        elif message_type == "button":
+            # Accept the legacy webhook button shape as a button reply.
+            subtype = "button_reply"
+            candidate = message.get("button")
+            if isinstance(candidate, dict):
+                reply_id = candidate.get("payload") or candidate.get("id")
+                title = candidate.get("text") or candidate.get("title")
+                if isinstance(reply_id, str) and reply_id.strip() and isinstance(title, str) and title.strip():
+                    selection = {"id": reply_id.strip(), "title": title.strip()}
+
+        is_flow_reply = subtype == "nfm_reply" and selection is not None
+        known_reply = subtype in ("button_reply", "list_reply") and selection is not None
+        event = {
+            "event_id": message.get("id"),
+            "event_type": "whatsapp.flow.completed" if is_flow_reply else (f"whatsapp.{subtype}" if known_reply else "whatsapp.interactive.unknown"),
+            "subtype": subtype if known_reply or is_flow_reply else (subtype or "unknown"),
+            "organization_id": organization_id,
+            "integration_id": integration_id,
+            "phone_number_id": phone_number_id,
+            "from_phone": message.get("from"),
+            "timestamp": message.get("timestamp"),
+            "provider_message_id": message.get("id"),
+            "selection": selection,
+        }
+        if is_flow_reply:
+            event["flow_response"] = selection["response"]
+            if selection.get("name"):
+                event["flow_name"] = selection["name"]
+        if not known_reply and not is_flow_reply and subtype:
+            event["unrecognized_type"] = subtype
+        return event
+
+    @classmethod
     def handle_whatsapp_webhook(cls, raw_payload: bytes, signature_header: Optional[str], json_data: Dict[str, Any]):
         """
         Process Meta WhatsApp webhook event payload.
-        Verifies X-Hub-Signature-256, updates message delivery statuses,
-        and saves inbound customer messages.
+        Verifies X-Hub-Signature-256 against centralized Meta platform settings,
+        updates message delivery statuses with organization-level isolation,
+        and saves inbound customer messages resolved via active WhatsApp integrations.
         """
+        from app.modules.whatsapp.service import PlatformSettingsService
+        from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+        from app.adapters.whatsapp.whatsapp_utils import verify_meta_signature
+
+        # 1. Authoritative Meta platform settings
+        meta_settings = PlatformSettingsService.get_meta_settings(decrypt=True)
+        app_secret = meta_settings.get("meta_app_secret")
+
+        # Require a configured Meta App Secret
+        if not app_secret or not str(app_secret).strip():
+            logger.error("Meta App Secret is not configured on platform")
+            return {
+                "success": False,
+                "status_code": 503,
+                "message": "Meta App Secret is not configured on platform"
+            }
+
+        # Require X-Hub-Signature-256
+        if not signature_header:
+            return {
+                "success": False,
+                "status_code": 401,
+                "message": "Missing X-Hub-Signature-256 header"
+            }
+
+        # Strict signature verification
+        if not verify_meta_signature(raw_payload, signature_header, app_secret):
+            return {
+                "success": False,
+                "status_code": 401,
+                "message": "Invalid webhook signature"
+            }
+
         if not isinstance(json_data, dict):
             return {"success": False, "status_code": 400, "message": "Invalid webhook payload JSON"}
 
-        # 1. Resolve App Secret for signature verification
-        app_secret = (
-            current_app.config.get("WHATSAPP_APP_SECRET")
-            or os.getenv("WHATSAPP_APP_SECRET")
-            or os.getenv("META_APP_SECRET")
-        )
-
-        # If not in env, try to resolve from provider_configs
-        if not app_secret:
-            try:
-                collection = current_app.mongo_db["provider_configs"]
-                docs = collection.find({"provider": {"$in": ["meta", "whatsapp", "whatsapp_cloud"]}})
-                for doc in docs:
-                    org_id = doc.get("organization_id")
-                    try:
-                        decrypted = ProviderConfigService.get_decrypted_configuration(
-                            doc.get("provider"),
-                            organization_id=org_id
-                        )
-                        if decrypted and decrypted.get("app_secret"):
-                            app_secret = decrypted["app_secret"]
-                            break
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        # If app_secret is configured, strictly enforce signature verification
-        if app_secret:
-            from app.adapters.whatsapp.whatsapp_utils import verify_meta_signature
-            if not signature_header:
-                return {
-                    "success": False,
-                    "status_code": 401,
-                    "message": "Missing X-Hub-Signature-256 header"
-                }
-            if not verify_meta_signature(raw_payload, signature_header, app_secret):
-                return {
-                    "success": False,
-                    "status_code": 401,
-                    "message": "Invalid webhook signature"
-                }
+        # Validate webhook object (Meta WhatsApp payloads always have object: "whatsapp_business_account")
+        webhook_obj = json_data.get("object")
+        if webhook_obj and webhook_obj != "whatsapp_business_account":
+            logger.warning("Ignoring non-whatsapp webhook object: %s", webhook_obj)
+            return {
+                "success": True,
+                "status_code": 200,
+                "message": f"Ignored non-whatsapp webhook object: {webhook_obj}",
+                "processed_statuses": 0,
+                "processed_messages": 0
+            }
 
         # 2. Process Entries
         processed_statuses = 0
         processed_messages = 0
 
-        entries = json_data.get("entry", [])
+        entries = json_data.get("entry")
+        if not isinstance(entries, list):
+            return {"success": False, "status_code": 400, "message": "Invalid entry list in payload"}
+
+        retryable_failures = 0
+        ignored_events = 0
+
         for entry in entries:
+            if not isinstance(entry, dict):
+                ignored_events += 1
+                continue
             waba_id = entry.get("id")
             changes = entry.get("changes", [])
+            if not isinstance(changes, list):
+                ignored_events += 1
+                continue
+
             for ch in changes:
+                if not isinstance(ch, dict):
+                    ignored_events += 1
+                    continue
                 val = ch.get("value", {})
+                if not isinstance(val, dict):
+                    ignored_events += 1
+                    continue
                 metadata = val.get("metadata", {})
-                phone_number_id = metadata.get("phone_number_id")
+                phone_number_id = metadata.get("phone_number_id") if isinstance(metadata, dict) else None
+
+                # Resolve organization strictly from phone_number_id via WhatsAppIntegrationRepository
+                resolved_org_id = None
+                if phone_number_id:
+                    clean_phone_id = str(phone_number_id).strip()
+                    try:
+                        integration = WhatsAppIntegrationRepository.find_by_phone_number_id(
+                            clean_phone_id,
+                            include_deleted=False,
+                        )
+                    except Exception:
+                        retryable_failures += 1
+                        logger.exception("WhatsApp integration lookup failed for phone_number_id %s", clean_phone_id)
+                        continue
+                    if integration and integration.get("status") == "CONNECTED":
+                        configured_waba_id = integration.get("waba_id")
+                        if waba_id and configured_waba_id and str(waba_id).strip() != str(configured_waba_id).strip():
+                            logger.warning(
+                                "WhatsApp webhook WABA ID does not match integration for phone_number_id %s",
+                                clean_phone_id,
+                            )
+                        else:
+                            resolved_org_id = integration.get("organization_id")
+                    else:
+                        logger.warning(
+                            "WhatsApp webhook event received for unmapped or non-connected phone_number_id: %s",
+                            clean_phone_id
+                        )
 
                 # Process status updates (sent, delivered, read, failed)
                 statuses = val.get("statuses", [])
+                if not isinstance(statuses, list):
+                    ignored_events += 1
+                    statuses = []
                 for st in statuses:
+                    if not isinstance(st, dict):
+                        ignored_events += 1
+                        continue
                     wamid = st.get("id")
-                    raw_status = (st.get("status") or "").lower().strip()
+                    raw_status_value = st.get("status")
+                    if not isinstance(wamid, str) or not wamid.strip() or not isinstance(raw_status_value, str) or not raw_status_value.strip():
+                        ignored_events += 1
+                        continue
+                    wamid = wamid.strip()
+                    raw_status = raw_status_value.lower().strip()
                     errors = st.get("errors", [])
-                    err_code = errors[0].get("code") if errors else None
-                    err_msg = errors[0].get("message") or errors[0].get("title") if errors else None
-
+                    err_code = errors[0].get("code") if (isinstance(errors, list) and errors and isinstance(errors[0], dict)) else None
+                    err_msg = (errors[0].get("message") or errors[0].get("title")) if (isinstance(errors, list) and errors and isinstance(errors[0], dict)) else None
                     if raw_status == "delivered":
                         norm_status = "DELIVERED"
                     elif raw_status == "read":
@@ -828,49 +1046,113 @@ class MessageService:
                     elif raw_status == "sent":
                         norm_status = "SENT"
                     else:
-                        norm_status = raw_status.upper() or "ACCEPTED"
+                        norm_status = raw_status.upper()
 
-                    updated = MessageRepository.update_delivery_status(
-                        provider_message_id=wamid,
-                        new_status=norm_status,
-                        raw_status=raw_status,
-                        error_code=err_code,
-                        error_message=err_msg
-                    )
-                    if updated:
-                        processed_statuses += 1
+                    if not resolved_org_id:
+                        logger.warning(
+                            "Skipping status update for wamid %s: phone_number_id %s has no active connected integration",
+                            wamid, phone_number_id
+                        )
+                        ignored_events += 1
+                        continue
+
+                    try:
+                        updated = MessageRepository.update_delivery_status(
+                            provider_message_id=wamid,
+                            new_status=norm_status,
+                            raw_status=raw_status,
+                            error_code=err_code,
+                            error_message=err_msg,
+                            organization_id=resolved_org_id
+                        )
+                        if updated:
+                            processed_statuses += 1
+                        else:
+                            ignored_events += 1
+                    except Exception:
+                        retryable_failures += 1
+                        logger.exception("WhatsApp status webhook processing failed for provider message %s", wamid)
 
                 # Process inbound customer messages
                 messages = val.get("messages", [])
+                if not isinstance(messages, list):
+                    ignored_events += 1
+                    messages = []
                 for msg in messages:
+                    if not isinstance(msg, dict):
+                        ignored_events += 1
+                        continue
                     wamid = msg.get("id")
                     from_phone = msg.get("from")
+                    if not isinstance(wamid, str) or not wamid.strip() or not isinstance(from_phone, str) or not from_phone.strip():
+                        ignored_events += 1
+                        continue
+                    wamid = wamid.strip()
                     msg_type = msg.get("type", "text")
+                    if not isinstance(msg_type, str):
+                        msg_type = "unknown"
                     if msg_type == "text" and isinstance(msg.get("text"), dict):
                         content = msg.get("text", {}).get("body")
                     else:
                         content = msg.get(msg_type)
 
-                    cls.save_inbound_message(
-                        channel="whatsapp",
-                        provider="meta",
-                        phone_number_id=phone_number_id,
-                        waba_id=waba_id,
-                        from_phone=from_phone,
-                        provider_message_id=wamid,
-                        message_type=msg_type,
-                        content=content,
-                        raw_data=msg
-                    )
-                    processed_messages += 1
+                    try:
+                        integration = WhatsAppIntegrationRepository.find_by_phone_number_id(
+                            str(phone_number_id).strip() if phone_number_id else "",
+                            include_deleted=False,
+                        ) if phone_number_id else None
+                        structured_event = None
+                        if str(msg_type).lower().strip() in ("interactive", "button") and integration:
+                            structured_event = cls._normalize_whatsapp_interactive_event(
+                                message=msg,
+                                organization_id=integration.get("organization_id"),
+                                integration_id=integration.get("integration_id"),
+                                phone_number_id=str(phone_number_id).strip(),
+                            )
 
-        return {
-            "success": True,
-            "status_code": 200,
-            "message": "Webhook processed successfully",
+                        saved = cls.save_inbound_message(
+                            channel="whatsapp",
+                            provider="meta",
+                            phone_number_id=phone_number_id,
+                            waba_id=waba_id,
+                            from_phone=from_phone.strip(),
+                            provider_message_id=wamid,
+                            message_type=msg_type,
+                            content=content,
+                            raw_data=msg,
+                            structured_event=structured_event,
+                        )
+                        if saved and saved.get("provider_message_id"):
+                            processed_messages += 1
+                            if structured_event and structured_event.get("event_type") == "whatsapp.flow.completed":
+                                from app.modules.users.audit_repository import SecurityAuditRepository
+                                SecurityAuditRepository.log_event(
+                                    organization_id=integration.get("organization_id"),
+                                    event_type="WHATSAPP_FLOW_COMPLETED",
+                                    target_id=integration.get("integration_id"),
+                                    target_type="WHATSAPP_INTEGRATION",
+                                    action_label="WhatsApp Flow completed",
+                                    summary="A WhatsApp Flow completion response was received",
+                                    details={"provider_message_id": wamid},
+                                )
+                        else:
+                            ignored_events += 1
+                    except Exception:
+                        retryable_failures += 1
+                        logger.exception("WhatsApp inbound webhook processing failed for provider message %s", wamid)
+
+        response = {
+            "success": retryable_failures == 0,
+            "status_code": 503 if retryable_failures else 200,
+            "message": "Webhook processing failed temporarily; retry delivery" if retryable_failures else "Webhook processed successfully",
             "processed_statuses": processed_statuses,
             "processed_messages": processed_messages
         }
+        if ignored_events:
+            response["ignored_events"] = ignored_events
+        if retryable_failures:
+            response["retryable_failures"] = retryable_failures
+        return response
 
     @classmethod
     def save_inbound_message(
@@ -883,59 +1165,157 @@ class MessageService:
         provider_message_id: str,
         message_type: str,
         content: Any,
-        raw_data: Dict[str, Any]
+        raw_data: Dict[str, Any],
+        structured_event: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Persist inbound customer message to the 'inbound_messages' MongoDB collection.
-        Resolves tenant organization ID where possible and prevents duplicate event insertion.
+        Resolves tenant organization ID strictly via active connected WhatsAppIntegration.
+        Rejects unmapped or non-connected phone numbers and prevents duplicate event insertion.
         """
+        from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
+
+        if not phone_number_id:
+            logger.warning("WhatsApp inbound message rejected: missing phone_number_id")
+            return {
+                "success": False,
+                "status_code": 400,
+                "message": "Missing phone_number_id for WhatsApp inbound message"
+            }
+
+        clean_phone_id = str(phone_number_id).strip()
+        integration = WhatsAppIntegrationRepository.find_by_phone_number_id(clean_phone_id, include_deleted=False)
+
+        if not integration or integration.get("status") != "CONNECTED":
+            logger.warning(
+                "WhatsApp inbound message rejected: no active connected integration found for phone_number_id %s",
+                clean_phone_id
+            )
+            return {
+                "success": False,
+                "status_code": 404,
+                "message": "No active connected integration found for phone_number_id"
+            }
+
+        organization_id = integration.get("organization_id")
+        if not organization_id:
+            logger.warning(
+                "WhatsApp inbound message rejected: integration for phone_number_id %s lacks organization_id",
+                clean_phone_id
+            )
+            return {
+                "success": False,
+                "status_code": 400,
+                "message": "Integration missing organization_id"
+            }
+
+        configured_waba_id = integration.get("waba_id")
+        if waba_id and configured_waba_id and str(waba_id).strip() != str(configured_waba_id).strip():
+            logger.warning(
+                "WhatsApp inbound message rejected: WABA ID does not match integration for phone_number_id %s",
+                clean_phone_id,
+            )
+            return {
+                "success": False,
+                "status_code": 403,
+                "message": "Webhook WABA ID does not match the connected integration",
+            }
+
         collection = current_app.mongo_db["inbound_messages"]
 
-        # Deduplication check
+        # Check provider-ID ownership before writing sensitive Flow data to its
+        # encrypted collection; a cross-tenant collision must create no record.
         existing = collection.find_one({"provider_message_id": provider_message_id}, {"_id": 0})
         if existing:
+            if (
+                existing.get("organization_id") != organization_id
+                or existing.get("phone_number_id") != clean_phone_id
+                or (existing.get("integration_id") and existing.get("integration_id") != integration.get("integration_id"))
+            ):
+                logger.warning("WhatsApp inbound message ID is already associated with a different tenant")
+                return {
+                    "success": False,
+                    "status_code": 409,
+                    "message": "Provider message ID is already associated with another integration",
+                }
             return existing
 
-        # Resolve organization_id from provider_configs
-        organization_id = None
-        try:
-            configs_col = current_app.mongo_db["provider_configs"]
-            candidates = list(configs_col.find({"provider": {"$in": ["meta", "whatsapp", "whatsapp_cloud"]}}))
-            for c in candidates:
-                org_id = c.get("organization_id")
-                try:
-                    decrypted = ProviderConfigService.get_decrypted_configuration(
-                        c.get("provider"),
-                        organization_id=org_id
-                    )
-                    if decrypted:
-                        if phone_number_id and decrypted.get("phone_number_id") == phone_number_id:
-                            organization_id = org_id
-                            break
-                        if waba_id and decrypted.get("business_account_id") == waba_id:
-                            organization_id = org_id
-                            break
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        is_flow_completion = bool(
+            structured_event
+            and structured_event.get("event_type") == "whatsapp.flow.completed"
+            and isinstance(structured_event.get("flow_response"), dict)
+        )
+        stored_raw_data = raw_data
+        stored_content = content
+        stored_event = structured_event
+        if is_flow_completion:
+            from app.modules.whatsapp.flows import WhatsAppFlowService
+
+            WhatsAppFlowService.store_completion(
+                organization_id,
+                integration.get("integration_id"),
+                provider_message_id,
+                structured_event["flow_response"],
+            )
+            stored_raw_data = json.loads(json.dumps(raw_data))
+            try:
+                stored_raw_data["interactive"]["nfm_reply"]["response_json"] = "[ENCRYPTED_FLOW_RESPONSE]"
+            except (KeyError, TypeError):
+                pass
+            stored_content = None
+            stored_event = json.loads(json.dumps(structured_event))
+            stored_event.pop("flow_response", None)
+            if isinstance(stored_event.get("selection"), dict):
+                stored_event["selection"].pop("response", None)
 
         doc = {
             "organization_id": organization_id,
             "channel": channel,
             "provider": provider,
-            "phone_number_id": phone_number_id,
+            "phone_number_id": clean_phone_id,
+            "integration_id": integration.get("integration_id"),
             "waba_id": waba_id,
             "from_phone": from_phone,
             "provider_message_id": provider_message_id,
             "message_type": message_type,
-            "content": content,
-            "raw_data": raw_data,
+            "content": stored_content,
+            "raw_data": stored_raw_data,
+            "provider_timestamp": cls._parse_whatsapp_provider_timestamp(raw_data.get("timestamp") if isinstance(raw_data, dict) else None),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "processed": False
         }
+        if stored_event is not None:
+            doc["structured_event"] = stored_event
+            doc["event_type"] = stored_event.get("event_type")
+        if is_flow_completion:
+            # Version 2 identifies the redacted envelope plus encrypted
+            # response stored in whatsapp_flow_responses. Existing records
+            # remain untouched in their version 1 shape.
+            doc["payload_storage_version"] = 2
 
-        collection.insert_one(doc)
+        # A deterministic MongoDB _id makes concurrent webhook retries idempotent
+        # without requiring a new collection or an index migration.
+        doc["_id"] = "wa-inbound:" + hashlib.sha256(
+            f"{provider}:{provider_message_id}".encode("utf-8")
+        ).hexdigest()
+
+        from pymongo.errors import DuplicateKeyError
+        try:
+            collection.insert_one(doc)
+        except DuplicateKeyError:
+            existing = collection.find_one({"provider_message_id": provider_message_id}, {"_id": 0})
+            if (
+                existing
+                and existing.get("organization_id") == organization_id
+                and existing.get("phone_number_id") == clean_phone_id
+                and existing.get("integration_id") == integration.get("integration_id")
+            ):
+                return existing
+            return {
+                "success": False,
+                "status_code": 409,
+                "message": "Provider message ID is already associated with another integration",
+            }
         doc.pop("_id", None)
         return doc
 

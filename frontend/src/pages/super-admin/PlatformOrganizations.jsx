@@ -28,8 +28,10 @@ export default function PlatformOrganizations() {
         status: statusFilter !== 'ALL' ? statusFilter : undefined,
       });
       if (res?.success) {
-        setOrganizations(res.data?.items || []);
-        setTotalCount(res.data?.total || 0);
+        const orgList = Array.isArray(res.data) ? res.data : (res.data?.items || res.items || []);
+        const total = res.total_count ?? res.pagination?.total ?? res.data?.total ?? orgList.length;
+        setOrganizations(orgList);
+        setTotalCount(total);
       }
     } catch (err) {
       console.error('Failed to load organizations:', err);

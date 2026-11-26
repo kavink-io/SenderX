@@ -127,3 +127,15 @@ def get_application_stats(application_id):
         organization_id=organization_id
     )
     return jsonify(res), res.get("status_code", 200)
+
+
+@applications_bp.route("/<string:application_id>", methods=["DELETE"])
+@require_permissions("organization:configuration:manage")
+def delete_application(application_id):
+    """Safely remove an application from active management without deleting history."""
+    res = ApplicationService.delete_application(
+        application_id=application_id,
+        organization_id=g.current_organization["organization_id"],
+        user_id=g.current_user["user_id"],
+    )
+    return jsonify(res), res.get("status_code", 200)

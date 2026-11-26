@@ -375,11 +375,19 @@ def delete_template(template_id):
 def publish_template(template_id):
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user.get("user_id") or g.current_user.get("email")
+    payload = request.get_json(silent=True) or {}
+    requested_status = payload.get("status") if isinstance(payload, dict) else None
+    target_status = (
+        requested_status.strip().upper()
+        if isinstance(requested_status, str) and requested_status.strip().upper() in ("PUBLISHED", "ACTIVE")
+        else "ACTIVE"
+    )
 
     result = TemplateService.publish_template(
         template_id=template_id,
         organization_id=organization_id,
-        user_id=user_id
+        user_id=user_id,
+        target_status=target_status
     )
 
     status_code = result.get("status_code", 200 if result["success"] else 400)

@@ -31,6 +31,17 @@ def create_celery(app: Flask):
 
     celery.Task = FlaskTask
 
+    # Import the existing task module during app construction so both the API
+    # and worker share one finalized registry. Keep the explicit wire name used
+    # by existing producers, and expose the module-qualified Celery name as an
+    # alias to the same task instance.
+    celery.loader.import_task_module("app.queue.tasks")
+    celery.finalize()
+    process_message_task = celery.tasks.get("senderx.process_message")
+    if process_message_task is None:
+        raise RuntimeError("Celery task senderx.process_message was not registered")
+    celery.tasks["app.queue.tasks.process_message"] = process_message_task
+
     return celery
 
 

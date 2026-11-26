@@ -2,6 +2,7 @@
 from datetime import datetime, timezone, timedelta
 import re
 import uuid
+from typing import Any, Dict, Optional
 
 from flask import current_app
 from app.modules.dead_letters.sanitizer import sanitize_dlq_error

@@ -51,7 +51,8 @@ def list_organizations():
         "count": len(result["items"]),
         "total_count": result["pagination"]["total"],
         "pagination": result["pagination"],
-        "data": result["items"]
+        "data": result["items"],
+        "items": result["items"]
     }), 200
 
 

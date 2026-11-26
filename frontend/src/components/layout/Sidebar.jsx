@@ -3,8 +3,8 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { PLATFORM_NAVIGATION, ORG_NAVIGATION } from '../../utils/navigation';
 
-export default function Sidebar({ isOpen, onClose, onOpenProfile }) {
-  const { account, isPlatformAdmin, isOrgAdmin, allowedTabs, hasPermission, logout, dashboardContext } = useAuth();
+export default function Sidebar({ isOpen, onClose, onToggle, onOpenProfile }) {
+  const { account, isPlatformAdmin, isOrgAdmin, allowedTabs, hasPermission, dashboardContext } = useAuth();
 
   const handleNavClick = () => {
     if (window.innerWidth <= 1024) {
@@ -37,15 +37,27 @@ export default function Sidebar({ isOpen, onClose, onOpenProfile }) {
   return (
     <aside className={`sidebar ${isOpen ? 'sidebar-open mobile-open' : 'sidebar-closed'}`}>
       <div className="sidebar-header">
-        <div className="brand-logo sm">SX</div>
-        <span className="brand-title">SenderX</span>
+        <div className="sidebar-brand">
+          <div className="brand-logo sm">SX</div>
+          <span className="brand-title">SenderX</span>
+        </div>
+        <button
+          id="btn-sidebar-toggle"
+          className="icon-btn sidebar-toggle-btn"
+          onClick={onToggle || onClose}
+          title="Toggle navigation sidebar"
+          aria-label="Toggle navigation sidebar"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
       </div>
 
       <nav className="sidebar-nav">
         <div className="nav-section">
-          <div className="nav-category">
-            {isPlatformAdmin ? 'PLATFORM ADMIN' : 'ORGANIZATION'}
-          </div>
           <div id="nav-org-items">
             {navItems.map((item) => (
               <NavLink
@@ -85,28 +97,11 @@ export default function Sidebar({ isOpen, onClose, onOpenProfile }) {
               <div id="current-account-name" style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
                 {displayName}
               </div>
-              <div id="current-account-type" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              <div id="current-account-type" style={{ fontSize: '0.75rem', color: 'var(--text-primary)' }}>
                 {roleLabel}
               </div>
             </div>
           </div>
-          <button
-            id="btn-logout"
-            className="icon-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              logout();
-            }}
-            title="Sign Out"
-            aria-label="Sign out"
-            style={{ width: '28px', height: '28px' }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-              <polyline points="16 17 21 12 16 7"/>
-              <line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
-          </button>
         </div>
       </div>
     </aside>

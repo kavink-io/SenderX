@@ -67,7 +67,10 @@ class ApplicationRepository:
         page: int = 1
     ) -> Tuple[List[Dict[str, Any]], int]:
         """List applications for an organization with pagination."""
-        query: Dict[str, Any] = {"organization_id": organization_id}
+        query: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "deleted_at": {"$exists": False},
+        }
         if status:
             query["status"] = status
 
@@ -125,11 +128,25 @@ class ApplicationRepository:
         return res.matched_count > 0
 
     @classmethod
-    def record_activity(cls, application_id: str) -> bool:
+    def mark_deleted(cls, application_id: str, organization_id: str, user_id: Optional[str]) -> bool:
+        """Soft-delete an application while retaining audit and message history."""
+        now = cls._now()
+        res = cls._collection().update_one(
+            {
+                "application_id": application_id,
+                "organization_id": organization_id,
+                "deleted_at": {"$exists": False},
+            },
+            {"$set": {"deleted_at": now, "deleted_by": user_id, "updated_at": now}},
+        )
+        return res.modified_count > 0
+
+    @classmethod
+    def record_activity(cls, application_id: str, organization_id: str) -> bool:
         """Update last_activity_at timestamp for an application."""
         now = cls._now()
         res = cls._collection().update_one(
-            {"application_id": application_id},
+            {"application_id": application_id, "organization_id": organization_id},
             {"$set": {"last_activity_at": now}}
         )
         return res.matched_count > 0

@@ -20,6 +20,7 @@ from app.modules.media.routes import media_bp
 from app.modules.payloads.routes import payloads_bp
 from app.modules.api_credentials.routes import api_credentials_bp
 from app.modules.applications.routes import applications_bp
+from app.modules.whatsapp.routes import whatsapp_bp
 from app.extensions import (
     api,
     cors,
@@ -141,6 +142,10 @@ def create_app():
     app.register_blueprint(
     applications_bp,
     url_prefix="/api/v1/applications"
+    )
+    app.register_blueprint(
+        whatsapp_bp,
+        url_prefix="/api/v1/whatsapp"
     )
     app.celery = create_celery(app)
 

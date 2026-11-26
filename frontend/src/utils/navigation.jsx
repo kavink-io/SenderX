@@ -208,3 +208,28 @@ export const ORG_NAVIGATION = [
     )
   }
 ];
+
+export const ROUTE_META = {
+  '/platform/organizations': { title: 'Platform Organizations', sub: 'Platform-wide organization management' },
+  '/platform/change-requests': { title: 'Organization Change Requests', sub: 'Review, approve, or reject tenant name and slug rebranding requests' },
+  '/platform/analytics': { title: 'Platform Analytics', sub: 'Cross-organization telemetry and system throughput' },
+  '/platform/monitoring': { title: 'System Health', sub: 'Real-time health status of infrastructure services' },
+  '/org/overview': { title: 'Overview', sub: 'Organization performance, application telemetry, and delivery metrics' },
+  '/org/applications': { title: 'Connected Applications', sub: 'Register and manage external web applications, e-commerce stores, and microservices' },
+  '/org/credentials': { title: 'API Credentials', sub: 'Cryptographically hashed API keys for external payload ingestion' },
+  '/org/messages': { title: 'Messages', sub: 'Direct message management & outbox delivery logs' },
+  '/org/templates': { title: 'Email Templates', sub: 'Multi-tenant sandboxed email templates' },
+  '/org/json-requests': { title: 'Received JSON Requests', sub: 'Immutable audit log of inbound JSON payloads and routing states' },
+  '/org/dlq': { title: 'Dead Letter Queue', sub: 'Unrouted or delivery-failed messages requiring inspection or manual retry' },
+  '/org/analytics': { title: 'Analytics', sub: 'Comprehensive volume, delivery performance, and failure trends' },
+  '/org/users': { title: 'Employees & Roles', sub: 'Manage organization members, assignments, and custom role permissions' },
+  '/org/settings': { title: 'Settings', sub: 'Organization profile, environment policies, and security architecture parameters' },
+};
+
+/** Resolve header/breadcrumb title and subtitle metadata for a route path. */
+export function getPageMeta(pathname) {
+  return ROUTE_META[pathname] || {
+    title: 'Dashboard',
+    sub: 'Multi-tenant messaging platform',
+  };
+}

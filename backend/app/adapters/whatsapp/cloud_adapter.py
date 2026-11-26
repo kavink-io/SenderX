@@ -11,6 +11,7 @@ Production-grade Meta WhatsApp Business Platform integration using the official 
 import json
 import logging
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Optional, Tuple, Union
 import requests
 
@@ -185,18 +186,32 @@ class WhatsAppCloudAdapter(BaseChannelAdapter):
                 target_url,
                 json=payload,
                 headers=self._headers,
-                timeout=self.timeout
+                timeout=self.timeout,
+                allow_redirects=False,
             )
         except requests.RequestException as exc:
             redacted = redact_sensitive(str(exc), [self.access_token, self.app_secret])
-            logger.error("Meta WhatsApp Cloud API network error: %s", redacted)
+            if isinstance(exc, requests.ConnectTimeout):
+                # A connect timeout occurs before an HTTP request is sent and
+                # can be retried without risking duplicate delivery.
+                logger.warning("Meta WhatsApp Cloud API connect timeout")
+                raise ProviderError(
+                    "Meta WhatsApp Cloud API connection timed out before dispatch",
+                    status_code=503,
+                    retryable=True,
+                    error_code="CONNECT_TIMEOUT",
+                    retry_after=5,
+                ) from None
+            # A read timeout, reset, or other transport failure can happen
+            # after Meta accepted the POST. Fail closed and require status
+            # reconciliation before any manual requeue.
+            logger.error("Meta WhatsApp Cloud API send outcome is unknown (%s)", type(exc).__name__)
             raise ProviderError(
-                f"Meta WhatsApp Cloud API network error: {redacted}",
+                f"DELIVERY_OUTCOME_UNKNOWN: Meta WhatsApp request may have been accepted; verify provider status before retry. ({type(exc).__name__})",
                 status_code=503,
-                retryable=True,
-                error_code="NETWORK_ERROR",
-                retry_after=5
-            )
+                retryable=False,
+                error_code="DELIVERY_OUTCOME_UNKNOWN",
+            ) from None
 
         # Parse JSON response
         try:
@@ -217,19 +232,30 @@ class WhatsAppCloudAdapter(BaseChannelAdapter):
                 http_status=resp.status_code,
                 error_message=error_msg
             )
-
-            redacted_msg = redact_sensitive(
-                error_msg,
-                [self.access_token, self.app_secret]
-            )
+            if is_retryable:
+                provider_retry_after = getattr(resp, "headers", {}).get("Retry-After")
+                if provider_retry_after:
+                    try:
+                        retry_after = max(1, int(provider_retry_after))
+                    except (TypeError, ValueError):
+                        try:
+                            retry_time = parsedate_to_datetime(provider_retry_after)
+                            retry_after = max(1, int((retry_time - datetime.now(timezone.utc)).total_seconds()))
+                        except (TypeError, ValueError, OverflowError):
+                            pass
 
             logger.warning(
-                "WhatsApp Cloud API error HTTP %s: code=%s subcode=%s msg=%s retryable=%s",
-                resp.status_code, error_code, error_subcode, redacted_msg, is_retryable
+                "WhatsApp Cloud API error HTTP %s: code=%s subcode=%s retryable=%s",
+                resp.status_code, error_code, error_subcode, is_retryable
             )
 
+            credential_hint = ""
+            if self.access_token and self.access_token in error_msg:
+                credential_hint = f" (credential {redact_sensitive(self.access_token, [self.access_token])})"
+            elif self.app_secret and self.app_secret in error_msg:
+                credential_hint = f" (app secret {redact_sensitive(self.app_secret, [self.app_secret])})"
             raise ProviderError(
-                f"WhatsApp Cloud API error {error_code or resp.status_code}: {redacted_msg}",
+                f"WhatsApp Cloud API rejected message (provider code {error_code or resp.status_code}){credential_hint}",
                 status_code=resp.status_code,
                 retryable=is_retryable,
                 error_code=error_code or resp.status_code,
@@ -243,7 +269,7 @@ class WhatsAppCloudAdapter(BaseChannelAdapter):
             provider_message_id = messages_list[0].get("id")
 
         if not provider_message_id:
-            logger.warning("WhatsApp Cloud API response missing message ID: %s", resp_data)
+            logger.warning("WhatsApp Cloud API response missing message ID")
 
         return normalize_whatsapp_response(
             success=True,
@@ -299,7 +325,8 @@ class WhatsAppCloudAdapter(BaseChannelAdapter):
                 headers=headers,
                 files=files,
                 data=data,
-                timeout=self.timeout * 2
+                timeout=self.timeout * 2,
+                allow_redirects=False,
             )
         except requests.RequestException as exc:
             redacted = redact_sensitive(str(exc), [self.access_token, self.app_secret])
@@ -319,10 +346,8 @@ class WhatsAppCloudAdapter(BaseChannelAdapter):
         if resp.status_code not in (200, 201):
             error_obj = resp_data.get("error", {})
             error_code = error_obj.get("code")
-            error_msg = error_obj.get("message") or resp.text
-            redacted_msg = redact_sensitive(error_msg, [self.access_token, self.app_secret])
             raise ProviderError(
-                f"WhatsApp media upload error {error_code or resp.status_code}: {redacted_msg}",
+                f"WhatsApp media upload failed (provider code {error_code or resp.status_code})",
                 status_code=resp.status_code,
                 retryable=False,
                 error_code=error_code
@@ -348,7 +373,7 @@ class WhatsAppCloudAdapter(BaseChannelAdapter):
         }
 
         try:
-            resp = self.session.get(target_url, headers=headers, timeout=self.timeout)
+            resp = self.session.get(target_url, headers=headers, timeout=self.timeout, allow_redirects=False)
             if resp.status_code == 200:
                 return resp.json()
             error_obj = resp.json().get("error", {}) if resp.text else {}

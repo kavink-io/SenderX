@@ -23,7 +23,7 @@ export default function ConnectedApplications() {
     try {
       const res = await ApiClient.listApplications(1, 100, statusFilter !== 'ALL' ? statusFilter : null);
       if (res?.success) {
-        setApps(res.data?.items || []);
+        setApps(Array.isArray(res.data) ? res.data : (res.data?.items || []));
       }
     } catch (err) {
       console.error('Failed to load applications:', err);
@@ -53,6 +53,22 @@ export default function ConnectedApplications() {
       }
     } catch (err) {
       showToast(err?.message || 'Error updating application status', 'error');
+    }
+  };
+
+  const handleDelete = async (app) => {
+    const appId = app.application_id || app._id || app.id;
+    if (!window.confirm(`Delete application "${app.name || appId}"? Its credentials will be revoked and its history retained.`)) return;
+    try {
+      const res = await ApiClient.deleteApplication(appId);
+      if (res.success) {
+        showToast('Application deleted and credentials revoked', 'success');
+        fetchApps();
+      } else {
+        showToast(res.message || 'Application deletion failed', 'error');
+      }
+    } catch (err) {
+      showToast(err?.message || 'Error deleting application', 'error');
     }
   };
 
@@ -152,13 +168,18 @@ export default function ConnectedApplications() {
                             Details
                           </button>
                           {canManage && (
-                            <button
-                              type="button"
-                              className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
-                              onClick={() => handleToggleActive(app)}
-                            >
-                              {isActive ? 'Deactivate' : 'Activate'}
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
+                                onClick={() => handleToggleActive(app)}
+                              >
+                                {isActive ? 'Deactivate' : 'Activate'}
+                              </button>
+                              <button type="button" className="btn btn-danger btn-sm" onClick={() => handleDelete(app)}>
+                                Delete
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>

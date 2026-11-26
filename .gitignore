@@ -1,0 +1,4 @@
+# Exclude root deployment secrets from Git
+.env
+.env.*
+!.env.example

@@ -76,7 +76,7 @@ export default function TemplatePreviewModal({ isOpen, onClose, template }) {
           <div style={{ flex: 1, border: '1px solid var(--glass-border)', borderRadius: '6px', overflow: 'hidden', background: '#ffffff' }}>
             <iframe
               title="Template Preview"
-              srcDoc={renderedHtml || template.html_content || '<p style="padding: 2rem; color: #666; font-family: sans-serif;">Click "Render Preview" to compile Jinja variables safely.</p>'}
+              srcDoc={renderedHtml || template.compiled_html || template.html_body || template.html_content || '<p style="padding: 2rem; color: #666; font-family: sans-serif;">Click "Render Preview" to compile Jinja variables safely.</p>'}
               sandbox=""
               style={{ width: '100%', height: '100%', border: 'none' }}
             />

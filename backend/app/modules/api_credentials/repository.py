@@ -74,10 +74,14 @@ class ApiCredentialRepository:
         return list(cursor)
 
     @classmethod
-    def update_last_used(cls, credential_id: str) -> bool:
+    def update_last_used(cls, credential_id: str, organization_id: str, application_id: str) -> bool:
         """Atomically record credential usage timestamp."""
         res = cls._collection().update_one(
-            {"credential_id": credential_id},
+            {
+                "credential_id": credential_id,
+                "organization_id": organization_id,
+                "application_id": application_id,
+            },
             {"$set": {"last_used_at": cls._now()}}
         )
         return res.modified_count > 0

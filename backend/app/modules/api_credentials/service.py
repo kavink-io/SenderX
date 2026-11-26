@@ -15,6 +15,9 @@ from app.modules.organizations.repository import OrganizationRepository
 class ApiCredentialService:
     """Service managing cryptographically secure external API keys."""
 
+    ALLOWED_SCOPES = {"payloads:ingest", "messages:create", "messages:read"}
+    SCOPE_ALIASES = {"payloads:write": "payloads:ingest", "messages:write": "messages:create"}
+
     @classmethod
     def create_credential(
         cls,
@@ -48,6 +51,17 @@ class ApiCredentialService:
         if app_env != "all" and app_env != requested_env:
             raise ValueError(f"Application '{app_id_clean}' is configured for '{app_env}' environment, cannot issue '{requested_env}' credential")
 
+        effective_scopes = scopes or ["payloads:ingest", "messages:create", "messages:read"]
+        if not isinstance(effective_scopes, list) or any(not isinstance(scope, str) for scope in effective_scopes):
+            raise ValueError("scopes must be a list of supported scope names")
+        effective_scopes = sorted(set(
+            cls.SCOPE_ALIASES.get(scope.strip(), scope.strip())
+            for scope in effective_scopes if scope.strip()
+        ))
+        unsupported_scopes = set(effective_scopes) - cls.ALLOWED_SCOPES
+        if unsupported_scopes:
+            raise ValueError(f"Unsupported API credential scope(s): {', '.join(sorted(unsupported_scopes))}")
+
         raw_key, key_prefix, key_hash = generate_api_key(environment=environment)
 
         credential_data = {
@@ -58,7 +72,7 @@ class ApiCredentialService:
             "key_hash": key_hash,
             "environment": requested_env,
             "created_by": created_by,
-            "scopes": scopes or ["payloads:ingest", "messages:create"]
+            "scopes": effective_scopes
         }
 
         created = ApiCredentialRepository.create(credential_data)
@@ -100,8 +114,8 @@ class ApiCredentialService:
             return None, None
 
         # Update last used timestamps
-        ApiCredentialRepository.update_last_used(cred["credential_id"])
-        ApplicationRepository.record_activity(app_id)
+        ApiCredentialRepository.update_last_used(cred["credential_id"], org_id, app_id)
+        ApplicationRepository.record_activity(app_id, organization_id=org_id)
 
         cred_safe = {k: v for k, v in cred.items() if k != "key_hash"}
         return cred_safe, org

@@ -1055,7 +1055,7 @@ async function showUserProfile() {
         <div style="background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.35); border-radius: 6px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
           <div>
             <strong style="color: #818cf8;">${escapeHtml(account.role || "SUPER_ADMIN")} (Root Platform Administrator)</strong>
-            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Full administrative authority across all platform tenants, organizations, and monitoring subsystems</div>
+            <div style="font-size: 0.75rem; color: var(--text-primary); margin-top: 2px;">Full administrative authority across all platform tenants, organizations, and monitoring subsystems</div>
           </div>
           <span class="badge badge-primary" style="font-size: 0.75rem;">Platform-Wide Scope</span>
         </div>
@@ -1152,7 +1152,7 @@ async function showUserProfile() {
           <div style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
             <div>
               <strong style="color: var(--accent-cyan);">${escapeHtml(a.role_name || "Custom Role")}</strong>
-              <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 6px;">(${a.permissions ? a.permissions.length : 0} perms)</span>
+              <span style="font-size: 0.75rem; color: var(--text-primary); margin-left: 6px;">(${a.permissions ? a.permissions.length : 0} perms)</span>
             </div>
             <span class="badge ${a.application_id ? 'badge-scope' : 'badge-primary'}" style="font-size: 0.75rem;">
               ${escapeHtml(a.application_name || (a.application_id ? 'App-scoped' : 'Org-wide'))}
@@ -2995,7 +2995,7 @@ async function loadOrgRoles() {
           <tr>
             <td>
               <strong style="color: var(--text-primary);">${escapeHtml(r.name)}</strong>
-              ${r.description ? `<p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">${escapeHtml(r.description)}</p>` : ""}
+              ${r.description ? `<p style="font-size: 0.75rem; color: var(--text-primary); margin: 2px 0 0 0;">${escapeHtml(r.description)}</p>` : ""}
             </td>
             <td>
               <span class="badge ${isSystem ? "badge-env-live" : "badge-env-test"}">${isSystem ? "SYSTEM" : "CUSTOM"}</span>
@@ -5037,7 +5037,7 @@ async function loadPlatformChangeRequests(page = platformCrCurrentPage) {
               <tr>
                 <td>
                   <div style="font-weight: 600; color: var(--text-primary);">${escapeHtml(cr.organization_name || "-")}</div>
-                  <div style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(cr.requester_name || "-")} (${escapeHtml(cr.requester_email || "-")})</div>
+                  <div style="font-size: 0.75rem; color: var(--text-primary);">${escapeHtml(cr.requester_name || "-")} (${escapeHtml(cr.requester_email || "-")})</div>
                 </td>
                 <td>
                   <div>${escapeHtml(cr.current_name || "-")}</div>

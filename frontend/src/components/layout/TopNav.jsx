@@ -4,8 +4,9 @@ import { useAuth } from '../../context/AuthContext';
 import { useAppScope } from '../../context/ScopeContext';
 import ThemeToggle from '../common/ThemeToggle';
 import ApiClient from '../../services/api';
+import { getPageMeta } from '../../utils/navigation';
 
-export default function TopNav({ onToggleSidebar, onOpenProfile }) {
+export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenProfile }) {
   const location = useLocation();
   const { account, isPlatformAdmin, isOrgAdmin, dashboardContext, logout } = useAuth();
   const { activeAppId, setAppScope, assignedApps, setAssignedApps } = useAppScope();
@@ -29,70 +30,27 @@ export default function TopNav({ onToggleSidebar, onOpenProfile }) {
   }, [isPlatformAdmin, dashboardContext, setAssignedApps]);
 
   // Determine page title from path
-  const path = location.pathname;
-  let pageTitle = 'Dashboard';
-  let pageSubtitle = 'Multi-tenant messaging platform';
-
-  const routeMeta = {
-    '/platform/organizations': { title: 'Platform Organizations', sub: 'Platform-wide organization management' },
-    '/platform/change-requests': { title: 'Organization Change Requests', sub: 'Review, approve, or reject tenant name and slug rebranding requests' },
-    '/platform/analytics': { title: 'Platform Analytics', sub: 'Cross-organization telemetry and system throughput' },
-    '/platform/monitoring': { title: 'System Health', sub: 'Real-time health status of infrastructure services' },
-    '/org/overview': { title: 'Overview', sub: 'Organization performance, application telemetry, and delivery metrics' },
-    '/org/applications': { title: 'Connected Applications', sub: 'Register and manage external web applications, e-commerce stores, and microservices' },
-    '/org/credentials': { title: 'API Credentials', sub: 'Cryptographically hashed API keys for external payload ingestion' },
-    '/org/messages': { title: 'Messages', sub: 'Direct message management & outbox delivery logs' },
-    '/org/templates': { title: 'Email Templates', sub: 'Multi-tenant sandboxed email templates' },
-    '/org/json-requests': { title: 'Received JSON Requests', sub: 'Immutable audit log of inbound JSON payloads and routing states' },
-    '/org/dlq': { title: 'Dead Letter Queue', sub: 'Unrouted or delivery-failed messages requiring inspection or manual retry' },
-    '/org/analytics': { title: 'Analytics', sub: 'Comprehensive volume, delivery performance, and failure trends' },
-    '/org/users': { title: 'Employees & Roles', sub: 'Manage organization members, assignments, and custom role permissions' },
-    '/org/settings': { title: 'Settings', sub: 'Organization profile, environment policies, and security architecture parameters' },
-  };
-
-  if (routeMeta[path]) {
-    pageTitle = routeMeta[path].title;
-    pageSubtitle = routeMeta[path].sub;
-  }
-
-  const displayName = account?.name || account?.email || 'User';
-  let roleLabel = 'EMPLOYEE';
-  if (isPlatformAdmin) {
-    roleLabel = 'SUPER_ADMIN';
-  } else if (isOrgAdmin) {
-    roleLabel = 'ORG_ADMIN';
-  } else if (account?.roles && account.roles.length > 0) {
-    roleLabel = account.roles[0].name || account.roles[0].role_id;
-  }
-
-  const orgName = isPlatformAdmin ? 'Platform' : (dashboardContext?.organization?.name || 'Organization');
+  const { title: pageTitle, sub: pageSubtitle } = getPageMeta(location.pathname);
 
   return (
     <header className="content-header top-nav">
       <div className="top-nav-left">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <button
-            id="btn-sidebar-toggle"
-            className="icon-btn sidebar-toggle-btn"
-            onClick={onToggleSidebar}
-            title="Toggle navigation sidebar"
-            aria-label="Toggle navigation sidebar"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="3" y1="12" x2="21" y2="12"></line>
-              <line x1="3" y1="6" x2="21" y2="6"></line>
-              <line x1="3" y1="18" x2="21" y2="18"></line>
-            </svg>
-          </button>
-          <div className="breadcrumb-nav" id="breadcrumb-container">
-            <span>SenderX</span>
-            <span className="separator">/</span>
-            <span id="breadcrumb-org-name">{orgName}</span>
-            <span className="separator">/</span>
-            <span className="current" id="breadcrumb-current-tab">{pageTitle}</span>
-          </div>
-        </div>
         <div className="page-title-row">
+          {!isSidebarOpen && (
+            <button
+              id="btn-sidebar-reopen"
+              className="icon-btn sidebar-toggle-btn"
+              onClick={onToggleSidebar}
+              title="Open navigation sidebar"
+              aria-label="Open navigation sidebar"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="18" x2="21" y2="18"></line>
+              </svg>
+            </button>
+          )}
           <h2 id="page-title">{pageTitle}</h2>
         </div>
         <p className="subtitle" id="page-subtitle" style={{ margin: 0 }}>
@@ -175,20 +133,9 @@ export default function TopNav({ onToggleSidebar, onOpenProfile }) {
           role="button"
           tabIndex={0}
         >
-          <div className="avatar-circle" id="user-avatar-initial">
-            {(displayName.charAt(0) || 'U').toUpperCase()}
-          </div>
-          <div className="user-details-box">
-            <span className="user-email" id="header-user-email">{account?.email}</span>
-            <div className="user-tags">
-              <span className="user-role badge-primary" id="header-user-role">{roleLabel}</span>
-              {account?.employee_code && (
-                <span className="badge badge-code" id="header-user-emp-code">
-                  {account.employee_code}
-                </span>
-              )}
-            </div>
-          </div>
+          <span className="user-email" id="header-user-email">
+            {account?.email || 'User'}
+          </span>
         </div>
 
         {/* Logout Button in Header */}

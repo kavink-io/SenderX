@@ -11,6 +11,7 @@ Validates:
 
 import uuid
 import pytest
+from datetime import datetime, timezone
 
 from app import create_app
 from app.adapters.adapter_registry import AdapterRegistry
@@ -21,6 +22,7 @@ from app.adapters.telegram.mock_adapter import MockTelegramAdapter
 from app.adapters.base_adapter import ProviderError
 from app.engine.retry_manager import RetryManager
 from app.modules.messages.repository import MessageRepository
+from app.modules.whatsapp.repository import WhatsAppIntegrationRepository
 from app.queue.tasks import process_message
 
 
@@ -307,6 +309,26 @@ def test_worker_processing_across_all_four_channels(app):
         ]
 
         created_ids = []
+        integration_id = f"integration-{uuid.uuid4().hex}"
+        phone_number_id = f"phone-{uuid.uuid4().hex}"
+        inbound_collection = app.mongo_db["inbound_messages"]
+        WhatsAppIntegrationRepository.create({
+            "integration_id": integration_id,
+            "organization_id": org_id,
+            "phone_number_id": phone_number_id,
+            "waba_id": f"waba-{uuid.uuid4().hex}",
+            "status": "CONNECTED",
+            "deleted_at": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        inbound_collection.insert_one({
+            "organization_id": org_id,
+            "integration_id": integration_id,
+            "phone_number_id": phone_number_id,
+            "channel": "whatsapp",
+            "from_phone": "15557654321",
+            "provider_timestamp": datetime.now(timezone.utc).timestamp(),
+        })
 
         try:
             for channel, recipient, data in test_messages:
@@ -342,3 +364,5 @@ def test_worker_processing_across_all_four_channels(app):
         finally:
             for msg_id in created_ids:
                 MessageRepository._collection().delete_one({"message_id": msg_id})
+            inbound_collection.delete_many({"organization_id": org_id, "integration_id": integration_id})
+            WhatsAppIntegrationRepository._col().delete_one({"organization_id": org_id, "integration_id": integration_id})

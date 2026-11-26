@@ -24,7 +24,7 @@ export default function MessageComposer({ onMessageSent }) {
       try {
         const res = await ApiClient.listTemplates(1, 50, { status: 'PUBLISHED' });
         if (res?.success) {
-          setTemplates(res.data?.items || []);
+          setTemplates(res.data?.items || res.items || []);
         }
       } catch (err) {
         console.warn('Could not load templates for composer:', err);

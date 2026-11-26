@@ -474,6 +474,10 @@ export const ApiClient = {
     });
   },
 
+  async deleteApplication(applicationId) {
+    return await this.request(`/applications/${applicationId}`, { method: "DELETE" });
+  },
+
   async getApplicationStats(applicationId) {
     return await this.request(`/applications/${applicationId}/stats`);
   },
@@ -657,9 +661,10 @@ export const ApiClient = {
     });
   },
 
-  async publishTemplate(templateId) {
+  async publishTemplate(templateId, status = "PUBLISHED") {
     return await this.request(`/templates/${templateId}/publish`, {
-      method: "POST"
+      method: "POST",
+      body: JSON.stringify({ status })
     });
   },
 

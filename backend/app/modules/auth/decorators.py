@@ -240,6 +240,12 @@ def require_permissions(*required_permissions):
                 effective_permissions.add("organization:dlq:retry")
             if "organization:dlq:retry" in granted_permissions:
                 effective_permissions.add("organization:dead_letters:manage")
+            # Provider / WhatsApp configuration permission aliases
+            if "organization:configuration:manage" in granted_permissions:
+                effective_permissions.add("organization:providers:manage")
+                effective_permissions.add("organization:providers:read")
+            if "organization:providers:manage" in granted_permissions:
+                effective_permissions.add("organization:providers:read")
             # Template permission aliases
             if "organization:templates:manage" in granted_permissions:
                 effective_permissions.update([

@@ -8,14 +8,9 @@ from functools import wraps
 from typing import Any, Callable, List, Optional
 
 from flask import current_app, g, jsonify, request
-from flask_jwt_extended import get_jwt, get_jwt_identity, verify_jwt_in_request
-
 from app.modules.api_credentials.rate_limiter import DistributedRateLimiter
 from app.modules.api_credentials.service import ApiCredentialService
 from app.modules.auth.decorators import require_permissions
-from app.modules.organizations.repository import OrganizationRepository
-from app.modules.organizations.role_repository import RoleRepository
-from app.modules.users.repository import UserRepository
 
 
 def extract_api_key_from_request() -> Optional[str]:
@@ -83,6 +78,32 @@ def require_api_key_or_token(required_permissions: Optional[List[str]] = None) -
                 g.auth_type = "API_KEY"
                 g.current_credential = cred
 
+                # API-key scopes are intentionally narrower than dashboard RBAC.
+                # Map organization permissions to the equivalent public API scope.
+                scope_aliases = {
+                    "organization:messages:create": "messages:create",
+                    "organization:messages:read": "messages:read",
+                    "organization:messages:manage": "messages:manage",
+                }
+                scope_compatibility = {"payloads:write": "payloads:ingest", "messages:write": "messages:create"}
+                granted_scopes = {
+                    scope_compatibility.get(scope, scope)
+                    for scope in (cred.get("scopes") or [])
+                }
+                missing_scopes = [
+                    ("payloads:ingest" if permission == "organization:messages:create" and "/payloads" in request.path
+                     else scope_aliases.get(permission, permission))
+                    for permission in required_permissions
+                    if ("payloads:ingest" if permission == "organization:messages:create" and "/payloads" in request.path
+                        else scope_aliases.get(permission, permission)) not in granted_scopes
+                ]
+                if missing_scopes:
+                    return jsonify({
+                        "success": False,
+                        "message": "API credential does not have the required scope",
+                        "missing_scopes": sorted(set(missing_scopes)),
+                    }), 403
+
                 # Rate limiting (CRED-06)
                 for dim, ident in [
                     ("credential", cred["credential_id"]),
@@ -139,75 +160,9 @@ def require_api_key_or_token(required_permissions: Optional[List[str]] = None) -
 
                 return func(*args, **kwargs)
 
-            # 2. Fall back to JWT token authentication for dashboard operations
-            try:
-                verify_jwt_in_request(optional=False)
-            except Exception:
-                return jsonify({
-                    "success": False,
-                    "message": "Authentication required. Provide valid API key via X-API-Key header or valid JWT Bearer token."
-                }), 401
-
-            identity = get_jwt_identity()
-            claims = get_jwt()
-
-            if claims.get("account_type") != "ORGANIZATION_USER":
-                return jsonify({
-                    "success": False,
-                    "message": "Organization user access required"
-                }), 403
-
-            user = UserRepository.find_by_id(identity)
-            if not user or not user.get("is_active", False):
-                return jsonify({
-                    "success": False,
-                    "message": "Organization user not found or inactive"
-                }), 401
-
-            organization_id = user.get("organization_id")
-            organization = OrganizationRepository.find_by_id(organization_id)
-            if not organization or organization.get("status") != "ACTIVE":
-                return jsonify({
-                    "success": False,
-                    "message": "Organization is inactive or unavailable"
-                }), 403
-
-            # Verify permissions
-            role_ids = user.get("role_ids", [])
-            granted_permissions = set()
-            for r_id in role_ids:
-                role = RoleRepository.find_by_id(r_id, organization_id=organization_id)
-                if role and role.get("scope") == "ORGANIZATION":
-                    granted_permissions.update(role.get("permissions", []))
-
-            # Expand aliases
-            effective_permissions = set(granted_permissions)
-            if "organization:dead_letters:read" in granted_permissions:
-                effective_permissions.add("organization:dlq:read")
-            if "organization:dead_letters:manage" in granted_permissions:
-                effective_permissions.add("organization:dlq:retry")
-
-            missing = set(required_permissions) - effective_permissions
-            if missing:
-                return jsonify({
-                    "success": False,
-                    "message": "You do not have permission to perform this action",
-                    "missing_permissions": sorted(list(missing))
-                }), 403
-
-            g.current_user = user
-            g.current_organization = organization
-            g.auth_type = "JWT"
-            # For JWT caller, application_id may optionally be supplied or None
-            header_app_id = request.headers.get("X-Application-ID")
-            body_app_id = None
-            if request.is_json:
-                body = request.get_json(silent=True) or {}
-                if isinstance(body, dict):
-                    body_app_id = body.get("application_id")
-            g.current_application_id = header_app_id or body_app_id or None
-
-            return func(*args, **kwargs)
+            # Preserve the project's full RBAC behavior for dashboard callers,
+            # including application-scoped role assignments and token versioning.
+            return require_permissions(*required_permissions)(func)(*args, **kwargs)
 
         return wrapper
     return decorator

@@ -24,8 +24,10 @@ export default function PlatformChangeRequests() {
         search: search.trim() || undefined,
       });
       if (res?.success) {
-        setRequests(res.data?.items || []);
-        setTotalCount(res.data?.total || 0);
+        const reqList = Array.isArray(res.data) ? res.data : (res.data?.items || res.items || []);
+        const total = res.total_count ?? res.pagination?.total ?? res.data?.total ?? reqList.length;
+        setRequests(reqList);
+        setTotalCount(total);
       }
     } catch (err) {
       console.error('Failed to load change requests:', err);

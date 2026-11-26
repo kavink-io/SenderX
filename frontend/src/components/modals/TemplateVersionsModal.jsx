@@ -103,7 +103,7 @@ export default function TemplateVersionsModal({ isOpen, onClose, template }) {
               </div>
               <div style={{ background: 'var(--bg-main)', border: '1px solid var(--glass-border)', borderRadius: '6px', padding: '0.75rem', maxHeight: '240px', overflowY: 'auto' }}>
                 <pre style={{ margin: 0, fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
-                  {versionDetail.html_content || versionDetail.html || '<!-- Empty content -->'}
+                  {versionDetail.html_body || versionDetail.html_content || versionDetail.html || '<!-- Empty content -->'}
                 </pre>
               </div>
             </div>

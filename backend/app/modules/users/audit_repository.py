@@ -35,13 +35,24 @@ EVENT_LABELS = {
     "ORGANIZATION_DELETED": "Organization Deleted",
     "APPLICATION_REGISTERED": "Application Registered",
     "APPLICATION_ACTIVATED": "Application Activated",
-    "APPLICATION_DEACTIVATED": "Application Deactivated"
+    "APPLICATION_DEACTIVATED": "Application Deactivated",
+    "WHATSAPP_INTEGRATION_CREATED": "WhatsApp Integration Connected",
+    "WHATSAPP_INTEGRATION_CONNECTED": "WhatsApp Integration Connected",
+    "WHATSAPP_INTEGRATION_VERIFIED": "WhatsApp Integration Verified",
+    "WHATSAPP_INTEGRATION_VERIFICATION_FAILED": "WhatsApp Integration Verification Failed",
+    "WHATSAPP_INTEGRATION_UPDATED": "WhatsApp Integration Updated",
+    "WHATSAPP_CREDENTIALS_ROTATED": "WhatsApp Credentials Rotated",
+    "WHATSAPP_INTEGRATION_DISCONNECTED": "WhatsApp Integration Disconnected",
+    "WHATSAPP_INTEGRATION_RECONNECTED": "WhatsApp Integration Reconnected",
+    "WHATSAPP_INTEGRATION_STATUS_CHECKED": "WhatsApp Credential Status Verified",
+    "PLATFORM_SETTINGS_UPDATED": "Platform Settings Updated"
 }
 
 SENSITIVE_KEYS = {
     "password", "password_hash", "current_password", "new_password",
-    "token", "refresh_token", "access_token", "secret", "api_key",
-    "private_key", "secret_key", "otp", "verification_code", "reset_token"
+    "token", "refresh_token", "access_token", "encrypted_access_token", "secret", "api_key",
+    "private_key", "secret_key", "meta_app_secret", "encrypted_app_secret", "otp",
+    "verification_code", "reset_token", "webhook_verify_token", "encrypted_webhook_verify_token"
 }
 
 

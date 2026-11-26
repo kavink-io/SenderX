@@ -89,8 +89,8 @@ class TemplateService:
         3. Extracts all {{ variable }} tokens and compares against declared variables.
         4. Runs Gmail/Outlook compatibility checks.
         """
-        html_source = data.get("html_body") or data.get("html") or ""
-        css_source = data.get("css") or ""
+        html_source = data.get("html_body") or data.get("html") or data.get("html_content") or ""
+        css_source = data.get("css") or data.get("css_content") or ""
         subject_source = data.get("subject") or ""
         declared_vars = data.get("variables") or []
 
@@ -226,6 +226,7 @@ class TemplateService:
 
         now = cls._now()
         template_id = f"tmpl-{uuid.uuid4().hex[:12]}"
+        target_status = validated.status or "DRAFT"
 
         doc = {
             "template_id": template_id,
@@ -246,12 +247,16 @@ class TemplateService:
             "header": validated.header or "",
             "footer": validated.footer or "",
             "version": 1,
-            "status": "DRAFT",
+            "status": target_status,
             "created_by": user_id or "system",
             "updated_by": user_id or "system",
             "created_at": now,
             "updated_at": now
         }
+
+        if target_status in ("PUBLISHED", "ACTIVE"):
+            doc["published_at"] = now
+            doc["published_by"] = user_id or "system"
 
         created = TemplateRepository.create(doc)
 
@@ -264,13 +269,25 @@ class TemplateService:
             target_type="EMAIL_TEMPLATE",
             target_name=validated.name,
             action_label="Created Email Template",
-            summary=f"Created email template '{validated.name}' (DRAFT v1)"
+            summary=f"Created email template '{validated.name}' ({target_status} v1)"
         )
+
+        if target_status in ("PUBLISHED", "ACTIVE"):
+            AuditRepository.log_event(
+                organization_id=organization_id or "PLATFORM",
+                event_type="EMAIL_TEMPLATE_PUBLISHED",
+                actor_id=user_id,
+                target_id=template_id,
+                target_type="EMAIL_TEMPLATE",
+                target_name=validated.name,
+                action_label="Published Email Template",
+                summary=f"Published email template '{validated.name}' (v1)"
+            )
 
         return {
             "success": True,
             "status_code": 201,
-            "message": "Template created successfully",
+            "message": "Template published successfully" if target_status in ("PUBLISHED", "ACTIVE") else "Template created successfully",
             "data": created
         }
 
@@ -305,7 +322,16 @@ class TemplateService:
             category=category,
             search=search
         )
-        return {"success": True, "status_code": 200, **result}
+        return {
+            "success": True,
+            "status_code": 200,
+            **result,
+            "data": {
+                "items": result["items"],
+                "total": result["pagination"]["total"],
+                "pagination": result["pagination"]
+            }
+        }
 
     @classmethod
     def update_template(
@@ -396,7 +422,20 @@ class TemplateService:
 
         now = cls._now()
         current_version = template.get("version", 1)
-        is_active = template.get("status") == "ACTIVE"
+        is_active = template.get("status") in ("ACTIVE", "PUBLISHED")
+        requested_status = validated.status
+        effective_channel = (validated.channel or template.get("channel") or "email").lower().strip()
+        effective_plain = validated.plain_text_body if validated.plain_text_body is not None else template.get("plain_text_body", "")
+
+        if requested_status in ("PUBLISHED", "ACTIVE"):
+            if effective_channel == "sms":
+                if not effective_plain and not effective_html:
+                    return {"success": False, "status_code": 400, "message": "SMS template must have message content before publishing"}
+            else:
+                if not str(effective_subject or "").strip():
+                    return {"success": False, "status_code": 400, "message": "Email template requires a non-empty subject before publishing"}
+                if not str(effective_html or "").strip() and not str(effective_plain or "").strip():
+                    return {"success": False, "status_code": 400, "message": "Email template requires an HTML or plain-text body before publishing"}
 
         update_fields: Dict[str, Any] = {
             "updated_at": now,
@@ -404,6 +443,13 @@ class TemplateService:
             "compiled_html": compilation["compiled_html"],
             "compatibility_warnings": compilation["warnings"]
         }
+
+        if requested_status is not None:
+            if requested_status != template.get("status"):
+                update_fields["status"] = requested_status
+            if requested_status in ("PUBLISHED", "ACTIVE"):
+                update_fields["published_at"] = now
+                update_fields["published_by"] = user_id or "system"
 
         # Collect changed fields
         content_changed = False
@@ -479,34 +525,78 @@ class TemplateService:
         cls,
         template_id: str,
         organization_id: Optional[str],
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        target_status: str = "ACTIVE"
     ) -> Dict[str, Any]:
-        """Compile and transition template status to ACTIVE."""
+        """Validate, compile, and transition template status to PUBLISHED or ACTIVE."""
         template = TemplateRepository.find_by_id(template_id, organization_id=organization_id)
         if not template or template.get("status") == "DELETED":
             return {"success": False, "status_code": 404, "message": "Template not found"}
 
+        norm_target = str(target_status or "ACTIVE").strip().upper()
+        if norm_target not in ("ACTIVE", "PUBLISHED"):
+            norm_target = "ACTIVE"
+
+        subject = template.get("subject", "")
+        html_body = template.get("html_body", "")
+        css = template.get("css", "")
+        plain_text = template.get("plain_text_body", "")
+
+        # Security scan before publishing
+        sec_findings = []
+        sec_findings.extend(TemplateSecurityInspector.inspect_html(html_body or ""))
+        sec_findings.extend(TemplateSecurityInspector.inspect_css(css or ""))
+        if sec_findings:
+            return {
+                "success": False,
+                "status_code": 422,
+                "message": f"Template security check failed: {'; '.join(sec_findings)}",
+                "security_findings": sec_findings
+            }
+
+        # Syntax & AST check before publishing
+        try:
+            cls.validate_template_syntax(subject=subject, html_body=html_body, plain_text_body=plain_text)
+        except ValueError as err:
+            return {"success": False, "status_code": 400, "message": str(err)}
+
+        # Undeclared variables check before publishing
+        detected_vars = set()
+        detected_vars.update(detect_template_variables(subject or ""))
+        detected_vars.update(detect_template_variables(html_body or ""))
+        detected_vars.update(detect_template_variables(css or ""))
+        undeclared = validate_declared_variables(detected_vars, template.get("variables", []))
+        if undeclared:
+            return {
+                "success": False,
+                "status_code": 422,
+                "message": f"Undeclared variable(s) found in template: {', '.join(undeclared)}. Please declare all variables in the Variables panel.",
+                "undeclared_variables": undeclared
+            }
+
         channel = template.get("channel", "email")
         if channel == "sms":
-            if not template.get("plain_text_body") and not template.get("html_body"):
+            if not plain_text and not html_body:
                 return {"success": False, "status_code": 400, "message": "SMS template must have message content before publishing"}
         else:
-            if not template.get("subject"):
+            if not str(subject or "").strip():
                 return {"success": False, "status_code": 400, "message": "Template must have a subject before publishing"}
-            if not template.get("html_body") and not template.get("plain_text_body"):
+            if not str(html_body or "").strip() and not str(plain_text or "").strip():
                 return {"success": False, "status_code": 400, "message": "Template must have an HTML or plain-text body before publishing"}
 
         # Compile before publishing
         compilation = compile_email_template(
-            html_source=template.get("html_body", ""),
-            css_source=template.get("css", "")
+            html_source=html_body or "",
+            css_source=css or ""
         )
 
         now = cls._now()
         update_data = {
-            "status": "ACTIVE",
+            "status": norm_target,
+            "published_at": now,
+            "published_by": user_id or "system",
             "compiled_html": compilation["compiled_html"],
-            "plain_text_body": template.get("plain_text_body") or compilation["plain_text"],
+            "plain_text_body": plain_text or compilation["plain_text"],
             "compatibility_warnings": compilation["warnings"],
             "updated_at": now,
             "updated_by": user_id or "system"
@@ -888,7 +978,7 @@ class TemplateService:
                 "message": f"Template '{template_id}' not found or belongs to another organization"
             }
 
-        if template.get("status") != "ACTIVE":
+        if template.get("status") not in ("ACTIVE", "PUBLISHED"):
             return {
                 "success": False,
                 "status_code": 400,
