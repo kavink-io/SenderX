@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import ApiClient from '../../services/api';
 import { useToast } from '../../context/ToastContext';
+import { GlassCard, GlassTabs, GlassButton } from '../glass';
 
 export default function ProviderConfigSection() {
   const [activeProvider, setActiveProvider] = useState('sendgrid');
@@ -50,44 +51,26 @@ export default function ProviderConfigSection() {
   };
 
   return (
-    <div className="card" style={{ marginTop: '1.5rem' }}>
-      <h4 style={{ fontSize: '1rem', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>
+    <GlassCard style={{ marginTop: '0.25rem' }}>
+      <h4 style={{ fontSize: '1.05rem', marginBottom: '0.4rem', color: 'var(--text-primary)' }}>
         Channel Delivery Providers
       </h4>
-      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
+      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.15rem' }}>
         Configure authenticated carrier APIs to route outbound notifications directly through your organization accounts.
       </p>
 
       {/* Provider Selector Tabs */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '1.25rem' }}>
-        <button
-          type="button"
-          className={`btn btn-sm ${activeProvider === 'sendgrid' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setActiveProvider('sendgrid')}
-        >
-          SendGrid Email
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm ${activeProvider === 'ses' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setActiveProvider('ses')}
-        >
-          Amazon SES
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm ${activeProvider === 'smtp' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setActiveProvider('smtp')}
-        >
-          Custom SMTP
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm ${activeProvider === 'twilio' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setActiveProvider('twilio')}
-        >
-          Twilio SMS
-        </button>
+      <div style={{ marginBottom: '1.25rem' }}>
+        <GlassTabs
+          activeKey={activeProvider}
+          onChange={setActiveProvider}
+          tabs={[
+            { key: 'sendgrid', label: 'SendGrid Email' },
+            { key: 'ses', label: 'Amazon SES' },
+            { key: 'smtp', label: 'Custom SMTP' },
+            { key: 'twilio', label: 'Twilio SMS' },
+          ]}
+        />
       </div>
 
       <form onSubmit={handleSave}>
@@ -231,10 +214,10 @@ export default function ProviderConfigSection() {
           </div>
         )}
 
-        <button type="submit" className="btn btn-primary" disabled={isSaving}>
+        <GlassButton type="submit" variant="primary" disabled={isSaving}>
           {isSaving ? 'Saving Configuration...' : `Save ${activeProvider.toUpperCase()} Config`}
-        </button>
+        </GlassButton>
       </form>
-    </div>
+    </GlassCard>
   );
 }

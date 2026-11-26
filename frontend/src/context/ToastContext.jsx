@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
+import { GlassToast } from '../components/glass';
 
 const ToastContext = createContext();
 
@@ -23,13 +24,12 @@ export function ToastProvider({ children }) {
       {children}
       <div id="toast-container" className="toast-container">
         {toasts.map((toast) => (
-          <div
+          <GlassToast
             key={toast.id}
-            className={`toast toast-${toast.type}`}
-            onClick={() => removeToast(toast.id)}
-          >
-            {toast.message}
-          </div>
+            message={toast.message}
+            type={toast.type}
+            onDismiss={() => removeToast(toast.id)}
+          />
         ))}
       </div>
     </ToastContext.Provider>

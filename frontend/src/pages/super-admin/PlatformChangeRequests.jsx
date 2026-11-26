@@ -3,6 +3,7 @@ import ApiClient from '../../services/api';
 import DataGrid from '../../components/tables/DataGrid';
 import RejectChangeRequestModal from '../../components/modals/RejectChangeRequestModal';
 import { useToast } from '../../context/ToastContext';
+import { GlassSearch, GlassSelect } from '../../components/glass';
 
 export default function PlatformChangeRequests() {
   const [requests, setRequests] = useState([]);
@@ -162,31 +163,35 @@ export default function PlatformChangeRequests() {
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', flex: 1, minWidth: '260px' }}>
-            <input
-              type="text"
-              className="form-control"
-              placeholder="Search by organization name or requested slug..."
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '320px' }}
-            />
-            <select
-              className="form-control"
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '160px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="PENDING">Pending</option>
-              <option value="APPROVED">Approved</option>
-              <option value="REJECTED">Rejected</option>
-            </select>
+            <div style={{ flex: '1 1 240px', maxWidth: '320px' }}>
+              <GlassSearch
+                placeholder="Search by organization name or requested slug..."
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                onClear={() => {
+                  setSearch('');
+                  setPage(1);
+                }}
+              />
+            </div>
+            <div style={{ minWidth: '155px' }}>
+              <GlassSelect
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filter change requests by status"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="PENDING">Pending</option>
+                <option value="APPROVED">Approved</option>
+                <option value="REJECTED">Rejected</option>
+              </GlassSelect>
+            </div>
           </div>
 
           <button

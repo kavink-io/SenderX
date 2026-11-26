@@ -7,6 +7,7 @@ import AssignRoleModal from '../modals/AssignRoleModal';
 import DeleteEmployeeModal from '../modals/DeleteEmployeeModal';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
+import { GlassSearch, GlassSelect } from '../glass';
 
 export default function EmployeesList() {
   const [employees, setEmployees] = useState([]);
@@ -231,31 +232,35 @@ export default function EmployeesList() {
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', flex: 1, minWidth: '260px' }}>
-            <input
-              type="text"
-              className="form-control"
-              placeholder="Search by name, email, or employee code..."
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '320px' }}
-            />
-            <select
-              className="form-control"
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '140px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="ACTIVE">Active</option>
-              <option value="PENDING">Pending Activation</option>
-              <option value="INACTIVE">Deactivated</option>
-            </select>
+            <div style={{ flex: '1 1 240px', maxWidth: '320px' }}>
+              <GlassSearch
+                placeholder="Search by name, email, or employee code..."
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                onClear={() => {
+                  setSearch('');
+                  setPage(1);
+                }}
+              />
+            </div>
+            <div style={{ minWidth: '165px' }}>
+              <GlassSelect
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filter employees by status"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="ACTIVE">Active</option>
+                <option value="PENDING">Pending Activation</option>
+                <option value="INACTIVE">Deactivated</option>
+              </GlassSelect>
+            </div>
           </div>
 
           {canManage && (

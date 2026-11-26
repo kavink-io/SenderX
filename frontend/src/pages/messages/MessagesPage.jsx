@@ -6,6 +6,7 @@ import MessageDetailsModal from '../../components/modals/MessageDetailsModal';
 import ConfirmRetryModal from '../../components/modals/ConfirmRetryModal';
 import { useToast } from '../../context/ToastContext';
 import { useAppScope } from '../../context/ScopeContext';
+import { GlassSearch, GlassSelect } from '../../components/glass';
 
 export default function MessagesPage() {
   const [messages, setMessages] = useState([]);
@@ -156,47 +157,52 @@ export default function MessagesPage() {
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', flex: 1, minWidth: '260px' }}>
-            <input
-              type="text"
-              className="form-control"
-              placeholder="Search by recipient or message ID..."
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '280px' }}
-            />
-            <select
-              className="form-control"
-              value={channelFilter}
-              onChange={(e) => {
-                setChannelFilter(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '140px' }}
-            >
-              <option value="ALL">All Channels</option>
-              <option value="email">Email</option>
-              <option value="sms">SMS</option>
-              <option value="whatsapp">WhatsApp</option>
-            </select>
-            <select
-              className="form-control"
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '140px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="PENDING">Pending</option>
-              <option value="QUEUED">Queued</option>
-              <option value="SENT">Sent</option>
-              <option value="DELIVERED">Delivered</option>
-              <option value="FAILED">Failed</option>
-            </select>
+            <div style={{ flex: '1 1 220px', maxWidth: '280px' }}>
+              <GlassSearch
+                placeholder="Search by recipient or message ID..."
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                onClear={() => {
+                  setSearch('');
+                  setPage(1);
+                }}
+              />
+            </div>
+            <div style={{ minWidth: '145px' }}>
+              <GlassSelect
+                value={channelFilter}
+                onChange={(e) => {
+                  setChannelFilter(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filter messages by channel"
+              >
+                <option value="ALL">All Channels</option>
+                <option value="email">Email</option>
+                <option value="sms">SMS</option>
+                <option value="whatsapp">WhatsApp</option>
+              </GlassSelect>
+            </div>
+            <div style={{ minWidth: '145px' }}>
+              <GlassSelect
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filter messages by status"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="PENDING">Pending</option>
+                <option value="QUEUED">Queued</option>
+                <option value="SENT">Sent</option>
+                <option value="DELIVERED">Delivered</option>
+                <option value="FAILED">Failed</option>
+              </GlassSelect>
+            </div>
           </div>
 
           <button

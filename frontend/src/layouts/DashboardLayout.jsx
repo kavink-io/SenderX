@@ -71,7 +71,9 @@ export default function DashboardLayout() {
             <span className="separator">/</span>
             <span className="current" id="breadcrumb-current-tab">{pageTitle}</span>
           </nav>
-          <Outlet />
+          <div key={location.pathname} className="lg-page-transition">
+            <Outlet />
+          </div>
         </main>
       </div>
 

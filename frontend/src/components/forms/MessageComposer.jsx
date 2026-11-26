@@ -3,6 +3,7 @@ import ApiClient from '../../services/api';
 import MediaSelectorModal from '../modals/MediaSelectorModal';
 import { useToast } from '../../context/ToastContext';
 import { useAppScope } from '../../context/ScopeContext';
+import { GlassCard, GlassTabs, GlassButton, GlassBadge, GlassSelect } from '../glass';
 
 export default function MessageComposer({ onMessageSent }) {
   const [channel, setChannel] = useState('email');
@@ -80,27 +81,25 @@ export default function MessageComposer({ onMessageSent }) {
   };
 
   return (
-    <div className="card" style={{ marginBottom: '1.5rem' }}>
-      <h3 style={{ fontSize: '1.05rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
-        Direct Message Composer
-      </h3>
+    <GlassCard style={{ marginBottom: '1.35rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '1.1rem' }}>
+        <h3 style={{ fontSize: '1.05rem', margin: 0, color: 'var(--text-primary)' }}>
+          Direct Message Composer
+        </h3>
+        <GlassTabs
+          activeKey={channel}
+          onChange={setChannel}
+          tabs={[
+            { key: 'email', label: 'Email' },
+            { key: 'sms', label: 'SMS' },
+            { key: 'whatsapp', label: 'WhatsApp' },
+          ]}
+        />
+      </div>
 
       <form onSubmit={handleSend}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
-          <div className="form-group">
-            <label>Delivery Channel</label>
-            <select
-              className="form-control"
-              value={channel}
-              onChange={(e) => setChannel(e.target.value)}
-            >
-              <option value="email">Email</option>
-              <option value="sms">SMS</option>
-              <option value="whatsapp">WhatsApp</option>
-            </select>
-          </div>
-
-          <div className="form-group">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
             <label>Recipient Address / Phone *</label>
             <input
               type="text"
@@ -113,12 +112,12 @@ export default function MessageComposer({ onMessageSent }) {
           </div>
 
           {channel === 'email' && (
-            <div className="form-group">
+            <div className="form-group" style={{ marginBottom: 0 }}>
               <label>Published Template (Optional)</label>
-              <select
-                className="form-control"
+              <GlassSelect
                 value={selectedTemplate}
                 onChange={(e) => setSelectedTemplate(e.target.value)}
+                aria-label="Published Template"
               >
                 <option value="">None (Custom HTML/Text)</option>
                 {templates.map((t) => (
@@ -126,7 +125,7 @@ export default function MessageComposer({ onMessageSent }) {
                     {t.name} (v{t.version || 1})
                   </option>
                 ))}
-              </select>
+              </GlassSelect>
             </div>
           )}
         </div>
@@ -162,7 +161,7 @@ export default function MessageComposer({ onMessageSent }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
           <div>
             {selectedMedia ? (
-              <span className="badge badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <GlassBadge tone="info" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                 Attachment: {selectedMedia.filename || 'Selected'}
                 <button
                   type="button"
@@ -171,25 +170,25 @@ export default function MessageComposer({ onMessageSent }) {
                 >
                   &times;
                 </button>
-              </span>
+              </GlassBadge>
             ) : (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
+              <GlassButton
+                variant="secondary"
+                size="sm"
                 onClick={() => setIsMediaModalOpen(true)}
               >
                 + Attach Media
-              </button>
+              </GlassButton>
             )}
           </div>
 
-          <button
+          <GlassButton
             type="submit"
-            className="btn btn-primary"
+            variant="primary"
             disabled={isSending}
           >
             {isSending ? 'Dispatching...' : 'Dispatch Message'}
-          </button>
+          </GlassButton>
         </div>
       </form>
 
@@ -198,6 +197,6 @@ export default function MessageComposer({ onMessageSent }) {
         onClose={() => setIsMediaModalOpen(false)}
         onSelectMedia={(media) => setSelectedMedia(media)}
       />
-    </div>
+    </GlassCard>
   );
 }

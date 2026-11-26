@@ -4,6 +4,7 @@ import ChangeRequestsSection from '../../components/settings/ChangeRequestsSecti
 import ProviderConfigSection from '../../components/settings/ProviderConfigSection';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
+import { GlassCard, GlassTabs, GlassBadge } from '../../components/glass';
 
 export default function OrgSettings() {
   const [org, setOrg] = useState(null);
@@ -33,78 +34,66 @@ export default function OrgSettings() {
   return (
     <div className="tab-pane active" id="tab-org-settings">
       {/* Settings Navigation Tabs */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '1.5rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem' }}>
-        <button
-          type="button"
-          className={`btn btn-sm ${activeTab === 'IDENTITY' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setActiveTab('IDENTITY')}
-        >
-          Organization Identity
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm ${activeTab === 'CHANGES' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setActiveTab('CHANGES')}
-        >
-          Rebranding Requests
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm ${activeTab === 'PROVIDERS' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setActiveTab('PROVIDERS')}
-        >
-          Provider Configurations
-        </button>
+      <div style={{ marginBottom: '1.35rem' }}>
+        <GlassTabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          tabs={[
+            { key: 'IDENTITY', label: 'Organization Identity' },
+            { key: 'CHANGES', label: 'Rebranding Requests' },
+            { key: 'PROVIDERS', label: 'Provider Configurations' },
+          ]}
+        />
       </div>
 
       {activeTab === 'IDENTITY' && (
-        <div className="card">
-          <h3 style={{ fontSize: '1.05rem', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>
-            Organization Identity & Namespace
+        <GlassCard>
+          <h3 style={{ fontSize: '1.05rem', marginBottom: '0.4rem', color: 'var(--text-primary)' }}>
+            Organization Identity &amp; Namespace
           </h3>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.35rem' }}>
             Authoritative multi-tenant isolation parameters defining access scope boundaries.
           </p>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
-            <div>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Organization Name</span>
-              <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '1rem' }}>
+            <div className="lg-glass-inset" style={{ padding: '12px 14px' }}>
+              <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>Organization Name</span>
+              <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginTop: '4px' }}>
                 {org?.name || 'Loading...'}
               </div>
             </div>
 
-            <div>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Tenant Slug</span>
-              <div style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', marginTop: '2px' }}>
+            <div className="lg-glass-inset" style={{ padding: '12px 14px' }}>
+              <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>Tenant Slug</span>
+              <div style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', marginTop: '4px' }}>
                 {org?.slug || '—'}
               </div>
             </div>
 
-            <div>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Status</span>
-              <div style={{ marginTop: '2px' }}>
-                <span className="badge badge-success">{org?.status || 'ACTIVE'}</span>
+            <div className="lg-glass-inset" style={{ padding: '12px 14px' }}>
+              <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>Status</span>
+              <div style={{ marginTop: '4px' }}>
+                <GlassBadge tone="success">{org?.status || 'ACTIVE'}</GlassBadge>
               </div>
             </div>
 
-            <div>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Registered Since</span>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', marginTop: '2px' }}>
+            <div className="lg-glass-inset" style={{ padding: '12px 14px' }}>
+              <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>Registered Since</span>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', marginTop: '4px' }}>
                 {org?.created_at ? new Date(org.created_at).toLocaleDateString() : 'N/A'}
               </div>
             </div>
           </div>
 
           {org?.description && (
-            <div style={{ marginTop: '1.25rem', background: 'var(--bg-surface)', padding: '0.75rem', borderRadius: '6px' }}>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Description</span>
-              <p style={{ margin: '0.25rem 0 0', color: 'var(--text-primary)', fontSize: '0.85rem' }}>
+            <div className="lg-glass-inset" style={{ marginTop: '1rem', padding: '12px 14px' }}>
+              <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>Description</span>
+              <p style={{ margin: '0.35rem 0 0', color: 'var(--text-primary)', fontSize: '0.85rem' }}>
                 {org.description}
               </p>
             </div>
           )}
-        </div>
+        </GlassCard>
       )}
 
       {activeTab === 'CHANGES' && <ChangeRequestsSection />}

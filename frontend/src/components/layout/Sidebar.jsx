@@ -2,6 +2,7 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { PLATFORM_NAVIGATION, ORG_NAVIGATION } from '../../utils/navigation';
+import { GlassSidebar } from '../glass';
 
 export default function Sidebar({ isOpen, onClose, onToggle, onOpenProfile }) {
   const { account, isPlatformAdmin, isOrgAdmin, allowedTabs, hasPermission, dashboardContext } = useAuth();
@@ -35,7 +36,7 @@ export default function Sidebar({ isOpen, onClose, onToggle, onOpenProfile }) {
   }
 
   return (
-    <aside className={`sidebar ${isOpen ? 'sidebar-open mobile-open' : 'sidebar-closed'}`}>
+    <GlassSidebar className={isOpen ? 'sidebar-open mobile-open' : 'sidebar-closed'}>
       <div className="sidebar-header">
         <div className="sidebar-brand">
           <div className="brand-logo sm">SX</div>
@@ -97,13 +98,13 @@ export default function Sidebar({ isOpen, onClose, onToggle, onOpenProfile }) {
               <div id="current-account-name" style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
                 {displayName}
               </div>
-              <div id="current-account-type" style={{ fontSize: '0.75rem', color: 'var(--text-primary)' }}>
+              <div id="current-account-type" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                 {roleLabel}
               </div>
             </div>
           </div>
         </div>
       </div>
-    </aside>
+    </GlassSidebar>
   );
 }

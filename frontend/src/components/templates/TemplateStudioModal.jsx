@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Modal from '../common/Modal';
 import ApiClient from '../../services/api';
 import { useToast } from '../../context/ToastContext';
+import { GlassTabs, GlassButton, GlassSelect } from '../glass';
 
 const DEFAULT_VARIABLES = [
   { label: 'User Name', name: 'name', type: 'text', tag: '{{ name }}' },
@@ -69,6 +70,7 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
   const [saveError, setSaveError] = useState('');
   const [savingAction, setSavingAction] = useState(null); // null | 'draft' | 'publish'
   const [isValidating, setIsValidating] = useState(false);
+  const [previewMode, setPreviewMode] = useState('desktop'); // 'desktop' | 'mobile'
 
   const { showToast } = useToast();
   const [availableVars, setAvailableVars] = useState(DEFAULT_VARIABLES);
@@ -352,17 +354,17 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
 
         <div className="form-group">
           <label>Category</label>
-          <select
-            className="form-control"
+          <GlassSelect
             value={category}
             onChange={(e) => setCategory(e.target.value)}
+            aria-label="Template category"
           >
             <option value="transactional">Transactional</option>
             <option value="marketing">Marketing</option>
             <option value="system">System / Alert</option>
             <option value="general">General</option>
             {hasCustomCategory && <option value={category}>{category}</option>}
-          </select>
+          </GlassSelect>
         </div>
       </div>
 
@@ -378,81 +380,59 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
           marginBottom: '1rem',
         }}
       >
-        {/* Left Side: Code Editor with Tabs & Variables */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <button
-                type="button"
-                id="btn-tab-html"
-                className={`btn btn-sm ${activeTab === 'HTML' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setActiveTab('HTML')}
-              >
-                HTML Source
-              </button>
-              <button
-                type="button"
-                id="btn-tab-css"
-                className={`btn btn-sm ${activeTab === 'CSS' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setActiveTab('CSS')}
-              >
-                CSS Stylesheet
-              </button>
-            </div>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
+        {/* Left Side: Code Editor with Glass Toolbar & Floating Variables */}
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div className="lg-studio-toolbar">
+            <GlassTabs
+              activeKey={activeTab}
+              onChange={setActiveTab}
+              tabs={[
+                { key: 'HTML', id: 'btn-tab-html', label: 'HTML Source' },
+                { key: 'CSS', id: 'btn-tab-css', label: 'CSS Stylesheet' },
+              ]}
+            />
+            <GlassButton
+              variant="secondary"
+              size="sm"
               onClick={handleLoadStarter}
               title="Replace with clean, responsive starter layout"
             >
               Start from starter layout
-            </button>
+            </GlassButton>
           </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '210px' }}>
             {activeTab === 'HTML' ? (
               <textarea
-                className="form-control"
+                className="form-control lg-studio-editor"
                 value={htmlContent}
                 onChange={(e) => setHtmlContent(e.target.value)}
                 placeholder="<div class='email-wrapper'><h1>Hello {{ name }}</h1></div>"
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '0.8rem',
-                  flex: 1,
-                  resize: 'none',
-                  background: 'var(--bg-main)',
-                }}
+                style={{ flex: 1, resize: 'none' }}
               />
             ) : (
               <textarea
-                className="form-control"
+                className="form-control lg-studio-editor"
                 value={cssContent}
                 onChange={(e) => setCssContent(e.target.value)}
                 placeholder=".email-wrapper { font-family: sans-serif; max-width: 600px; }"
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '0.8rem',
-                  flex: 1,
-                  resize: 'none',
-                  background: 'var(--bg-main)',
-                }}
+                style={{ flex: 1, resize: 'none' }}
               />
             )}
           </div>
 
-          {/* Dynamic Variables Pill Bar */}
-          <div style={{ marginTop: '0.5rem', background: 'var(--bg-surface)', padding: '0.5rem', borderRadius: '6px' }}>
-            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>
+          {/* Floating Dynamic Variables Pill Bar */}
+          <div className="lg-glass-inset" style={{ marginTop: '0.65rem', padding: '0.6rem 0.75rem' }}>
+            <div style={{ fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
               Insert Variables:
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxHeight: '60px', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '64px', overflowY: 'auto' }}>
               {availableVars.map((v, i) => (
                 <button
                   key={i}
                   type="button"
                   className="badge badge-scope"
-                  style={{ cursor: 'pointer', border: 'none', padding: '3px 8px' }}
+                  style={{ cursor: 'pointer', padding: '4px 9px' }}
                   onClick={() => handleInsertVariable(v.tag)}
                   title={`Click to append ${v.tag}`}
                 >
@@ -464,39 +444,50 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
         </div>
 
         {/* Right Side: Live Sandboxed Iframe Preview */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div className="lg-studio-toolbar">
+            <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)' }}>
               Live Sandboxed Preview
             </span>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={handleValidate}
-              disabled={isValidating || isSaving}
-            >
-              {isValidating ? 'Validating...' : 'Validate Markup'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <GlassTabs
+                activeKey={previewMode}
+                onChange={setPreviewMode}
+                tabs={[
+                  { key: 'desktop', label: 'Desktop' },
+                  { key: 'mobile', label: 'Mobile' },
+                ]}
+              />
+              <GlassButton
+                variant="secondary"
+                size="sm"
+                onClick={handleValidate}
+                disabled={isValidating || isSaving}
+              >
+                {isValidating ? 'Validating...' : 'Validate Markup'}
+              </GlassButton>
+            </div>
           </div>
 
-          <div style={{ flex: 1, border: '1px solid var(--glass-border)', borderRadius: '6px', overflow: 'hidden', background: '#ffffff' }}>
+          <div className="lg-studio-preview-shell">
             <iframe
               title="Studio Preview"
+              className="lg-studio-preview-frame"
               srcDoc={previewHtml || '<p style="padding: 2rem; color: #888; font-family: sans-serif;">Start typing HTML to see live rendering...</p>'}
               sandbox=""
-              style={{ width: '100%', height: '100%', border: 'none' }}
+              style={{ maxWidth: previewMode === 'mobile' ? '375px' : '100%' }}
             />
           </div>
 
           {validationResult && (
             <div
+              className="lg-glass-inset"
               style={{
-                marginTop: '0.5rem',
-                padding: '0.5rem 0.75rem',
-                borderRadius: '6px',
+                marginTop: '0.6rem',
+                padding: '0.6rem 0.85rem',
                 fontSize: '0.8rem',
-                background: validationResult.valid ? 'rgba(53, 214, 160, 0.1)' : 'rgba(255, 100, 124, 0.1)',
-                border: `1px solid ${validationResult.valid ? 'var(--status-success)' : 'var(--status-error)'}`,
+                background: validationResult.valid ? 'rgba(53, 214, 160, 0.12)' : 'rgba(255, 100, 124, 0.12)',
+                borderColor: validationResult.valid ? 'rgba(53, 214, 160, 0.35)' : 'rgba(255, 100, 124, 0.35)',
                 color: validationResult.valid ? 'var(--status-success)' : 'var(--status-error)',
               }}
             >

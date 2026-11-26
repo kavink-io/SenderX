@@ -5,6 +5,7 @@ import TemplateStudioModal from '../../components/templates/TemplateStudioModal'
 import TemplatePreviewModal from '../../components/modals/TemplatePreviewModal';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
+import { GlassSearch, GlassSelect } from '../../components/glass';
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState([]);
@@ -279,30 +280,34 @@ export default function TemplatesPage() {
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', flex: 1, minWidth: '260px' }}>
-            <input
-              type="text"
-              className="form-control"
-              placeholder="Search templates by name..."
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '280px' }}
-            />
-            <select
-              className="form-control"
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '140px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="DRAFT">Draft</option>
-              <option value="PUBLISHED">Published</option>
-            </select>
+            <div style={{ flex: '1 1 240px', maxWidth: '300px' }}>
+              <GlassSearch
+                placeholder="Search templates by name..."
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                onClear={() => {
+                  setSearch('');
+                  setPage(1);
+                }}
+              />
+            </div>
+            <div style={{ minWidth: '145px' }}>
+              <GlassSelect
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filter templates by status"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="DRAFT">Draft</option>
+                <option value="PUBLISHED">Published</option>
+              </GlassSelect>
+            </div>
           </div>
 
           <button

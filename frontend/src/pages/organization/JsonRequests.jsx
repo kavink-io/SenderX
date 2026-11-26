@@ -5,6 +5,7 @@ import ViewPayloadModal from '../../components/modals/ViewPayloadModal';
 import JsonAnalyzer from '../../components/dashboard/JsonAnalyzer';
 import { useToast } from '../../context/ToastContext';
 import { useAppScope } from '../../context/ScopeContext';
+import { GlassSelect } from '../../components/glass';
 
 export default function JsonRequests() {
   const [payloads, setPayloads] = useState([]);
@@ -122,36 +123,38 @@ export default function JsonRequests() {
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
-            <select
-              className="form-control"
-              value={channelFilter}
-              onChange={(e) => {
-                setChannelFilter(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '160px' }}
-            >
-              <option value="ALL">All Channels</option>
-              <option value="email">Email</option>
-              <option value="sms">SMS</option>
-              <option value="whatsapp">WhatsApp</option>
-            </select>
+            <div style={{ minWidth: '155px' }}>
+              <GlassSelect
+                value={channelFilter}
+                onChange={(e) => {
+                  setChannelFilter(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filter JSON requests by channel"
+              >
+                <option value="ALL">All Channels</option>
+                <option value="email">Email</option>
+                <option value="sms">SMS</option>
+                <option value="whatsapp">WhatsApp</option>
+              </GlassSelect>
+            </div>
 
-            <select
-              className="form-control"
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '160px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="VALID">Valid</option>
-              <option value="INVALID">Invalid</option>
-              <option value="ROUTED">Routed</option>
-              <option value="FAILED">Failed</option>
-            </select>
+            <div style={{ minWidth: '155px' }}>
+              <GlassSelect
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filter JSON requests by status"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="VALID">Valid</option>
+                <option value="INVALID">Invalid</option>
+                <option value="ROUTED">Routed</option>
+                <option value="FAILED">Failed</option>
+              </GlassSelect>
+            </div>
           </div>
 
           <button

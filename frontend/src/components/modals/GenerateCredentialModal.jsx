@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Modal from '../common/Modal';
 import ApiClient from '../../services/api';
 import { useToast } from '../../context/ToastContext';
+import { GlassSelect } from '../glass';
 
 export default function GenerateCredentialModal({ isOpen, onClose, apps, onGenerated }) {
   const [applicationId, setApplicationId] = useState('');
@@ -53,13 +54,10 @@ export default function GenerateCredentialModal({ isOpen, onClose, apps, onGener
       <form id="form-generate-credential" onSubmit={handleSubmit}>
         <div className="form-group">
           <label htmlFor="cred-app-select">Application *</label>
-          <select
+          <GlassSelect
             id="cred-app-select"
-            className="form-control"
             value={applicationId}
             onChange={(e) => setApplicationId(e.target.value)}
-            required
-            autoFocus
           >
             <option value="">Select Connected Application...</option>
             {apps.map((app) => (
@@ -67,7 +65,7 @@ export default function GenerateCredentialModal({ isOpen, onClose, apps, onGener
                 {app.name} ({app.application_id})
               </option>
             ))}
-          </select>
+          </GlassSelect>
         </div>
 
         <div className="form-group">
@@ -84,15 +82,14 @@ export default function GenerateCredentialModal({ isOpen, onClose, apps, onGener
 
         <div className="form-group" style={{ marginBottom: '1.5rem' }}>
           <label htmlFor="cred-env">Environment</label>
-          <select
+          <GlassSelect
             id="cred-env"
-            className="form-control"
             value={environment}
             onChange={(e) => setEnvironment(e.target.value)}
           >
             <option value="live">Live / Production</option>
             <option value="test">Test / Sandbox</option>
-          </select>
+          </GlassSelect>
         </div>
 
         <div className="modal-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>

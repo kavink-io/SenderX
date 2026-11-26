@@ -1,12 +1,13 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { GlassCard } from '../../components/glass';
 
 export default function AccessDenied({ message = 'You do not have permission to access this resource.' }) {
   const { isPlatformAdmin } = useAuth();
 
   return (
-    <div className="card text-center" style={{ maxWidth: '600px', margin: '3rem auto', padding: '2.5rem' }}>
+    <GlassCard variant="elevated" className="text-center" style={{ maxWidth: '580px', margin: '3rem auto', padding: '2.5rem' }}>
       <div style={{ color: 'var(--status-error)', marginBottom: '1rem' }}>
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="10"></circle>
@@ -26,6 +27,6 @@ export default function AccessDenied({ message = 'You do not have permission to 
           Return to Dashboard
         </Link>
       </div>
-    </div>
+    </GlassCard>
   );
 }

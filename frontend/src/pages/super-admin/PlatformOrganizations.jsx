@@ -5,6 +5,7 @@ import CreateOrgModal from '../../components/modals/CreateOrgModal';
 import OrgDetailsModal from '../../components/modals/OrgDetailsModal';
 import DeleteOrgModal from '../../components/modals/DeleteOrgModal';
 import { useToast } from '../../context/ToastContext';
+import { GlassSearch, GlassSelect } from '../../components/glass';
 
 export default function PlatformOrganizations() {
   const [organizations, setOrganizations] = useState([]);
@@ -164,31 +165,35 @@ export default function PlatformOrganizations() {
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', flex: 1, minWidth: '260px' }}>
-            <input
-              type="text"
-              className="form-control"
-              placeholder="Search organizations by name or slug..."
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '320px' }}
-            />
-            <select
-              className="form-control"
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-              style={{ maxWidth: '160px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="ACTIVE">Active</option>
-              <option value="SUSPENDED">Suspended</option>
-              <option value="DEACTIVATED">Deactivated</option>
-            </select>
+            <div style={{ flex: '1 1 240px', maxWidth: '320px' }}>
+              <GlassSearch
+                placeholder="Search organizations by name or slug..."
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                onClear={() => {
+                  setSearch('');
+                  setPage(1);
+                }}
+              />
+            </div>
+            <div style={{ minWidth: '155px' }}>
+              <GlassSelect
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filter organizations by status"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="ACTIVE">Active</option>
+                <option value="SUSPENDED">Suspended</option>
+                <option value="DEACTIVATED">Deactivated</option>
+              </GlassSelect>
+            </div>
           </div>
 
           <button

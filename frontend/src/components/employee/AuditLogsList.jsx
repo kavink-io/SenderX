@@ -3,6 +3,7 @@ import ApiClient from '../../services/api';
 import DataGrid from '../tables/DataGrid';
 import AuditDetailsModal from '../modals/AuditDetailsModal';
 import { useToast } from '../../context/ToastContext';
+import { GlassSearch } from '../glass';
 
 export default function AuditLogsList() {
   const [logs, setLogs] = useState([]);
@@ -113,17 +114,20 @@ export default function AuditLogsList() {
     <div id="view-org-audit">
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
-          <input
-            type="text"
-            className="form-control"
-            placeholder="Search audit trail by actor, action, or target ID..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-            style={{ maxWidth: '380px' }}
-          />
+          <div style={{ flex: '1 1 260px', maxWidth: '380px' }}>
+            <GlassSearch
+              placeholder="Search audit trail by actor, action, or target ID..."
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              onClear={() => {
+                setSearch('');
+                setPage(1);
+              }}
+            />
+          </div>
 
           <button
             type="button"

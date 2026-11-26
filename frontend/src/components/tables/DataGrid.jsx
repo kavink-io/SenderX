@@ -24,18 +24,22 @@ const sharedThemeParams = {
 
 const lightTheme = themeQuartz.withPart(colorSchemeLight).withParams({
   ...sharedThemeParams,
-  backgroundColor: '#ffffff',
-  chromeBackgroundColor: '#f8fafc',
+  backgroundColor: 'transparent',
+  chromeBackgroundColor: 'rgba(248, 250, 252, 0.65)',
   foregroundColor: '#0f172a',
-  borderColor: '#e2e8f0',
+  borderColor: 'rgba(15, 23, 42, 0.08)',
+  oddRowBackgroundColor: 'rgba(248, 250, 252, 0.35)',
+  selectedRowBackgroundColor: 'rgba(37, 99, 235, 0.08)',
 });
 
 const darkTheme = themeQuartz.withPart(colorSchemeDarkBlue).withParams({
   ...sharedThemeParams,
-  backgroundColor: '#0d1425',
-  chromeBackgroundColor: '#121b30',
+  backgroundColor: 'transparent',
+  chromeBackgroundColor: 'rgba(255, 255, 255, 0.035)',
   foregroundColor: '#f4f7ff',
-  borderColor: 'rgba(255, 255, 255, 0.09)',
+  borderColor: 'rgba(255, 255, 255, 0.085)',
+  oddRowBackgroundColor: 'rgba(255, 255, 255, 0.015)',
+  selectedRowBackgroundColor: 'rgba(56, 217, 245, 0.10)',
 });
 
 /**

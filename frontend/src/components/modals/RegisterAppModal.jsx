@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Modal from '../common/Modal';
 import ApiClient from '../../services/api';
 import { useToast } from '../../context/ToastContext';
+import { GlassSelect } from '../glass';
 
 export default function RegisterAppModal({ isOpen, onClose, onRegistered }) {
   const [name, setName] = useState('');
@@ -68,9 +69,8 @@ export default function RegisterAppModal({ isOpen, onClose, onRegistered }) {
 
         <div className="form-group">
           <label htmlFor="reg-app-env">Environment</label>
-          <select
+          <GlassSelect
             id="reg-app-env"
-            className="form-control"
             value={environment}
             onChange={(e) => setEnvironment(e.target.value)}
           >
@@ -78,7 +78,7 @@ export default function RegisterAppModal({ isOpen, onClose, onRegistered }) {
             <option value="staging">Staging</option>
             <option value="development">Development</option>
             <option value="sandbox">Sandbox</option>
-          </select>
+          </GlassSelect>
         </div>
 
         <div className="form-group" style={{ marginBottom: '1.5rem' }}>

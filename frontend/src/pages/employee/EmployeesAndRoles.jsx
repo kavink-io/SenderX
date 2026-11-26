@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import EmployeesList from '../../components/employee/EmployeesList';
 import RolesList from '../../components/employee/RolesList';
 import AuditLogsList from '../../components/employee/AuditLogsList';
+import { GlassTabs } from '../../components/glass';
 
 export default function EmployeesAndRoles() {
   const [subTab, setSubTab] = useState('EMPLOYEES'); // 'EMPLOYEES', 'ROLES', 'AUDIT'
@@ -9,28 +10,16 @@ export default function EmployeesAndRoles() {
   return (
     <div className="tab-pane active" id="tab-org-users">
       {/* Sub-tab Navigation Pills */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '1.5rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem' }}>
-        <button
-          type="button"
-          className={`btn btn-sm ${subTab === 'EMPLOYEES' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setSubTab('EMPLOYEES')}
-        >
-          Employees
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm ${subTab === 'ROLES' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setSubTab('ROLES')}
-        >
-          Custom Roles
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm ${subTab === 'AUDIT' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setSubTab('AUDIT')}
-        >
-          Security Audit Logs
-        </button>
+      <div style={{ marginBottom: '1.35rem' }}>
+        <GlassTabs
+          activeKey={subTab}
+          onChange={setSubTab}
+          tabs={[
+            { key: 'EMPLOYEES', label: 'Employees' },
+            { key: 'ROLES', label: 'Custom Roles' },
+            { key: 'AUDIT', label: 'Security Audit Logs' },
+          ]}
+        />
       </div>
 
       {subTab === 'EMPLOYEES' && <EmployeesList />}

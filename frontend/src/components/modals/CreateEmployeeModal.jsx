@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Modal from '../common/Modal';
 import ApiClient from '../../services/api';
 import { useToast } from '../../context/ToastContext';
+import { GlassSelect } from '../glass';
 
 export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
   const [email, setEmail] = useState('');
@@ -147,9 +148,8 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
 
           <div className="form-group">
             <label htmlFor="create-user-role">Assigned Role</label>
-            <select
+            <GlassSelect
               id="create-user-role"
-              className="form-control"
               value={roleId}
               onChange={(e) => setRoleId(e.target.value)}
             >
@@ -159,7 +159,7 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
                   {r.name}
                 </option>
               ))}
-            </select>
+            </GlassSelect>
           </div>
         </div>
 

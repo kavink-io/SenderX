@@ -5,6 +5,7 @@ import RegisterAppModal from '../../components/modals/RegisterAppModal';
 import AppDetailsModal from '../../components/modals/AppDetailsModal';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
+import { GlassSelect } from '../../components/glass';
 
 export default function ConnectedApplications() {
   const [apps, setApps] = useState([]);
@@ -169,16 +170,17 @@ export default function ConnectedApplications() {
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            <select
-              className="form-control"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              style={{ maxWidth: '160px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="ACTIVE">Active</option>
-              <option value="INACTIVE">Inactive</option>
-            </select>
+            <div style={{ minWidth: '155px' }}>
+              <GlassSelect
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                aria-label="Filter applications by status"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="ACTIVE">Active</option>
+                <option value="INACTIVE">Inactive</option>
+              </GlassSelect>
+            </div>
           </div>
 
           {canManage && (
