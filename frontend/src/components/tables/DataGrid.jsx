@@ -1,0 +1,108 @@
+import React, { useMemo } from 'react';
+import {
+  AllCommunityModule,
+  ModuleRegistry,
+  themeQuartz,
+  colorSchemeDarkBlue,
+  colorSchemeLight,
+} from 'ag-grid-community';
+import { AgGridReact } from 'ag-grid-react';
+import { useTheme } from '../../context/ThemeContext';
+
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+const sharedThemeParams = {
+  wrapperBorder: false,
+  wrapperBorderRadius: 0,
+  autoHeightMinBodyHeight: 160,
+  cellHorizontalPaddingScale: 1.1,
+  rowVerticalPaddingScale: 1.15,
+  fontSize: 13.5,
+  headerFontSize: 11.5,
+  headerFontWeight: 600,
+};
+
+const lightTheme = themeQuartz.withPart(colorSchemeLight).withParams({
+  ...sharedThemeParams,
+  backgroundColor: '#ffffff',
+  chromeBackgroundColor: '#f8fafc',
+  foregroundColor: '#0f172a',
+  borderColor: '#e2e8f0',
+});
+
+const darkTheme = themeQuartz.withPart(colorSchemeDarkBlue).withParams({
+  ...sharedThemeParams,
+  backgroundColor: '#0d1425',
+  chromeBackgroundColor: '#121b30',
+  foregroundColor: '#f4f7ff',
+  borderColor: 'rgba(255, 255, 255, 0.09)',
+});
+
+/**
+ * Shared AG Grid wrapper synchronized with SenderX light/dark theme and responsive layout.
+ */
+export default function DataGrid({
+  rowData = [],
+  columnDefs = [],
+  loading = false,
+  emptyMessage = 'No records found.',
+  getRowId,
+  pagination = false,
+  paginationPageSize = 20,
+  rowHeight = 52,
+  defaultColDef: customDefaultColDef,
+  gridOptions,
+}) {
+  const { isDark } = useTheme();
+
+  const defaultColDef = useMemo(
+    () => ({
+      sortable: true,
+      filter: true,
+      resizable: true,
+      flex: 1,
+      minWidth: 110,
+      ...customDefaultColDef,
+    }),
+    [customDefaultColDef]
+  );
+
+  const normalizedColumnDefs = useMemo(
+    () =>
+      columnDefs.map((col) =>
+        col.cellClass === 'ag-actions-cell'
+          ? { flex: 0, width: col.width ?? col.minWidth, ...col }
+          : col
+      ),
+    [columnDefs]
+  );
+
+  const localeText = useMemo(
+    () => ({
+      noRowsToShow: emptyMessage,
+    }),
+    [emptyMessage]
+  );
+
+  return (
+    <div className="senderx-ag-grid" style={{ width: '100%' }}>
+      <AgGridReact
+        theme={isDark ? darkTheme : lightTheme}
+        rowData={Array.isArray(rowData) ? rowData : []}
+        columnDefs={normalizedColumnDefs}
+        defaultColDef={defaultColDef}
+        loading={loading}
+        domLayout="autoHeight"
+        getRowId={getRowId}
+        pagination={pagination}
+        paginationPageSize={paginationPageSize}
+        paginationPageSizeSelector={[10, 20, 50]}
+        rowHeight={rowHeight}
+        suppressCellFocus
+        animateRows
+        localeText={localeText}
+        {...gridOptions}
+      />
+    </div>
+  );
+}

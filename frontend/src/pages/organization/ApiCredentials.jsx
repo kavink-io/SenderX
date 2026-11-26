@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
+import DataGrid from '../../components/tables/DataGrid';
 import GenerateCredentialModal from '../../components/modals/GenerateCredentialModal';
 import SecretRevealModal from '../../components/modals/SecretRevealModal';
 import { useToast } from '../../context/ToastContext';
@@ -68,7 +69,7 @@ export default function ApiCredentials() {
     }
   };
 
-  const handleRevoke = async (cred) => {
+  const handleRevoke = useCallback(async (cred) => {
     const credId = cred.credential_id || cred._id || cred.id;
     if (!window.confirm(`Revoke API credential "${cred.name || credId}"? Inbound requests using this key will be rejected.`)) {
       return;
@@ -85,7 +86,83 @@ export default function ApiCredentials() {
     } catch (err) {
       showToast(err?.message || 'Error revoking credential', 'error');
     }
-  };
+  }, [fetchCredentials, showToast]);
+
+  const columnDefs = useMemo(() => [
+    {
+      headerName: 'Key Name',
+      field: 'name',
+      minWidth: 160,
+      valueGetter: ({ data }) => data.name || 'API Key',
+      cellStyle: { fontWeight: 600, color: 'var(--text-primary)' },
+    },
+    {
+      headerName: 'Prefix',
+      field: 'key_prefix',
+      minWidth: 145,
+      valueGetter: ({ data }) => data.key_prefix || data.prefix || 'sx_live_****',
+      cellRenderer: ({ value }) => <code style={{ color: 'var(--accent-cyan)' }}>{value}</code>,
+    },
+    {
+      headerName: 'Application',
+      field: 'application_name',
+      minWidth: 140,
+      valueGetter: ({ data }) => data.application_name || data.application_id || '',
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Environment',
+      field: 'environment',
+      minWidth: 115,
+      maxWidth: 135,
+      valueGetter: ({ data }) => data.environment || 'live',
+      cellRenderer: ({ value }) => <span className="badge badge-info">{value}</span>,
+    },
+    {
+      headerName: 'Status',
+      field: 'status',
+      minWidth: 110,
+      maxWidth: 135,
+      cellRenderer: ({ value }) => {
+        const isActive = value === 'ACTIVE' || value === 'active';
+        return <span className={`badge ${isActive ? 'badge-success' : 'badge-danger'}`}>{value}</span>;
+      },
+    },
+    {
+      headerName: 'Created',
+      field: 'created_at',
+      minWidth: 115,
+      maxWidth: 145,
+      valueFormatter: ({ value }) => (value ? new Date(value).toLocaleDateString() : 'N/A'),
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Actions',
+      colId: 'actions',
+      minWidth: 155,
+      maxWidth: 180,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      headerClass: 'ag-right-aligned-header',
+      cellClass: 'ag-actions-cell',
+      cellRenderer: ({ data: cred }) => {
+        const isActive = cred.status === 'ACTIVE' || cred.status === 'active';
+        if (!canManage || !isActive) return null;
+        return (
+          <div style={{ display: 'inline-flex', gap: '6px' }}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleRotate(cred)}>
+              Rotate
+            </button>
+            <button type="button" className="btn btn-danger btn-sm" onClick={() => handleRevoke(cred)}>
+              Revoke
+            </button>
+          </div>
+        );
+      },
+    },
+  ], [canManage, handleRevoke]);
 
   return (
     <div className="tab-pane active" id="tab-org-credentials">
@@ -114,88 +191,14 @@ export default function ApiCredentials() {
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="table-responsive-wrapper">
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th>Key Name</th>
-                <th>Prefix</th>
-                <th>Application</th>
-                <th>Environment</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    Loading credentials...
-                  </td>
-                </tr>
-              ) : credentials.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    No API credentials found for this scope.
-                  </td>
-                </tr>
-              ) : (
-                credentials.map((cred) => {
-                  const credId = cred.credential_id || cred._id || cred.id;
-                  const isActive = cred.status === 'ACTIVE' || cred.status === 'active';
-
-                  return (
-                    <tr key={credId}>
-                      <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                        {cred.name || 'API Key'}
-                      </td>
-                      <td>
-                        <code style={{ color: 'var(--accent-cyan)' }}>
-                          {cred.key_prefix || cred.prefix || 'sx_live_****'}
-                        </code>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {cred.application_name || cred.application_id}
-                      </td>
-                      <td>
-                        <span className="badge badge-info">{cred.environment || 'live'}</span>
-                      </td>
-                      <td>
-                        <span className={`badge ${isActive ? 'badge-success' : 'badge-danger'}`}>
-                          {cred.status}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {cred.created_at ? new Date(cred.created_at).toLocaleDateString() : 'N/A'}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        {canManage && isActive && (
-                          <div style={{ display: 'inline-flex', gap: '6px' }}>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => handleRotate(cred)}
-                            >
-                              Rotate
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-danger btn-sm"
-                              onClick={() => handleRevoke(cred)}
-                            >
-                              Revoke
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid
+          rowData={credentials}
+          columnDefs={columnDefs}
+          loading={isLoading}
+          emptyMessage="No API credentials found for this scope."
+          getRowId={({ data }) => String(data.credential_id || data._id || data.id)}
+          pagination={credentials.length > 20}
+        />
       </div>
 
       <GenerateCredentialModal

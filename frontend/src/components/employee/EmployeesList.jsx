@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
+import DataGrid from '../tables/DataGrid';
 import CreateEmployeeModal from '../modals/CreateEmployeeModal';
 import EmployeeDetailsModal from '../modals/EmployeeDetailsModal';
 import AssignRoleModal from '../modals/AssignRoleModal';
@@ -69,7 +70,7 @@ export default function EmployeesList() {
     }
   };
 
-  const handleResendOtp = async (emp) => {
+  const handleResendOtp = useCallback(async (emp) => {
     const uid = emp.user_id || emp._id || emp.id;
     try {
       const res = await ApiClient.resendActivationOtp(uid);
@@ -81,7 +82,148 @@ export default function EmployeesList() {
     } catch (err) {
       showToast(err?.message || 'Error resending activation code', 'error');
     }
-  };
+  }, [showToast]);
+
+  const columnDefs = useMemo(() => [
+    {
+      headerName: 'Employee',
+      field: 'name',
+      minWidth: 200,
+      flex: 1.4,
+      autoHeight: true,
+      wrapText: true,
+      valueGetter: ({ data }) => `${data.name || ''} ${data.email || ''}`.trim(),
+      cellRenderer: ({ data: emp }) => (
+        <div>
+          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{emp.name || emp.email}</div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{emp.email}</div>
+        </div>
+      ),
+    },
+    {
+      headerName: 'Employee Code',
+      field: 'employee_code',
+      minWidth: 130,
+      valueGetter: ({ data }) => data.employee_code || '—',
+      cellRenderer: ({ value }) => (
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
+          {value}
+        </span>
+      ),
+    },
+    {
+      headerName: 'Role',
+      field: 'roles',
+      minWidth: 140,
+      valueGetter: ({ data: emp }) =>
+        emp.is_org_admin
+          ? 'ORG_ADMIN'
+          : emp.roles && emp.roles.length > 0
+          ? emp.roles.map((r) => r.name || r.role_id).join(', ')
+          : 'Standard Member',
+      cellRenderer: ({ data: emp, value }) => (
+        <span className={`badge ${emp.is_org_admin ? 'badge-primary' : 'badge-info'}`}>{value}</span>
+      ),
+    },
+    {
+      headerName: 'Status',
+      field: 'status',
+      minWidth: 120,
+      maxWidth: 155,
+      valueGetter: ({ data: emp }) => emp.status || (emp.is_active ? 'ACTIVE' : 'INACTIVE'),
+      cellRenderer: ({ data: emp, value }) => {
+        const isActive = emp.is_active || emp.status === 'ACTIVE';
+        const isPending = emp.status === 'PENDING' || emp.status === 'PENDING_ACTIVATION';
+        return (
+          <span className={`badge ${isActive ? 'badge-success' : isPending ? 'badge-warning' : 'badge-danger'}`}>
+            {value}
+          </span>
+        );
+      },
+    },
+    {
+      headerName: 'Department',
+      field: 'department',
+      minWidth: 130,
+      valueGetter: ({ data }) => data.department || 'Not provided',
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Actions',
+      colId: 'actions',
+      minWidth: 280,
+      maxWidth: 340,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      headerClass: 'ag-right-aligned-header',
+      cellClass: 'ag-actions-cell',
+      cellRenderer: ({ data: emp }) => {
+        const isActive = emp.is_active || emp.status === 'ACTIVE';
+        const isPending = emp.status === 'PENDING' || emp.status === 'PENDING_ACTIVATION';
+        return (
+          <div style={{ display: 'inline-flex', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                setSelectedEmp(emp);
+                setIsDetailsOpen(true);
+              }}
+            >
+              Profile
+            </button>
+            {canManage && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setSelectedEmp(emp);
+                    setIsAssignOpen(true);
+                  }}
+                >
+                  Roles
+                </button>
+                {isPending && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => handleResendOtp(emp)}
+                    title="Resend activation invite email"
+                  >
+                    Resend
+                  </button>
+                )}
+                {!emp.is_org_admin && (
+                  <>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
+                      onClick={() => handleToggleActive(emp)}
+                    >
+                      {isActive ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={() => {
+                        setSelectedEmp(emp);
+                        setIsDeleteOpen(true);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        );
+      },
+    },
+  ], [canManage, handleResendOtp]);
 
   return (
     <div id="view-org-employees">
@@ -131,136 +273,13 @@ export default function EmployeesList() {
 
       {/* Employees Table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="table-responsive-wrapper">
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th>Employee Code</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Department</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    Loading employees...
-                  </td>
-                </tr>
-              ) : employees.length === 0 ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    No employees found matching filters.
-                  </td>
-                </tr>
-              ) : (
-                employees.map((emp) => {
-                  const uid = emp.user_id || emp._id || emp.id;
-                  const isActive = emp.is_active || emp.status === 'ACTIVE';
-                  const isPending = emp.status === 'PENDING' || emp.status === 'PENDING_ACTIVATION';
-                  const roleLabel = emp.is_org_admin
-                    ? 'ORG_ADMIN'
-                    : emp.roles && emp.roles.length > 0
-                    ? emp.roles.map((r) => r.name || r.role_id).join(', ')
-                    : 'Standard Member';
-
-                  return (
-                    <tr key={uid}>
-                      <td>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                          {emp.name || emp.email}
-                        </div>
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                          {emp.email}
-                        </div>
-                      </td>
-                      <td>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
-                          {emp.employee_code || '—'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge ${emp.is_org_admin ? 'badge-primary' : 'badge-info'}`}>
-                          {roleLabel}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge ${isActive ? 'badge-success' : isPending ? 'badge-warning' : 'badge-danger'}`}>
-                          {emp.status || (isActive ? 'ACTIVE' : 'INACTIVE')}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {emp.department || 'Not provided'}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'inline-flex', gap: '6px' }}>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => {
-                              setSelectedEmp(emp);
-                              setIsDetailsOpen(true);
-                            }}
-                          >
-                            Profile
-                          </button>
-                          {canManage && (
-                            <>
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                onClick={() => {
-                                  setSelectedEmp(emp);
-                                  setIsAssignOpen(true);
-                                }}
-                              >
-                                Roles
-                              </button>
-                              {isPending && (
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary btn-sm"
-                                  onClick={() => handleResendOtp(emp)}
-                                  title="Resend activation invite email"
-                                >
-                                  Resend
-                                </button>
-                              )}
-                              {!emp.is_org_admin && (
-                                <>
-                                  <button
-                                    type="button"
-                                    className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
-                                    onClick={() => handleToggleActive(emp)}
-                                  >
-                                    {isActive ? 'Deactivate' : 'Activate'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-danger btn-sm"
-                                    onClick={() => {
-                                      setSelectedEmp(emp);
-                                      setIsDeleteOpen(true);
-                                    }}
-                                  >
-                                    Delete
-                                  </button>
-                                </>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid
+          rowData={employees}
+          columnDefs={columnDefs}
+          loading={isLoading}
+          emptyMessage="No employees found matching filters."
+          getRowId={({ data }) => String(data.user_id || data._id || data.id)}
+        />
 
         {totalCount > 20 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderTop: '1px solid var(--glass-border)' }}>

@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
+import DataGrid from '../tables/DataGrid';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 
@@ -64,7 +65,7 @@ export default function ChangeRequestsSection() {
     }
   };
 
-  const handleCancel = async (req) => {
+  const handleCancel = useCallback(async (req) => {
     const rid = req.request_id || req._id || req.id;
     try {
       const res = await ApiClient.cancelChangeRequest(rid);
@@ -77,7 +78,75 @@ export default function ChangeRequestsSection() {
     } catch (err) {
       showToast(err?.message || 'Error cancelling request', 'error');
     }
-  };
+  }, [fetchRequests, showToast]);
+
+  const columnDefs = useMemo(() => [
+    {
+      headerName: 'Requested Changes',
+      field: 'requested_name',
+      minWidth: 200,
+      flex: 1.4,
+      autoHeight: true,
+      wrapText: true,
+      valueGetter: ({ data }) => [data.requested_name, data.requested_slug].filter(Boolean).join(' '),
+      cellRenderer: ({ data: req }) => (
+        <div style={{ fontSize: '0.85rem' }}>
+          {req.requested_name && <div>Name: <strong>{req.requested_name}</strong></div>}
+          {req.requested_slug && <div>Slug: <code>{req.requested_slug}</code></div>}
+        </div>
+      ),
+    },
+    {
+      headerName: 'Status',
+      field: 'status',
+      minWidth: 120,
+      maxWidth: 145,
+      cellRenderer: ({ value }) => (
+        <span className={`badge ${value === 'APPROVED' ? 'badge-success' : value === 'REJECTED' ? 'badge-danger' : 'badge-warning'}`}>
+          {value}
+        </span>
+      ),
+    },
+    {
+      headerName: 'Submitted',
+      field: 'created_at',
+      minWidth: 120,
+      maxWidth: 150,
+      valueFormatter: ({ value }) => (value ? new Date(value).toLocaleDateString() : 'N/A'),
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Decision / Rejection Reason',
+      field: 'rejection_reason',
+      minWidth: 190,
+      valueGetter: ({ data }) => data.rejection_reason || '—',
+      cellRenderer: ({ data: req, value }) => (
+        <span style={{ fontSize: '0.85rem', color: req.rejection_reason ? 'var(--status-error)' : 'var(--text-secondary)' }}>
+          {value}
+        </span>
+      ),
+    },
+    {
+      headerName: 'Actions',
+      colId: 'actions',
+      minWidth: 105,
+      maxWidth: 125,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      headerClass: 'ag-right-aligned-header',
+      cellClass: 'ag-actions-cell',
+      cellRenderer: ({ data: req }) => {
+        if (req.status !== 'PENDING' || !isOrgAdmin) return null;
+        return (
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleCancel(req)}>
+            Cancel
+          </button>
+        );
+      },
+    },
+  ], [isOrgAdmin, handleCancel]);
 
   return (
     <div style={{ marginTop: '1.5rem' }}>
@@ -140,74 +209,14 @@ export default function ChangeRequestsSection() {
             Change Request Status History
           </h4>
         </div>
-        <div className="table-responsive-wrapper">
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th>Requested Changes</th>
-                <th>Status</th>
-                <th>Submitted</th>
-                <th>Decision / Rejection Reason</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    Loading change requests...
-                  </td>
-                </tr>
-              ) : requests.length === 0 ? (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    No rebranding requests on record.
-                  </td>
-                </tr>
-              ) : (
-                requests.map((req) => {
-                  const rid = req.request_id || req._id || req.id;
-                  const isPending = req.status === 'PENDING';
-
-                  return (
-                    <tr key={rid}>
-                      <td>
-                        <div style={{ fontSize: '0.85rem' }}>
-                          {req.requested_name && <div>Name: <strong>{req.requested_name}</strong></div>}
-                          {req.requested_slug && <div>Slug: <code>{req.requested_slug}</code></div>}
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`badge ${
-                          req.status === 'APPROVED' ? 'badge-success' : req.status === 'REJECTED' ? 'badge-danger' : 'badge-warning'
-                        }`}>
-                          {req.status}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {req.created_at ? new Date(req.created_at).toLocaleDateString() : 'N/A'}
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: req.rejection_reason ? 'var(--status-error)' : 'var(--text-secondary)' }}>
-                        {req.rejection_reason || '—'}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        {isPending && isOrgAdmin && (
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => handleCancel(req)}
-                          >
-                            Cancel
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid
+          rowData={requests}
+          columnDefs={columnDefs}
+          loading={isLoading}
+          emptyMessage="No rebranding requests on record."
+          getRowId={({ data }) => String(data.request_id || data._id || data.id)}
+          pagination={requests.length > 20}
+        />
       </div>
     </div>
   );

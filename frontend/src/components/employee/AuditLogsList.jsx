@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
+import DataGrid from '../tables/DataGrid';
 import AuditDetailsModal from '../modals/AuditDetailsModal';
 import { useToast } from '../../context/ToastContext';
 
@@ -38,6 +39,76 @@ export default function AuditLogsList() {
     fetchAuditLogs();
   }, [fetchAuditLogs]);
 
+  const columnDefs = useMemo(() => [
+    {
+      headerName: 'Event Type',
+      field: 'event_type',
+      minWidth: 165,
+      valueGetter: ({ data }) => data.event_type || data.action || '',
+      cellStyle: { fontWeight: 600, color: 'var(--text-primary)' },
+    },
+    {
+      headerName: 'Actor',
+      field: 'actor_email',
+      minWidth: 165,
+      valueGetter: ({ data }) => data.actor_email || data.actor || 'System',
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Result',
+      field: 'result',
+      minWidth: 110,
+      maxWidth: 135,
+      valueGetter: ({ data }) => data.result || data.status || 'OK',
+      cellRenderer: ({ data: log, value }) => {
+        const isSuccess = log.result === 'SUCCESS' || log.status === 'SUCCESS';
+        return <span className={`badge ${isSuccess ? 'badge-success' : 'badge-danger'}`}>{value}</span>;
+      },
+    },
+    {
+      headerName: 'Target ID',
+      field: 'target_id',
+      minWidth: 150,
+      valueGetter: ({ data }) => data.target_id || data.target || '—',
+      cellRenderer: ({ value }) => (
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--accent-cyan)' }}>
+          {value}
+        </span>
+      ),
+    },
+    {
+      headerName: 'Timestamp',
+      field: 'created_at',
+      minWidth: 165,
+      valueFormatter: ({ value }) => (value ? new Date(value).toLocaleString() : 'N/A'),
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Details',
+      colId: 'details',
+      minWidth: 105,
+      maxWidth: 120,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      headerClass: 'ag-right-aligned-header',
+      cellClass: 'ag-actions-cell',
+      cellRenderer: ({ data: log }) => (
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => {
+            setSelectedLog(log);
+            setIsDetailsOpen(true);
+          }}
+        >
+          Inspect
+        </button>
+      ),
+    },
+  ], []);
+
   return (
     <div id="view-org-audit">
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
@@ -65,77 +136,12 @@ export default function AuditLogsList() {
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="table-responsive-wrapper">
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th>Event Type</th>
-                <th>Actor</th>
-                <th>Result</th>
-                <th>Target ID</th>
-                <th>Timestamp</th>
-                <th style={{ textAlign: 'right' }}>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    Loading audit trail...
-                  </td>
-                </tr>
-              ) : logs.length === 0 ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    No audit records match the current filter.
-                  </td>
-                </tr>
-              ) : (
-                logs.map((log, i) => {
-                  const isSuccess = log.result === 'SUCCESS' || log.status === 'SUCCESS';
-
-                  return (
-                    <tr key={i}>
-                      <td>
-                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                          {log.event_type || log.action}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {log.actor_email || log.actor || 'System'}
-                      </td>
-                      <td>
-                        <span className={`badge ${isSuccess ? 'badge-success' : 'badge-danger'}`}>
-                          {log.result || log.status || 'OK'}
-                        </span>
-                      </td>
-                      <td>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--accent-cyan)' }}>
-                          {log.target_id || log.target || '—'}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {log.created_at ? new Date(log.created_at).toLocaleString() : 'N/A'}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => {
-                            setSelectedLog(log);
-                            setIsDetailsOpen(true);
-                          }}
-                        >
-                          Inspect
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid
+          rowData={logs}
+          columnDefs={columnDefs}
+          loading={isLoading}
+          emptyMessage="No audit records match the current filter."
+        />
 
         {totalCount > 25 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderTop: '1px solid var(--glass-border)' }}>

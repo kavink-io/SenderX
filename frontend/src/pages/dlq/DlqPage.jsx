@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
-import ConfirmRetryModal from '../../components/modals/ConfirmRetryModal';
+import DataGrid from '../../components/tables/DataGrid';
 import { useToast } from '../../context/ToastContext';
 
 export default function DlqPage() {
@@ -32,7 +32,7 @@ export default function DlqPage() {
     fetchDlq();
   }, [fetchDlq]);
 
-  const handleDlqRetry = async (item) => {
+  const handleDlqRetry = useCallback(async (item) => {
     const mid = item.message_id || item._id || item.id;
     try {
       const res = await ApiClient.retryDlq(mid);
@@ -45,7 +45,83 @@ export default function DlqPage() {
     } catch (err) {
       showToast(err?.message || 'Error executing DLQ retry', 'error');
     }
-  };
+  }, [fetchDlq, showToast]);
+
+  const columnDefs = useMemo(() => [
+    {
+      headerName: 'Message ID',
+      field: 'message_id',
+      minWidth: 160,
+      valueGetter: ({ data }) => data.message_id || data._id || data.id || '',
+      cellRenderer: ({ value }) => (
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
+          {value}
+        </span>
+      ),
+    },
+    {
+      headerName: 'Recipient',
+      field: 'recipient',
+      minWidth: 150,
+      valueGetter: ({ data }) => data.recipient || 'N/A',
+      cellStyle: { fontWeight: 600, color: 'var(--text-primary)' },
+    },
+    {
+      headerName: 'Channel',
+      field: 'channel',
+      minWidth: 105,
+      maxWidth: 130,
+      valueGetter: ({ data }) => data.channel || 'email',
+      cellRenderer: ({ value }) => <span className="badge badge-info">{value}</span>,
+    },
+    {
+      headerName: 'Error Diagnostics',
+      field: 'reason',
+      minWidth: 200,
+      flex: 1.5,
+      valueGetter: ({ data }) => data.reason || data.error || 'Max retries exhausted',
+      cellRenderer: ({ value }) => (
+        <div
+          style={{ color: 'var(--status-error)', fontSize: '0.8rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+          title={value}
+        >
+          {value}
+        </div>
+      ),
+    },
+    {
+      headerName: 'Attempts',
+      field: 'attempts',
+      minWidth: 100,
+      maxWidth: 120,
+      valueGetter: ({ data }) => data.attempts || data.retry_count || 3,
+      cellRenderer: ({ value }) => <span className="badge badge-warning">{value}</span>,
+    },
+    {
+      headerName: 'Timestamp',
+      field: 'created_at',
+      minWidth: 155,
+      valueFormatter: ({ value }) => (value ? new Date(value).toLocaleString() : 'N/A'),
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Actions',
+      colId: 'actions',
+      minWidth: 140,
+      maxWidth: 160,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      headerClass: 'ag-right-aligned-header',
+      cellClass: 'ag-actions-cell',
+      cellRenderer: ({ data: item }) => (
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => handleDlqRetry(item)}>
+          Retry Delivery
+        </button>
+      ),
+    },
+  ], [handleDlqRetry]);
 
   return (
     <div className="tab-pane active" id="tab-org-dlq">
@@ -64,76 +140,14 @@ export default function DlqPage() {
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="table-responsive-wrapper">
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th>Message ID</th>
-                <th>Recipient</th>
-                <th>Channel</th>
-                <th>Error Diagnostics</th>
-                <th>Attempts</th>
-                <th>Timestamp</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    Loading Dead Letter Queue...
-                  </td>
-                </tr>
-              ) : dlqItems.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--status-success)' }}>
-                    ✓ Dead letter queue is empty. All deliveries routed smoothly.
-                  </td>
-                </tr>
-              ) : (
-                dlqItems.map((item) => {
-                  const mid = item.message_id || item._id || item.id;
-
-                  return (
-                    <tr key={mid}>
-                      <td>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
-                          {mid}
-                        </span>
-                      </td>
-                      <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                        {item.recipient || 'N/A'}
-                      </td>
-                      <td>
-                        <span className="badge badge-info">{item.channel || 'email'}</span>
-                      </td>
-                      <td style={{ maxWidth: '300px' }}>
-                        <div style={{ color: 'var(--status-error)', fontSize: '0.8rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={item.reason || item.error}>
-                          {item.reason || item.error || 'Max retries exhausted'}
-                        </div>
-                      </td>
-                      <td>
-                        <span className="badge badge-warning">{item.attempts || item.retry_count || 3}</span>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {item.created_at ? new Date(item.created_at).toLocaleString() : 'N/A'}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handleDlqRetry(item)}
-                        >
-                          Retry Delivery
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid
+          rowData={dlqItems}
+          columnDefs={columnDefs}
+          loading={isLoading}
+          emptyMessage="Dead letter queue is empty. All deliveries routed smoothly."
+          getRowId={({ data }) => String(data.message_id || data._id || data.id)}
+          pagination={dlqItems.length > 20 || totalCount > 20}
+        />
       </div>
     </div>
   );

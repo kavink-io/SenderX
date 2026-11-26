@@ -1044,6 +1044,49 @@ select option {
   border-color: rgba(255, 100, 124, 0.5);
 }
 
+/* Shared AG Grid Styling */
+.senderx-ag-grid .ag-cell {
+  display: flex;
+  align-items: center;
+  line-height: 1.4;
+}
+
+.senderx-ag-grid .ag-cell-value {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.senderx-ag-grid .ag-cell-auto-height .ag-cell-value {
+  padding: 8px 0;
+  white-space: normal;
+}
+
+.senderx-ag-grid .ag-cell.ag-actions-cell {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  overflow: visible;
+}
+
+.senderx-ag-grid .ag-cell.ag-actions-cell .ag-cell-value {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  width: 100%;
+  overflow: visible;
+}
+
+.senderx-ag-grid .ag-right-aligned-header .ag-header-cell-label {
+  flex-direction: row;
+  justify-content: flex-end;
+}
+
+.senderx-ag-grid .ag-header-cell-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .notification-badge-dot {
   position: absolute;
   top: 8px;

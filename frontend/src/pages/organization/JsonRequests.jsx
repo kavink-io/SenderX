@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
+import DataGrid from '../../components/tables/DataGrid';
 import ViewPayloadModal from '../../components/modals/ViewPayloadModal';
 import JsonAnalyzer from '../../components/dashboard/JsonAnalyzer';
 import { useToast } from '../../context/ToastContext';
@@ -43,6 +44,77 @@ export default function JsonRequests() {
   useEffect(() => {
     fetchPayloads();
   }, [fetchPayloads]);
+
+  const columnDefs = useMemo(() => [
+    {
+      headerName: 'Payload ID',
+      field: 'payload_id',
+      minWidth: 160,
+      valueGetter: ({ data }) => data.payload_id || data._id || data.id || '',
+      cellRenderer: ({ value }) => (
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
+          {value}
+        </span>
+      ),
+    },
+    {
+      headerName: 'Channel',
+      field: 'channel',
+      minWidth: 110,
+      maxWidth: 140,
+      valueGetter: ({ data }) => data.channel || 'generic',
+      cellRenderer: ({ value }) => <span className="badge badge-info">{value}</span>,
+    },
+    {
+      headerName: 'Status',
+      field: 'status',
+      minWidth: 120,
+      maxWidth: 145,
+      valueGetter: ({ data }) => data.validation_status || data.status || '',
+      cellRenderer: ({ value }) => {
+        const isValid = value === 'VALID' || value === 'ROUTED';
+        return <span className={`badge ${isValid ? 'badge-success' : 'badge-danger'}`}>{value}</span>;
+      },
+    },
+    {
+      headerName: 'Application',
+      field: 'application_name',
+      minWidth: 140,
+      valueGetter: ({ data }) => data.application_name || data.application_id || 'Global',
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Received',
+      field: 'created_at',
+      minWidth: 160,
+      valueFormatter: ({ value }) => (value ? new Date(value).toLocaleString() : 'N/A'),
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Actions',
+      colId: 'actions',
+      minWidth: 135,
+      maxWidth: 155,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      headerClass: 'ag-right-aligned-header',
+      cellClass: 'ag-actions-cell',
+      cellRenderer: ({ data: p }) => (
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => {
+            setSelectedPayload(p);
+            setIsViewOpen(true);
+          }}
+        >
+          View Payload
+        </button>
+      ),
+    },
+  ], []);
 
   return (
     <div className="tab-pane active" id="tab-org-json-requests">
@@ -94,76 +166,13 @@ export default function JsonRequests() {
 
       {/* Payloads table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="table-responsive-wrapper">
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th>Payload ID</th>
-                <th>Channel</th>
-                <th>Status</th>
-                <th>Application</th>
-                <th>Received</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    Loading inbound payloads...
-                  </td>
-                </tr>
-              ) : payloads.length === 0 ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    No inbound JSON requests recorded for this scope.
-                  </td>
-                </tr>
-              ) : (
-                payloads.map((p) => {
-                  const pid = p.payload_id || p._id || p.id;
-                  const isValid = p.validation_status === 'VALID' || p.status === 'VALID' || p.status === 'ROUTED';
-
-                  return (
-                    <tr key={pid}>
-                      <td>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
-                          {pid}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="badge badge-info">{p.channel || 'generic'}</span>
-                      </td>
-                      <td>
-                        <span className={`badge ${isValid ? 'badge-success' : 'badge-danger'}`}>
-                          {p.validation_status || p.status}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {p.application_name || p.application_id || 'Global'}
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {p.created_at ? new Date(p.created_at).toLocaleString() : 'N/A'}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => {
-                            setSelectedPayload(p);
-                            setIsViewOpen(true);
-                          }}
-                        >
-                          View Payload
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid
+          rowData={payloads}
+          columnDefs={columnDefs}
+          loading={isLoading}
+          emptyMessage="No inbound JSON requests recorded for this scope."
+          getRowId={({ data }) => String(data.payload_id || data._id || data.id)}
+        />
 
         {totalCount > 20 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderTop: '1px solid var(--glass-border)' }}>

@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
+import DataGrid from '../../components/tables/DataGrid';
 import MessageComposer from '../../components/forms/MessageComposer';
 import MessageDetailsModal from '../../components/modals/MessageDetailsModal';
 import ConfirmRetryModal from '../../components/modals/ConfirmRetryModal';
@@ -49,6 +50,102 @@ export default function MessagesPage() {
   useEffect(() => {
     fetchMessages();
   }, [fetchMessages]);
+
+  const columnDefs = useMemo(() => [
+    {
+      headerName: 'Recipient',
+      field: 'recipient',
+      minWidth: 210,
+      flex: 1.5,
+      autoHeight: true,
+      wrapText: true,
+      cellRenderer: ({ data: m }) => {
+        const mid = m.message_id || m._id || m.id;
+        return (
+          <div>
+            <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{m.recipient}</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)' }}>
+              {mid}
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      headerName: 'Channel',
+      field: 'channel',
+      minWidth: 110,
+      maxWidth: 135,
+      cellRenderer: ({ value }) => <span className="badge badge-info">{value}</span>,
+    },
+    {
+      headerName: 'Status',
+      field: 'status',
+      minWidth: 120,
+      maxWidth: 145,
+      cellRenderer: ({ value }) => {
+        const isDelivered = value === 'DELIVERED' || value === 'SENT';
+        const isFailed = value === 'FAILED' || value === 'ERROR';
+        return (
+          <span className={`badge ${isDelivered ? 'badge-success' : isFailed ? 'badge-danger' : 'badge-warning'}`}>
+            {value}
+          </span>
+        );
+      },
+    },
+    {
+      headerName: 'Provider',
+      field: 'provider',
+      minWidth: 110,
+      valueGetter: ({ data }) => data.provider || 'default',
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Created',
+      field: 'created_at',
+      minWidth: 155,
+      valueFormatter: ({ value }) => (value ? new Date(value).toLocaleString() : 'N/A'),
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Actions',
+      colId: 'actions',
+      minWidth: 150,
+      maxWidth: 175,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      headerClass: 'ag-right-aligned-header',
+      cellClass: 'ag-actions-cell',
+      cellRenderer: ({ data: m }) => {
+        const isFailed = m.status === 'FAILED' || m.status === 'ERROR';
+        return (
+          <div style={{ display: 'inline-flex', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                setSelectedMessage(m);
+                setIsDetailsOpen(true);
+              }}
+            >
+              Details
+            </button>
+            {isFailed && (
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                onClick={() => setRetryTargetMessage(m)}
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        );
+      },
+    },
+  ], []);
 
   return (
     <div className="tab-pane active" id="tab-org-messages">
@@ -114,89 +211,13 @@ export default function MessagesPage() {
 
       {/* Outbox Table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="table-responsive-wrapper">
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th>Recipient</th>
-                <th>Channel</th>
-                <th>Status</th>
-                <th>Provider</th>
-                <th>Created</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    Loading messages...
-                  </td>
-                </tr>
-              ) : messages.length === 0 ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    No messages match current filters.
-                  </td>
-                </tr>
-              ) : (
-                messages.map((m) => {
-                  const mid = m.message_id || m._id || m.id;
-                  const isDelivered = m.status === 'DELIVERED' || m.status === 'SENT';
-                  const isFailed = m.status === 'FAILED' || m.status === 'ERROR';
-
-                  return (
-                    <tr key={mid}>
-                      <td>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{m.recipient}</div>
-                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)' }}>
-                          {mid}
-                        </div>
-                      </td>
-                      <td>
-                        <span className="badge badge-info">{m.channel}</span>
-                      </td>
-                      <td>
-                        <span className={`badge ${isDelivered ? 'badge-success' : isFailed ? 'badge-danger' : 'badge-warning'}`}>
-                          {m.status}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {m.provider || 'default'}
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {m.created_at ? new Date(m.created_at).toLocaleString() : 'N/A'}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'inline-flex', gap: '6px' }}>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => {
-                              setSelectedMessage(m);
-                              setIsDetailsOpen(true);
-                            }}
-                          >
-                            Details
-                          </button>
-                          {isFailed && (
-                            <button
-                              type="button"
-                              className="btn btn-danger btn-sm"
-                              onClick={() => setRetryTargetMessage(m)}
-                            >
-                              Retry
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid
+          rowData={messages}
+          columnDefs={columnDefs}
+          loading={isLoading}
+          emptyMessage="No messages match current filters."
+          getRowId={({ data }) => String(data.message_id || data._id || data.id)}
+        />
 
         {totalCount > 20 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderTop: '1px solid var(--glass-border)' }}>

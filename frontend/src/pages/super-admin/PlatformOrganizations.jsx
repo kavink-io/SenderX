@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
+import DataGrid from '../../components/tables/DataGrid';
 import CreateOrgModal from '../../components/modals/CreateOrgModal';
 import OrgDetailsModal from '../../components/modals/OrgDetailsModal';
 import DeleteOrgModal from '../../components/modals/DeleteOrgModal';
@@ -45,7 +46,7 @@ export default function PlatformOrganizations() {
     fetchOrgs();
   }, [fetchOrgs]);
 
-  const handleToggleStatus = async (org) => {
+  const handleToggleStatus = useCallback(async (org) => {
     const orgId = org.organization_id || org._id || org.id;
     const nextStatus = org.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
     try {
@@ -59,7 +60,103 @@ export default function PlatformOrganizations() {
     } catch (err) {
       showToast(err?.message || 'Error changing organization status', 'error');
     }
-  };
+  }, [fetchOrgs, showToast]);
+
+  const columnDefs = useMemo(() => [
+    {
+      headerName: 'Organization',
+      field: 'name',
+      minWidth: 200,
+      flex: 1.4,
+      autoHeight: true,
+      wrapText: true,
+      cellRenderer: ({ data: org }) => (
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{org.name}</div>
+          {org.description && (
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {org.description}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      headerName: 'Slug',
+      field: 'slug',
+      minWidth: 140,
+      cellRenderer: ({ value }) => (
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
+          {value}
+        </span>
+      ),
+    },
+    {
+      headerName: 'Status',
+      field: 'status',
+      minWidth: 120,
+      maxWidth: 145,
+      cellRenderer: ({ value }) => (
+        <span className={`badge ${value === 'ACTIVE' ? 'badge-success' : 'badge-danger'}`}>
+          {value}
+        </span>
+      ),
+    },
+    {
+      headerName: 'Created',
+      field: 'created_at',
+      minWidth: 120,
+      maxWidth: 150,
+      valueFormatter: ({ value }) => (value ? new Date(value).toLocaleDateString() : 'N/A'),
+      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+    },
+    {
+      headerName: 'Actions',
+      colId: 'actions',
+      minWidth: 225,
+      maxWidth: 250,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      headerClass: 'ag-right-aligned-header',
+      cellClass: 'ag-actions-cell',
+      cellRenderer: ({ data: org }) => {
+        const isActive = org.status === 'ACTIVE';
+        return (
+          <div style={{ display: 'inline-flex', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                setSelectedOrg(org);
+                setIsDetailsOpen(true);
+              }}
+            >
+              Details
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
+              onClick={() => handleToggleStatus(org)}
+            >
+              {isActive ? 'Suspend' : 'Activate'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={() => {
+                setSelectedOrg(org);
+                setIsDeleteOpen(true);
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        );
+      },
+    },
+  ], [handleToggleStatus]);
 
   return (
     <div className="tab-pane active" id="tab-platform-overview">
@@ -107,96 +204,13 @@ export default function PlatformOrganizations() {
 
       {/* Organizations Table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="table-responsive-wrapper">
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th>Organization</th>
-                <th>Slug</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    Loading organizations...
-                  </td>
-                </tr>
-              ) : organizations.length === 0 ? (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    No organizations match your filters.
-                  </td>
-                </tr>
-              ) : (
-                organizations.map((org) => {
-                  const orgId = org.organization_id || org._id || org.id;
-                  const isActive = org.status === 'ACTIVE';
-
-                  return (
-                    <tr key={orgId}>
-                      <td>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{org.name}</div>
-                        {org.description && (
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {org.description}
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
-                          {org.slug}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge ${isActive ? 'badge-success' : 'badge-danger'}`}>
-                          {org.status}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {org.created_at ? new Date(org.created_at).toLocaleDateString() : 'N/A'}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'inline-flex', gap: '6px' }}>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => {
-                              setSelectedOrg(org);
-                              setIsDetailsOpen(true);
-                            }}
-                          >
-                            Details
-                          </button>
-                          <button
-                            type="button"
-                            className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
-                            onClick={() => handleToggleStatus(org)}
-                          >
-                            {isActive ? 'Suspend' : 'Activate'}
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-danger btn-sm"
-                            onClick={() => {
-                              setSelectedOrg(org);
-                              setIsDeleteOpen(true);
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid
+          rowData={organizations}
+          columnDefs={columnDefs}
+          loading={isLoading}
+          emptyMessage="No organizations match your filters."
+          getRowId={({ data }) => String(data.organization_id || data._id || data.id)}
+        />
 
         {/* Pagination */}
         {totalCount > 20 && (

@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
+import DataGrid from '../../components/tables/DataGrid';
 import RegisterAppModal from '../../components/modals/RegisterAppModal';
 import AppDetailsModal from '../../components/modals/AppDetailsModal';
 import { useToast } from '../../context/ToastContext';
@@ -56,7 +57,7 @@ export default function ConnectedApplications() {
     }
   };
 
-  const handleDelete = async (app) => {
+  const handleDelete = useCallback(async (app) => {
     const appId = app.application_id || app._id || app.id;
     if (!window.confirm(`Delete application "${app.name || appId}"? Its credentials will be revoked and its history retained.`)) return;
     try {
@@ -70,7 +71,98 @@ export default function ConnectedApplications() {
     } catch (err) {
       showToast(err?.message || 'Error deleting application', 'error');
     }
-  };
+  }, [fetchApps, showToast]);
+
+  const columnDefs = useMemo(() => [
+    {
+      headerName: 'Application Name',
+      field: 'name',
+      minWidth: 200,
+      flex: 1.4,
+      autoHeight: true,
+      wrapText: true,
+      cellRenderer: ({ data: app }) => (
+        <div>
+          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{app.name}</div>
+          {app.description && (
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{app.description}</div>
+          )}
+        </div>
+      ),
+    },
+    {
+      headerName: 'Application ID',
+      field: 'application_id',
+      minWidth: 165,
+      valueGetter: ({ data }) => data.application_id || data._id || data.id || '',
+      cellRenderer: ({ value }) => (
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
+          {value}
+        </span>
+      ),
+    },
+    {
+      headerName: 'Environment',
+      field: 'environment',
+      minWidth: 115,
+      maxWidth: 140,
+      valueGetter: ({ data }) => data.environment || 'live',
+      cellRenderer: ({ value }) => <span className="badge badge-info">{value}</span>,
+    },
+    {
+      headerName: 'Status',
+      field: 'status',
+      minWidth: 115,
+      maxWidth: 140,
+      cellRenderer: ({ value }) => {
+        const isActive = value === 'ACTIVE' || value === 'active';
+        return <span className={`badge ${isActive ? 'badge-success' : 'badge-danger'}`}>{value}</span>;
+      },
+    },
+    {
+      headerName: 'Actions',
+      colId: 'actions',
+      minWidth: 230,
+      maxWidth: 255,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      headerClass: 'ag-right-aligned-header',
+      cellClass: 'ag-actions-cell',
+      cellRenderer: ({ data: app }) => {
+        const isActive = app.status === 'ACTIVE' || app.status === 'active';
+        return (
+          <div style={{ display: 'inline-flex', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                setSelectedApp(app);
+                setIsDetailsOpen(true);
+              }}
+            >
+              Details
+            </button>
+            {canManage && (
+              <>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
+                  onClick={() => handleToggleActive(app)}
+                >
+                  {isActive ? 'Deactivate' : 'Activate'}
+                </button>
+                <button type="button" className="btn btn-danger btn-sm" onClick={() => handleDelete(app)}>
+                  Delete
+                </button>
+              </>
+            )}
+          </div>
+        );
+      },
+    },
+  ], [canManage, handleDelete]);
 
   return (
     <div className="tab-pane active" id="tab-org-applications">
@@ -103,93 +195,14 @@ export default function ConnectedApplications() {
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="table-responsive-wrapper">
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th>Application Name</th>
-                <th>Application ID</th>
-                <th>Environment</th>
-                <th>Status</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    Loading applications...
-                  </td>
-                </tr>
-              ) : apps.length === 0 ? (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                    No connected applications found.
-                  </td>
-                </tr>
-              ) : (
-                apps.map((app) => {
-                  const appId = app.application_id || app._id || app.id;
-                  const isActive = app.status === 'ACTIVE' || app.status === 'active';
-
-                  return (
-                    <tr key={appId}>
-                      <td>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{app.name}</div>
-                        {app.description && (
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                            {app.description}
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
-                          {appId}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="badge badge-info">{app.environment || 'live'}</span>
-                      </td>
-                      <td>
-                        <span className={`badge ${isActive ? 'badge-success' : 'badge-danger'}`}>
-                          {app.status}
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'inline-flex', gap: '6px' }}>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => {
-                              setSelectedApp(app);
-                              setIsDetailsOpen(true);
-                            }}
-                          >
-                            Details
-                          </button>
-                          {canManage && (
-                            <>
-                              <button
-                                type="button"
-                                className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
-                                onClick={() => handleToggleActive(app)}
-                              >
-                                {isActive ? 'Deactivate' : 'Activate'}
-                              </button>
-                              <button type="button" className="btn btn-danger btn-sm" onClick={() => handleDelete(app)}>
-                                Delete
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid
+          rowData={apps}
+          columnDefs={columnDefs}
+          loading={isLoading}
+          emptyMessage="No connected applications found."
+          getRowId={({ data }) => String(data.application_id || data._id || data.id)}
+          pagination={apps.length > 20}
+        />
       </div>
 
       <RegisterAppModal
