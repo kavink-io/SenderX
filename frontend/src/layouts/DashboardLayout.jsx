@@ -1,15 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from '../components/layout/Sidebar';
 import TopNav from '../components/layout/TopNav';
 import MobileBackdrop from '../components/layout/MobileBackdrop';
-import UserProfileModal from '../components/modals/UserProfileModal';
-import { useAuth } from '../context/AuthContext';
+import PageLoader from '../components/common/PageLoader';
 import { useTheme } from '../context/ThemeContext';
+
+const UserProfileModal = lazy(() => import('../components/modals/UserProfileModal'));
 
 export default function DashboardLayout() {
   const location = useLocation();
-  const { isPlatformAdmin } = useAuth();
   const { preferences, updatePreferences } = useTheme();
   const [isDesktop, setIsDesktop] = useState(() => {
     return typeof window !== 'undefined' ? window.innerWidth > 1024 : true;
@@ -19,6 +19,7 @@ export default function DashboardLayout() {
   );
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileModalMounted, setProfileModalMounted] = useState(false);
 
   useEffect(() => {
     const handleResize = () => {
@@ -42,7 +43,7 @@ export default function DashboardLayout() {
     } else if (preferences.sidebarMode === 'collapsed') {
       setIsSidebarOpen(false);
     }
-  }, [preferences.navigationLayout, preferences.sidebarMode]);
+  }, [preferences.navigationLayout, preferences.sidebarMode, preferences.sidebarCollapsible]);
 
   const handleToggleSidebar = () => {
     if (isDesktop) {
@@ -76,19 +77,28 @@ export default function DashboardLayout() {
         <TopNav
           isSidebarOpen={isDesktop ? isSidebarOpen : isMobileDrawerOpen}
           onToggleSidebar={handleToggleSidebar}
-          onOpenProfile={() => setIsProfileModalOpen(true)}
+          onOpenProfile={() => {
+            setProfileModalMounted(true);
+            setIsProfileModalOpen(true);
+          }}
         />
         <main className="page-container">
           <div key={location.pathname} className="lg-page-transition">
-            <Outlet />
+            <Suspense fallback={<PageLoader />}>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
       </div>
 
-      <UserProfileModal
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-      />
+      {profileModalMounted && (
+        <Suspense fallback={null}>
+          <UserProfileModal
+            isOpen={isProfileModalOpen}
+            onClose={() => setIsProfileModalOpen(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

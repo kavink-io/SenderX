@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../tables/DataGrid';
+import GridActionButton from '../tables/GridActionButton';
 import AuditDetailsModal from '../modals/AuditDetailsModal';
 import { useToast } from '../../context/ToastContext';
 import { GlassSearch } from '../glass';
@@ -87,8 +88,8 @@ export default function AuditLogsList() {
     {
       headerName: 'Details',
       colId: 'details',
-      minWidth: 105,
-      maxWidth: 120,
+      minWidth: 48,
+      maxWidth: 60,
       sortable: false,
       filter: false,
       resizable: false,
@@ -96,16 +97,16 @@ export default function AuditLogsList() {
       headerClass: 'ag-right-aligned-header',
       cellClass: 'ag-actions-cell',
       cellRenderer: ({ data: log }) => (
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => {
+        <div className="ag-icon-actions" role="group" aria-label="Audit log actions">
+          <GridActionButton
+            icon="view"
+            label="Inspect audit log entry"
+            onClick={() => {
             setSelectedLog(log);
             setIsDetailsOpen(true);
           }}
-        >
-          Inspect
-        </button>
+          />
+        </div>
       ),
     },
   ], []);

@@ -1,7 +1,16 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import Modal from '../common/Modal';
-import DataGrid from '../tables/DataGrid';
+
+const LazyDataGrid = lazy(() => import('../tables/DataGrid'));
+
+function GlassTable(props) {
+  return (
+    <Suspense fallback={<div className="lg-glass-skeleton" style={{ width: '100%', height: '220px', borderRadius: 'var(--lg-radius-md)' }} />}>
+      <LazyDataGrid {...props} />
+    </Suspense>
+  );
+}
 
 /** Translucent Liquid Glass card container with subtle top specular rim highlight. */
 export function GlassCard({
@@ -489,4 +498,4 @@ export function AnimatedNumber({ value, suffix = '', decimals = 0 }) {
   return <>{formatted}{suffix}</>;
 }
 
-export { Modal as GlassModal, DataGrid as GlassTable };
+export { Modal as GlassModal, GlassTable };

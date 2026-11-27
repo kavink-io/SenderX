@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../../components/tables/DataGrid';
+import GridActionButton from '../../components/tables/GridActionButton';
 import CreateOrgModal from '../../components/modals/CreateOrgModal';
 import OrgDetailsModal from '../../components/modals/OrgDetailsModal';
 import DeleteOrgModal from '../../components/modals/DeleteOrgModal';
@@ -114,8 +115,8 @@ export default function PlatformOrganizations() {
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 225,
-      maxWidth: 250,
+      minWidth: 110,
+      maxWidth: 122,
       sortable: false,
       filter: false,
       resizable: false,
@@ -125,34 +126,30 @@ export default function PlatformOrganizations() {
       cellRenderer: ({ data: org }) => {
         const isActive = org.status === 'ACTIVE';
         return (
-          <div style={{ display: 'inline-flex', gap: '6px' }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
+          <div className="ag-icon-actions" role="group" aria-label="Organization actions">
+            <GridActionButton
+              icon="view"
+              label="View organization details"
               onClick={() => {
                 setSelectedOrg(org);
                 setIsDetailsOpen(true);
               }}
-            >
-              Details
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
+            />
+            <GridActionButton
+              icon={isActive ? 'pause' : 'check'}
+              label={`${isActive ? 'Suspend' : 'Activate'} organization`}
+              variant={isActive ? 'danger' : 'success'}
               onClick={() => handleToggleStatus(org)}
-            >
-              {isActive ? 'Suspend' : 'Activate'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-danger btn-sm"
+            />
+            <GridActionButton
+              icon="delete"
+              label="Delete organization"
+              variant="danger"
               onClick={() => {
                 setSelectedOrg(org);
                 setIsDeleteOpen(true);
               }}
-            >
-              Delete
-            </button>
+            />
           </div>
         );
       },

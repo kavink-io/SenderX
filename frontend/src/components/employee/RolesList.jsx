@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../tables/DataGrid';
+import GridActionButton from '../tables/GridActionButton';
 import CreateRoleModal from '../modals/CreateRoleModal';
 import RoleDetailsModal from '../modals/RoleDetailsModal';
 import { useToast } from '../../context/ToastContext';
@@ -58,29 +59,42 @@ export default function RolesList() {
       headerName: 'Role Name',
       field: 'name',
       minWidth: 160,
-      cellStyle: { fontWeight: 600, color: 'var(--text-primary)' },
+      maxWidth: 260,
+      flex: 1,
+      cellRenderer: ({ value }) => (
+        <span className="employee-table-ellipsis" title={value} style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+          {value}
+        </span>
+      ),
     },
     {
       headerName: 'Description',
       field: 'description',
-      minWidth: 210,
-      flex: 1.5,
+      minWidth: 220,
+      flex: 1.6,
       valueGetter: ({ data }) => data.description || 'Custom organization role',
-      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+      cellRenderer: ({ value }) => (
+        <span className="employee-table-ellipsis" title={value} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          {value}
+        </span>
+      ),
     },
     {
       headerName: 'Permissions Count',
       field: 'permissions',
-      minWidth: 150,
-      maxWidth: 185,
+      width: 160,
+      minWidth: 155,
+      maxWidth: 170,
+      flex: 0,
       valueGetter: ({ data }) => (data.permissions || []).length,
       cellRenderer: ({ value }) => <span className="badge badge-scope">{value} permissions</span>,
     },
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 195,
-      maxWidth: 225,
+      width: 138,
+      minWidth: 130,
+      maxWidth: 150,
       sortable: false,
       filter: false,
       resizable: false,
@@ -88,32 +102,26 @@ export default function RolesList() {
       headerClass: 'ag-right-aligned-header',
       cellClass: 'ag-actions-cell',
       cellRenderer: ({ data: r }) => (
-        <div style={{ display: 'inline-flex', gap: '6px' }}>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
+        <div className="ag-icon-actions" role="group" aria-label="Role actions">
+          <GridActionButton
+            icon="view"
+            label="View role details"
             onClick={() => {
               setSelectedRole(r);
               setIsDetailsOpen(true);
             }}
-          >
-            Details
-          </button>
+          />
           {isOrgAdmin && (
             <>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
+              <GridActionButton
+                icon="edit"
+                label="Edit role"
                 onClick={() => {
                   setSelectedRole(r);
                   setIsCreateOpen(true);
                 }}
-              >
-                Edit
-              </button>
-              <button type="button" className="btn btn-danger btn-sm" onClick={() => handleDeleteRole(r)}>
-                Delete
-              </button>
+              />
+              <GridActionButton icon="delete" label="Delete role" variant="danger" onClick={() => handleDeleteRole(r)} />
             </>
           )}
         </div>

@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../tables/DataGrid';
+import GridActionButton from '../tables/GridActionButton';
 import CreateEmployeeModal from '../modals/CreateEmployeeModal';
+import EditEmployeeModal from '../modals/EditEmployeeModal';
 import EmployeeDetailsModal from '../modals/EmployeeDetailsModal';
 import AssignRoleModal from '../modals/AssignRoleModal';
 import DeleteEmployeeModal from '../modals/DeleteEmployeeModal';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { GlassSearch, GlassSelect } from '../glass';
+import ProfessionalAvatar from '../common/ProfessionalAvatar';
+import { getEmployeeRoleLabel, getEmployeeStatus } from '../../utils/employeeTable';
 
 export default function EmployeesList() {
   const [employees, setEmployees] = useState([]);
@@ -18,14 +22,15 @@ export default function EmployeesList() {
   const [isLoading, setIsLoading] = useState(true);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
   const [selectedEmp, setSelectedEmp] = useState(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isAssignOpen, setIsAssignOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
   const { showToast } = useToast();
-  const { isOrgAdmin, hasPermission } = useAuth();
-  const canManage = isOrgAdmin || hasPermission('organization:users:read');
+  const { account, isOrgAdmin, hasPermission, refreshProfile } = useAuth();
+  const canManage = isOrgAdmin || hasPermission('organization:users:manage');
 
   const fetchEmployees = useCallback(async () => {
     setIsLoading(true);
@@ -53,7 +58,7 @@ export default function EmployeesList() {
 
   const handleToggleActive = async (emp) => {
     const uid = emp.user_id || emp._id || emp.id;
-    const isActive = emp.is_active || emp.status === 'ACTIVE';
+    const { isActive } = getEmployeeStatus(emp);
 
     try {
       const res = isActive
@@ -85,29 +90,51 @@ export default function EmployeesList() {
     }
   }, [showToast]);
 
+  const handleEmployeeUpdated = async (updatedEmployee) => {
+    const employee = updatedEmployee?.data || updatedEmployee;
+    const employeeId = employee?.user_id || employee?._id || employee?.id;
+    const currentAccountId = account?.user_id || account?.id;
+
+    if (employeeId && currentAccountId && String(employeeId) === String(currentAccountId)) {
+      await refreshProfile();
+    }
+    await fetchEmployees();
+  };
+
   const columnDefs = useMemo(() => [
     {
       headerName: 'Employee',
       field: 'name',
-      minWidth: 200,
-      flex: 1.4,
+      minWidth: 190,
+      maxWidth: 380,
+      flex: 1.6,
       autoHeight: true,
       wrapText: true,
       valueGetter: ({ data }) => `${data.name || ''} ${data.email || ''}`.trim(),
       cellRenderer: ({ data: emp }) => (
-        <div>
-          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{emp.name || emp.email}</div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{emp.email}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <ProfessionalAvatar employee={emp} name={emp.name} size={34} />
+          <div>
+            <div className="employee-table-ellipsis" title={emp.name || emp.email} style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+              {emp.name || emp.email}
+            </div>
+            <div className="employee-table-ellipsis" title={emp.email} style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              {emp.email}
+            </div>
+          </div>
         </div>
       ),
     },
     {
       headerName: 'Employee Code',
       field: 'employee_code',
-      minWidth: 130,
+      width: 118,
+      minWidth: 110,
+      maxWidth: 130,
+      flex: 0,
       valueGetter: ({ data }) => data.employee_code || '—',
       cellRenderer: ({ value }) => (
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
+        <span className="employee-table-ellipsis" title={value} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-cyan)' }}>
           {value}
         </span>
       ),
@@ -115,45 +142,48 @@ export default function EmployeesList() {
     {
       headerName: 'Role',
       field: 'roles',
-      minWidth: 140,
-      valueGetter: ({ data: emp }) =>
-        emp.is_org_admin
-          ? 'ORG_ADMIN'
-          : emp.roles && emp.roles.length > 0
-          ? emp.roles.map((r) => r.name || r.role_id).join(', ')
-          : 'Standard Member',
+      minWidth: 145,
+      maxWidth: 240,
+      flex: 1.1,
+      valueGetter: ({ data: emp }) => getEmployeeRoleLabel(emp),
       cellRenderer: ({ data: emp, value }) => (
-        <span className={`badge ${emp.is_org_admin ? 'badge-primary' : 'badge-info'}`}>{value}</span>
+        <span className={`badge ${emp.is_org_admin ? 'badge-primary' : 'badge-info'} employee-role-badge`} title={value}>
+          {value}
+        </span>
       ),
     },
     {
       headerName: 'Status',
       field: 'status',
-      minWidth: 120,
-      maxWidth: 155,
-      valueGetter: ({ data: emp }) => emp.status || (emp.is_active ? 'ACTIVE' : 'INACTIVE'),
-      cellRenderer: ({ data: emp, value }) => {
-        const isActive = emp.is_active || emp.status === 'ACTIVE';
-        const isPending = emp.status === 'PENDING' || emp.status === 'PENDING_ACTIVATION';
-        return (
-          <span className={`badge ${isActive ? 'badge-success' : isPending ? 'badge-warning' : 'badge-danger'}`}>
-            {value}
-          </span>
-        );
+      width: 170,
+      minWidth: 164,
+      maxWidth: 178,
+      flex: 0,
+      valueGetter: ({ data: emp }) => getEmployeeStatus(emp).label,
+      cellRenderer: ({ data: emp }) => {
+        const { label, badgeClass } = getEmployeeStatus(emp);
+        return <span className={`badge ${badgeClass} employee-status-badge`} title={label}>{label}</span>;
       },
     },
     {
       headerName: 'Department',
       field: 'department',
-      minWidth: 130,
+      minWidth: 110,
+      maxWidth: 240,
+      flex: 1,
       valueGetter: ({ data }) => data.department || 'Not provided',
-      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+      cellRenderer: ({ value }) => (
+        <span className="employee-table-ellipsis" title={value} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          {value}
+        </span>
+      ),
     },
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 280,
-      maxWidth: 340,
+      width: 240,
+      minWidth: 230,
+      maxWidth: 250,
       sortable: false,
       filter: false,
       resizable: false,
@@ -161,61 +191,55 @@ export default function EmployeesList() {
       headerClass: 'ag-right-aligned-header',
       cellClass: 'ag-actions-cell',
       cellRenderer: ({ data: emp }) => {
-        const isActive = emp.is_active || emp.status === 'ACTIVE';
-        const isPending = emp.status === 'PENDING' || emp.status === 'PENDING_ACTIVATION';
+        const { isActive, isPending } = getEmployeeStatus(emp);
         return (
-          <div style={{ display: 'inline-flex', gap: '6px' }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
+          <div className="ag-icon-actions" role="group" aria-label="Employee actions">
+            <GridActionButton
+              icon="view"
+              label="View employee profile"
               onClick={() => {
                 setSelectedEmp(emp);
                 setIsDetailsOpen(true);
               }}
-            >
-              Profile
-            </button>
+            />
             {canManage && (
               <>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
+                <GridActionButton
+                  icon="edit"
+                  label="Edit employee"
+                  onClick={() => {
+                    setSelectedEmp(emp);
+                    setIsEditOpen(true);
+                  }}
+                />
+                <GridActionButton
+                  icon="users"
+                  label="Manage employee roles"
                   onClick={() => {
                     setSelectedEmp(emp);
                     setIsAssignOpen(true);
                   }}
-                >
-                  Roles
-                </button>
+                />
                 {isPending && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => handleResendOtp(emp)}
-                    title="Resend activation invite email"
-                  >
-                    Resend
-                  </button>
+                  <GridActionButton icon="mail" label="Resend activation invite" onClick={() => handleResendOtp(emp)} />
                 )}
                 {!emp.is_org_admin && (
                   <>
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
+                    <GridActionButton
+                      icon={isActive ? 'user-round-x' : 'user-check'}
+                      label={isActive ? 'Deactivate Employee' : 'Activate Employee'}
+                      variant={isActive ? 'danger' : 'success'}
                       onClick={() => handleToggleActive(emp)}
-                    >
-                      {isActive ? 'Deactivate' : 'Activate'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
+                    />
+                    <GridActionButton
+                      icon="delete"
+                      label="Delete employee"
+                      variant="danger"
                       onClick={() => {
                         setSelectedEmp(emp);
                         setIsDeleteOpen(true);
                       }}
-                    >
-                      Delete
-                    </button>
+                    />
                   </>
                 )}
               </>
@@ -323,6 +347,13 @@ export default function EmployeesList() {
         isOpen={isDetailsOpen}
         onClose={() => setIsDetailsOpen(false)}
         employee={selectedEmp}
+      />
+
+      <EditEmployeeModal
+        isOpen={isEditOpen}
+        onClose={() => setIsEditOpen(false)}
+        employee={selectedEmp}
+        onUpdated={handleEmployeeUpdated}
       />
 
       <AssignRoleModal

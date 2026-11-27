@@ -1,21 +1,17 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState, lazy, Suspense } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { useAppScope } from '../../context/ScopeContext';
 import { useTheme } from '../../context/ThemeContext';
 import ThemeToggle from '../common/ThemeToggle';
+import OffCanvasPanel from '../common/OffCanvasPanel';
+import ProfessionalAvatar from '../common/ProfessionalAvatar';
+import PageLoader from '../common/PageLoader';
 import ApiClient from '../../services/api';
 import { getNavigationLabel, PLATFORM_NAVIGATION, ORG_NAVIGATION, getPageMeta } from '../../utils/navigation';
-import { GlassNavbar, GlassDropdown, GlassSelect } from '../glass';
+import { GlassNavbar, GlassDropdown } from '../glass';
 
-function SearchIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="11" cy="11" r="7" />
-      <path d="m20 20-4-4" />
-    </svg>
-  );
-}
+const OrgSettings = lazy(() => import('../../pages/settings/OrgSettings'));
+const AppearanceSettings = lazy(() => import('../settings/AppearanceSettings'));
 
 function ChevronIcon() {
   return (
@@ -27,35 +23,15 @@ function ChevronIcon() {
 
 export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenProfile }) {
   const location = useLocation();
-  const navigate = useNavigate();
-  const searchRef = useRef(null);
   const { account, isPlatformAdmin, isOrgAdmin, dashboardContext, logout, hasPermission } = useAuth();
-  const { activeAppId, setAppScope, assignedApps, setAssignedApps } = useAppScope();
   const { preferences, updatePreferences } = useTheme();
-  const [query, setQuery] = useState('');
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isNotifsOpen, setIsNotifsOpen] = useState(false);
   const [notificationItems, setNotificationItems] = useState([]);
   const [readNotificationIds, setReadNotificationIds] = useState([]);
   const [notificationFilter, setNotificationFilter] = useState('all');
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-
-  useEffect(() => {
-    async function fetchApps() {
-      if (isPlatformAdmin) return;
-      try {
-        const res = await ApiClient.listApplications(1, 100, 'active');
-        if (res?.success && Array.isArray(res.data?.items)) {
-          setAssignedApps(res.data.items);
-        } else if (Array.isArray(dashboardContext?.assigned_applications)) {
-          setAssignedApps(dashboardContext.assigned_applications);
-        }
-      } catch (error) {
-        console.warn('Could not load applications for scope selector:', error);
-      }
-    }
-    fetchApps();
-  }, [isPlatformAdmin, dashboardContext, setAssignedApps]);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('IDENTITY');
 
   useEffect(() => {
     let active = true;
@@ -65,7 +41,7 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
         return;
       }
       try {
-        const response = await ApiClient.listMessages(1, 10, { application_id: activeAppId || undefined });
+        const response = await ApiClient.listMessages(1, 10);
         if (!active) return;
         if (response?.success) {
           const data = response.data;
@@ -84,50 +60,27 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
     }
     fetchRecentMessages();
     return () => { active = false; };
-  }, [activeAppId, hasPermission, isPlatformAdmin]);
+  }, [hasPermission, isPlatformAdmin]);
 
-  useEffect(() => {
-    const handleShortcut = (event) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        searchRef.current?.focus();
-        setIsSearchOpen(true);
-      }
-    };
-    window.addEventListener('keydown', handleShortcut);
-    return () => window.removeEventListener('keydown', handleShortcut);
-  }, []);
-
-  const pageTitle = getPageMeta(location.pathname).title;
   const orgName = isPlatformAdmin ? 'Platform' : (dashboardContext?.organization?.name || 'Organization');
   const displayName = account?.name || account?.email || 'User';
+  const avatarEmployee = account || dashboardContext || {};
   const roleLabel = isPlatformAdmin
     ? 'Platform Admin'
     : isOrgAdmin
       ? 'Organization Admin'
       : (account?.roles?.[0]?.name || account?.roles?.[0]?.role_id || 'Employee');
-  const initials = displayName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 
-  const searchItems = useMemo(() => {
+  const navItems = useMemo(() => {
     const source = isPlatformAdmin ? PLATFORM_NAVIGATION : ORG_NAVIGATION;
     return source
       .filter((item) => isPlatformAdmin || !item.requiredPermission || hasPermission(item.requiredPermission))
       .map((item) => ({
         ...item,
         name: getNavigationLabel(item),
-        group: item.name.includes('Message') || item.name.includes('Template') || item.name === 'Overview'
-          ? 'Workspace'
-          : item.name.includes('Analytic')
-            ? 'Insights'
-            : 'Management',
-      }))
-      .concat([{ id: 'appearance-settings', name: 'Appearance & Layout', path: '/appearance', group: 'Preferences' }]);
+      }));
   }, [hasPermission, isPlatformAdmin]);
-  const matchingItems = searchItems.filter((item) => item.name.toLowerCase().includes(query.trim().toLowerCase()));
-  const groupedItems = matchingItems.reduce((groups, item) => {
-    groups[item.group] = [...(groups[item.group] || []), item];
-    return groups;
-  }, {});
+  const canManageOrgSettings = !isPlatformAdmin && hasPermission('organization:configuration:manage');
   const visibleNotifications = notificationFilter === 'unread'
     ? notificationItems.filter((item) => !readNotificationIds.includes(item.message_id || item._id))
     : notificationItems;
@@ -143,6 +96,10 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
 
   const { title: breadcrumbTitle } = getPageMeta(location.pathname);
   const toggleDirection = () => updatePreferences({ direction: preferences.direction === 'rtl' ? 'ltr' : 'rtl' });
+  const openSettings = (tab = 'IDENTITY') => {
+    setSettingsTab(tab);
+    setIsSettingsOpen(true);
+  };
 
   return (
     <GlassNavbar className="saas-header">
@@ -171,7 +128,7 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
       </div>
 
       <nav className="saas-horizontal-nav" aria-label="Primary navigation">
-        {searchItems.filter((item) => item.id !== 'appearance-settings').map((item) => (
+        {navItems.map((item) => (
           <NavLink key={item.id} to={item.path} title={item.name}>
             {item.name}
           </NavLink>
@@ -179,69 +136,20 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
       </nav>
 
       <div className="saas-header-actions">
-        <GlassDropdown
-          isOpen={isSearchOpen}
-          onClose={() => setIsSearchOpen(false)}
-          menuStyle={{ width: 360, maxWidth: 'min(360px, calc(100vw - 24px))', padding: 8 }}
-          trigger={
-            <label className="saas-search">
-              <SearchIcon />
-              <input
-                ref={searchRef}
-                value={query}
-                onChange={(event) => { setQuery(event.target.value); setIsSearchOpen(true); }}
-                onFocus={() => setIsSearchOpen(true)}
-                placeholder="Search here"
-                aria-label="Search navigation"
-              />
-              <span className="saas-search-shortcut"><kbd>Ctrl</kbd><kbd>+</kbd><kbd>K</kbd></span>
-            </label>
-          }
-        >
-          {!isPlatformAdmin && (
-            <div className="saas-search-scope-mobile">
-              <span>Application scope</span>
-              <GlassSelect
-                id="mobile-header-scope-select"
-                compact
-                value={activeAppId || ''}
-                onChange={(event) => setAppScope(event.target.value || null)}
-                aria-label="Filter resources by connected application"
-              >
-                {isOrgAdmin && <option value="">All Applications</option>}
-                {assignedApps.map((app) => (
-                  <option key={app.application_id || app._id} value={app.application_id || app._id}>
-                    {app.name || app.application_id}
-                  </option>
-                ))}
-              </GlassSelect>
-            </div>
-          )}
-          <div className="saas-search-results">
-            {Object.entries(groupedItems).length ? Object.entries(groupedItems).map(([group, items]) => (
-              <section key={group} className="saas-search-group">
-                <div className="saas-search-group-title">{group}</div>
-                {items.map((item) => (
-                  <button
-                    type="button"
-                    key={item.id}
-                    className="saas-search-result"
-                    onClick={() => {
-                      setIsSearchOpen(false);
-                      setQuery('');
-                      navigate(item.path);
-                    }}
-                  >
-                    {item.icon ? <span className="nav-icon">{item.icon}</span> : <span className="search-result-dot" />}
-                    <span>{item.name}</span>
-                  </button>
-                ))}
-              </section>
-            )) : <div className="saas-search-empty">No matching pages</div>}
-          </div>
-        </GlassDropdown>
-
         <ThemeToggle />
+
+        <button
+          type="button"
+          className="icon-btn saas-settings-button"
+          title="Settings"
+          aria-label="Settings"
+          onClick={() => openSettings(canManageOrgSettings ? 'IDENTITY' : 'APPEARANCE')}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
 
         <GlassDropdown
           isOpen={isNotifsOpen}
@@ -329,7 +237,12 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
               aria-expanded={isProfileOpen}
               aria-label="Account menu"
             >
-              <span className="saas-avatar">{initials}</span>
+              <ProfessionalAvatar
+                employee={avatarEmployee}
+                name={displayName}
+                size={34}
+                className="saas-avatar"
+              />
               <span className="saas-profile-name">
                 <strong>{displayName}</strong>
                 <small>{roleLabel}</small>
@@ -338,7 +251,12 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
           }
         >
           <button type="button" className="saas-profile-card" onClick={() => { setIsProfileOpen(false); onOpenProfile(); }}>
-            <span className="saas-avatar saas-avatar-large">{initials}</span>
+            <ProfessionalAvatar
+              employee={avatarEmployee}
+              name={displayName}
+              size={48}
+              className="saas-avatar saas-avatar-large"
+            />
             <strong>{displayName}</strong>
             <small>{roleLabel}</small>
           </button>
@@ -353,9 +271,9 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
             <span>Language</span>
             <span className="saas-menu-value">Eng&nbsp; ›</span>
           </div>
-          <button type="button" className="lg-dropdown-item" onClick={() => { setIsProfileOpen(false); navigate('/appearance'); }}>
+          <button type="button" className="lg-dropdown-item" onClick={() => { setIsProfileOpen(false); openSettings('APPEARANCE'); }}>
             <span className="saas-menu-glyph" aria-hidden="true">⚙</span>
-            <span>Settings</span>
+            <span>Appearance &amp; Layout</span>
           </button>
           <div className="lg-dropdown-divider" />
           <button
@@ -371,6 +289,26 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
           </button>
         </GlassDropdown>
       </div>
+      <OffCanvasPanel
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        title={canManageOrgSettings ? 'Settings' : 'Appearance & Layout'}
+        description={canManageOrgSettings
+          ? 'Organization configuration and workspace appearance.'
+          : 'Personalize your SenderX workspace.'}
+        size="large"
+        id="settings-offcanvas"
+      >
+        {isSettingsOpen && (
+          <Suspense fallback={<PageLoader compact label="Loading settings..." />}>
+            {canManageOrgSettings ? (
+              <OrgSettings initialTab={settingsTab} inPanel />
+            ) : (
+              <AppearanceSettings />
+            )}
+          </Suspense>
+        )}
+      </OffCanvasPanel>
     </GlassNavbar>
   );
 }

@@ -1,5 +1,7 @@
 import React from 'react';
-import Modal from '../common/Modal';
+import OffCanvasPanel from '../common/OffCanvasPanel';
+import ProfessionalAvatar from '../common/ProfessionalAvatar';
+import { getEmployeeAge } from '../../utils/professionalAvatar';
 
 export default function EmployeeDetailsModal({ isOpen, onClose, employee }) {
   if (!employee) return null;
@@ -7,15 +9,26 @@ export default function EmployeeDetailsModal({ isOpen, onClose, employee }) {
   const roles = employee.roles || [];
   const assignedApps = employee.assigned_applications || [];
   const permissions = employee.permissions || [];
+  const age = getEmployeeAge(employee);
 
   return (
-    <Modal
+    <OffCanvasPanel
       isOpen={isOpen}
       onClose={onClose}
       title="Employee Profile & Permissions Matrix"
-      maxWidth="700px"
-      id="modal-user-details"
+      size="large"
+      id="panel-user-details"
     >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '1.5rem' }}>
+        <ProfessionalAvatar employee={employee} name={employee.name} size={52} />
+        <div>
+          <strong style={{ display: 'block', color: 'var(--text-primary)' }}>{employee.name || employee.email}</strong>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            {employee.email}
+          </span>
+        </div>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem', marginBottom: '1.5rem' }}>
         <div>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Full Name</span>
@@ -46,6 +59,14 @@ export default function EmployeeDetailsModal({ isOpen, onClose, employee }) {
         <div>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Phone</span>
           <div style={{ color: 'var(--text-primary)' }}>{employee.phone_number || employee.phone || 'Not provided'}</div>
+        </div>
+        <div>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Gender</span>
+          <div style={{ color: 'var(--text-primary)' }}>{employee.gender || 'Not provided'}</div>
+        </div>
+        <div>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Age</span>
+          <div style={{ color: 'var(--text-primary)' }}>{age === null ? 'Not provided' : age}</div>
         </div>
       </div>
 
@@ -103,6 +124,6 @@ export default function EmployeeDetailsModal({ isOpen, onClose, employee }) {
           Close
         </button>
       </div>
-    </Modal>
+    </OffCanvasPanel>
   );
 }

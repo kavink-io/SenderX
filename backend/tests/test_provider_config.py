@@ -189,6 +189,7 @@ def test_super_admin_can_manage_platform_provider_config(client, test_context, a
     config_data = res.get_json()["data"]
     assert config_data["provider"] == provider_name
     assert config_data["configured"] is True
+    assert config_data.get("updated_at")
     # Verify zero credentials exposure
     assert "credentials" not in config_data
     assert "api_key" not in str(res.get_json())
@@ -247,6 +248,17 @@ def test_organization_scoped_provider_config(client, test_context, app):
     assert "credentials" not in config_data
     assert tenant_secret not in str(res.get_json())
 
+    rotated_secret = "TENANT_SECRET_API_KEY_ROTATED"
+    update_res = client.post(
+        "/api/v1/provider-config/organization",
+        headers=headers,
+        json={
+            "provider": provider_name,
+            "credentials": {"api_key": rotated_secret}
+        }
+    )
+    assert update_res.status_code == 201
+
     # 3. Verify internal decryption is tenant-isolated
     with app.app_context():
         # Scoped to org
@@ -255,7 +267,8 @@ def test_organization_scoped_provider_config(client, test_context, app):
             organization_id=test_context["org_id"]
         )
         assert decrypted_org is not None
-        assert decrypted_org["api_key"] == tenant_secret
+        assert decrypted_org["api_key"] == rotated_secret
+        assert decrypted_org["from_email"] == "tenant@test.io"
 
         # Another org should not see it
         decrypted_other = ProviderConfigService.get_decrypted_configuration(

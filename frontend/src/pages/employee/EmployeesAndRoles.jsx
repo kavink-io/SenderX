@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, lazy, Suspense } from 'react';
 import EmployeesList from '../../components/employee/EmployeesList';
-import RolesList from '../../components/employee/RolesList';
-import AuditLogsList from '../../components/employee/AuditLogsList';
+import PageLoader from '../../components/common/PageLoader';
 import { GlassTabs } from '../../components/glass';
+
+const RolesList = lazy(() => import('../../components/employee/RolesList'));
+const AuditLogsList = lazy(() => import('../../components/employee/AuditLogsList'));
 
 export default function EmployeesAndRoles() {
   const [subTab, setSubTab] = useState('EMPLOYEES'); // 'EMPLOYEES', 'ROLES', 'AUDIT'
@@ -23,8 +25,16 @@ export default function EmployeesAndRoles() {
       </div>
 
       {subTab === 'EMPLOYEES' && <EmployeesList />}
-      {subTab === 'ROLES' && <RolesList />}
-      {subTab === 'AUDIT' && <AuditLogsList />}
+      {subTab === 'ROLES' && (
+        <Suspense fallback={<PageLoader compact label="Loading roles..." />}>
+          <RolesList />
+        </Suspense>
+      )}
+      {subTab === 'AUDIT' && (
+        <Suspense fallback={<PageLoader compact label="Loading audit logs..." />}>
+          <AuditLogsList />
+        </Suspense>
+      )}
     </div>
   );
 }

@@ -35,7 +35,8 @@ export default function Sidebar({ isOpen, onClose, onToggle }) {
         { title: 'Manage', ids: ['menu-overview', 'menu-messages', 'menu-templates'] },
         { title: 'Insights', ids: ['menu-analytics'] },
         { title: 'Manage Accounts', ids: ['menu-applications', 'menu-credentials', 'menu-users'] },
-        { title: 'Tools', ids: ['menu-json-requests', 'menu-dlq', 'menu-settings'] },
+        { title: 'Channel Configurations', ids: ['menu-channel-configurations'] },
+        { title: 'Tools', ids: ['menu-json-requests', 'menu-dlq'] },
       ];
 
   return (

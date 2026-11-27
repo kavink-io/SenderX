@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { getSafeRedirectPath } from '../../utils/authRedirect';
 
 export default function LoginForm({ onForgotClick, onActivateClick }) {
   const [email, setEmail] = useState('');
@@ -12,6 +13,7 @@ export default function LoginForm({ onForgotClick, onActivateClick }) {
   const { login } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -23,11 +25,8 @@ export default function LoginForm({ onForgotClick, onActivateClick }) {
       const res = await login(trimmedEmail, password);
       if (res.success) {
         showToast('Signed in successfully!', 'success');
-        if (res.account?.account_type === 'PLATFORM_ADMIN') {
-          navigate('/platform/organizations');
-        } else {
-          navigate('/org/overview');
-        }
+        const destination = getSafeRedirectPath(location.state?.from, res.account);
+        navigate(destination, { replace: true });
       } else {
         setError(res.message || 'Invalid email or password.');
       }

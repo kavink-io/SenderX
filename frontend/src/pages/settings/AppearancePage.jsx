@@ -6,7 +6,7 @@ export default function AppearancePage() {
     <section className="tab-pane active" aria-labelledby="appearance-page-title">
       <header className="appearance-page-header">
         <h1 id="appearance-page-title">Appearance &amp; Layout</h1>
-        <p>Personalize your SenderX workspace. Changes apply immediately and are saved on this device.</p>
+        <p>Personalize your SenderX workspace. Changes apply immediately and are saved to your user account.</p>
       </header>
       <AppearanceSettings />
     </section>

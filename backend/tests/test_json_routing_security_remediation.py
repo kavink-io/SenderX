@@ -1,10 +1,10 @@
 """
 SenderX Phase 4, Task 2.2: JSON Routing & DLQ Security Remediation Test Suite
 Verifies all findings from SEC-01 through SEC-04, ARCH-01 through ARCH-03, and TEST-01:
-1. API credential creation returns full key once; subsequent retrievals return key_prefix and hash only.
+1. Supplied API keys are encrypted at rest and never returned by API responses.
 2. API credential verification authenticates valid keys (both live and test).
 3. Revoked API credentials reject requests with HTTP 401.
-4. Rotated API credentials: old key rejected, new key accepted.
+4. Replaced API credentials: old key rejected, replacement accepted.
 5. Ingestion with valid API key automatically binds organization_id and application_id from credential record.
 6. Ingestion rejecting client spoofing (X-Application-ID header or JSON field differing from credential binding) with HTTP 403.
 7. Unauthenticated ingestion attempts rejected with HTTP 401.
@@ -28,7 +28,7 @@ import pytest
 from flask_jwt_extended import create_access_token
 
 from app import create_app
-from app.modules.api_credentials.models import generate_api_key, hash_api_key
+from app.modules.api_credentials.models import hash_api_key
 from app.modules.api_credentials.repository import ApiCredentialRepository
 from app.modules.applications.repository import ApplicationRepository
 from app.modules.dead_letters.repository import DeadLetterRepository
@@ -196,56 +196,93 @@ def test_setup(app):
 # 1. API CREDENTIALS (SEC-01)
 # ===========================================================================
 
-def test_api_credential_creation_returns_full_key_once(client, test_setup, app):
-    """Scenario 1: API credential creation returns full key once; subsequent retrievals return prefix only."""
+def test_api_credential_registration_encrypts_key_and_redacts_responses(client, test_setup, app):
+    """Scenario 1: supplied keys are encrypted at rest and never returned."""
     headers = test_setup["headers_admin_a"]
     org_id = test_setup["org_a"]
+    raw_api_key = f"client-supplied-{uuid.uuid4().hex}"
 
-    # 1. Create API credential
+    missing_key_res = client.post(
+        "/api/v1/api-credentials/",
+        json={"application_id": "app_checkout", "name": "Missing value"},
+        headers=headers,
+    )
+    assert missing_key_res.status_code == 400
+
     create_res = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": "app_checkout", "name": "Checkout API Key", "environment": "live"},
+        json={
+            "application_id": "app_checkout",
+            "name": "Checkout API Key",
+            "environment": "live",
+            "api_key": raw_api_key,
+        },
         headers=headers
     )
     assert create_res.status_code == 201
     created_data = create_res.get_json()["data"]
-    assert "api_key" in created_data
-    raw_api_key = created_data["api_key"]
-    assert raw_api_key.startswith("sx_live_")
+    assert "api_key" not in created_data
+    assert "raw_key" not in create_res.get_json()
     credential_id = created_data["credential_id"]
 
-    # 2. Subsequent GET /<id> does not contain raw api_key or key_hash
+    duplicate_res = client.post(
+        "/api/v1/api-credentials/",
+        json={
+            "application_id": "app_testing",
+            "name": "Duplicate Key",
+            "environment": "live",
+            "api_key": raw_api_key,
+        },
+        headers=headers,
+    )
+    assert duplicate_res.status_code == 409
+
     get_res = client.get(f"/api/v1/api-credentials/{credential_id}", headers=headers)
     assert get_res.status_code == 200
     retrieved_data = get_res.get_json()["data"]
     assert "api_key" not in retrieved_data
     assert "key_hash" not in retrieved_data
-    assert retrieved_data["key_prefix"].startswith(raw_api_key[:12])
+    assert retrieved_data["key_prefix"] == "••••••••"
     assert retrieved_data["application_id"] == "app_checkout"
     assert retrieved_data["organization_id"] == org_id
+    cross_tenant = client.get(
+        f"/api/v1/api-credentials/{credential_id}",
+        headers=test_setup["headers_admin_b"],
+    )
+    assert cross_tenant.status_code == 404
+    cross_tenant_update = client.patch(
+        f"/api/v1/api-credentials/{credential_id}",
+        headers=test_setup["headers_admin_b"],
+        json={"name": "Unauthorized"},
+    )
+    assert cross_tenant_update.status_code == 404
+    cross_tenant_delete = client.delete(
+        f"/api/v1/api-credentials/{credential_id}",
+        headers=test_setup["headers_admin_b"],
+    )
+    assert cross_tenant_delete.status_code == 404
 
-    # 3. Raw MongoDB document stores key_hash only, never plaintext
     with app.app_context():
         raw_doc = app.mongo_db["api_credentials"].find_one({"credential_id": credential_id})
         assert raw_doc is not None
-        assert "key_hash" in raw_doc
         assert raw_doc["key_hash"] == hash_api_key(raw_api_key)
         assert "api_key" not in raw_doc
+        assert raw_doc["key_encrypted"]["_encrypted"] is True
+        assert raw_api_key not in str(raw_doc["key_encrypted"])
+        assert PayloadEncryption.decrypt_dict(raw_doc["key_encrypted"]) == {"api_key": raw_api_key}
 
 
 def test_api_credential_verification_live_and_test(client, test_setup):
     """Scenario 2: API credential verification authenticates both live and test keys."""
     headers = test_setup["headers_admin_a"]
 
-    # Create test key
+    test_key = f"external-test-{uuid.uuid4().hex}"
     create_test = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": "app_testing", "name": "Test Key", "environment": "test"},
+        json={"application_id": "app_testing", "name": "Test Key", "environment": "test", "api_key": test_key},
         headers=headers
     )
     assert create_test.status_code == 201
-    test_key = create_test.get_json()["data"]["api_key"]
-    assert test_key.startswith("sx_test_")
 
     # Ingest using test API key
     payload = {
@@ -270,16 +307,14 @@ def test_revoked_api_credentials_reject_401(client, test_setup):
     """Scenario 3: Revoked API credentials reject requests with HTTP 401."""
     headers = test_setup["headers_admin_a"]
 
-    # Create credential
+    api_key = f"external-delete-{uuid.uuid4().hex}"
     create_res = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": "app_to_revoke", "name": "Revoke Test", "environment": "live"},
+        json={"application_id": "app_to_revoke", "name": "Delete Test", "environment": "live", "api_key": api_key},
         headers=headers
     )
     cred_id = create_res.get_json()["data"]["credential_id"]
-    api_key = create_res.get_json()["data"]["api_key"]
 
-    # Revoke credential
     del_res = client.delete(f"/api/v1/api-credentials/{cred_id}", headers=headers)
     assert del_res.status_code == 200
 
@@ -291,26 +326,66 @@ def test_revoked_api_credentials_reject_401(client, test_setup):
     )
     assert res.status_code == 401
     assert "Invalid or revoked API key" in res.get_json()["message"]
+    assert client.get(f"/api/v1/api-credentials/{cred_id}", headers=headers).status_code == 404
+
+    other_key = f"external-survivor-{uuid.uuid4().hex}"
+    other_credential = client.post(
+        "/api/v1/api-credentials/",
+        json={
+            "application_id": "app_to_revoke",
+            "name": "Unaffected key",
+            "environment": "live",
+            "api_key": other_key,
+        },
+        headers=headers,
+    )
+    assert other_credential.status_code == 201
+    other_id = other_credential.get_json()["data"]["credential_id"]
+    assert client.get(f"/api/v1/api-credentials/{other_id}", headers=headers).status_code == 200
 
 
-def test_rotated_api_credentials(client, test_setup):
-    """Scenario 4: Rotated credentials: old key rejected, new key accepted."""
+def test_replaced_api_credentials_metadata_preserves_secret(client, test_setup, app):
+    """Scenario 4: Metadata edits preserve keys; replacement invalidates the old value."""
     headers = test_setup["headers_admin_a"]
 
-    # Create initial credential
+    old_key = f"external-old-{uuid.uuid4().hex}"
     create_res = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": "app_rotation", "name": "Rotation Test", "environment": "live"},
+        json={"application_id": "app_rotation", "name": "Replacement Test", "environment": "live", "api_key": old_key},
         headers=headers
     )
+    assert create_res.status_code == 201
     cred_id = create_res.get_json()["data"]["credential_id"]
-    old_key = create_res.get_json()["data"]["api_key"]
 
-    # Rotate credential
-    rotate_res = client.post(f"/api/v1/api-credentials/{cred_id}/rotate", headers=headers)
-    assert rotate_res.status_code == 200
-    new_key = rotate_res.get_json()["data"]["api_key"]
+    with app.app_context():
+        original_doc = app.mongo_db["api_credentials"].find_one({"credential_id": cred_id})
+        original_hash = original_doc["key_hash"]
+        original_envelope = original_doc["key_encrypted"]
+
+    metadata_res = client.patch(
+        f"/api/v1/api-credentials/{cred_id}",
+        headers=headers,
+        json={"name": "Metadata Updated", "description": "Metadata only"},
+    )
+    assert metadata_res.status_code == 200
+    with app.app_context():
+        metadata_doc = app.mongo_db["api_credentials"].find_one({"credential_id": cred_id})
+        assert metadata_doc["key_hash"] == original_hash
+        assert metadata_doc["key_encrypted"] == original_envelope
+
+    new_key = f"external-new-{uuid.uuid4().hex}"
+    replace_res = client.patch(
+        f"/api/v1/api-credentials/{cred_id}",
+        headers=headers,
+        json={"api_key": new_key},
+    )
+    assert replace_res.status_code == 200
+    assert "api_key" not in replace_res.get_json()["data"]
     assert new_key != old_key
+    with app.app_context():
+        replacement_doc = app.mongo_db["api_credentials"].find_one({"credential_id": cred_id})
+        assert replacement_doc["key_hash"] != original_hash
+        assert PayloadEncryption.decrypt_dict(replacement_doc["key_encrypted"]) == {"api_key": new_key}
 
     # Old key fails
     payload = {"channel": "email", "recipient": "kavin@example.com", "data": {"text": "Rotate"}}
@@ -329,12 +404,12 @@ def test_ingestion_binds_org_and_app_from_credential(client, test_setup, app):
     headers = test_setup["headers_admin_a"]
     org_id = test_setup["org_a"]
 
+    api_key = f"external-bound-{uuid.uuid4().hex}"
     create_res = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": "app_bound_context", "name": "Binding Test", "environment": "live"},
+        json={"application_id": "app_bound_context", "name": "Binding Test", "environment": "live", "api_key": api_key},
         headers=headers
     )
-    api_key = create_res.get_json()["data"]["api_key"]
 
     payload = {
         "channel": "email",
@@ -359,12 +434,12 @@ def test_ingestion_rejects_client_spoofing_403(client, test_setup):
     """Scenario 6: Ingestion rejecting client spoofing (X-Application-ID header or JSON field differing) with HTTP 403."""
     headers = test_setup["headers_admin_a"]
 
+    api_key = f"external-legit-{uuid.uuid4().hex}"
     create_res = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": "legit_app", "name": "Spoof Test", "environment": "live"},
+        json={"application_id": "legit_app", "name": "Spoof Test", "environment": "live", "api_key": api_key},
         headers=headers
     )
-    api_key = create_res.get_json()["data"]["api_key"]
 
     # 1. Spoofed header
     res1 = client.post(

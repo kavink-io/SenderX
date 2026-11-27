@@ -22,7 +22,6 @@ import pytest
 from flask_jwt_extended import create_access_token
 
 from app import create_app
-from app.modules.api_credentials.models import generate_api_key, hash_api_key
 from app.modules.api_credentials.rate_limiter import DistributedRateLimiter, RateLimiterError
 from app.modules.api_credentials.repository import ApiCredentialRepository
 from app.modules.api_credentials.service import ApiCredentialService
@@ -230,13 +229,13 @@ def test_connected_applications_list_and_api_key_message_access(client, setup_co
     assert isinstance(listed.get_json()["data"], list)
     assert any(item["application_id"] == app_id for item in listed.get_json()["data"])
 
+    api_key = f"external-messaging-{uuid.uuid4().hex}"
     credential = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": app_id, "name": "External client key"},
+        json={"application_id": app_id, "name": "External client key", "api_key": api_key},
         headers=headers,
     )
     assert credential.status_code == 201
-    api_key = credential.get_json()["data"]["api_key"]
     api_headers = {"X-API-Key": api_key}
 
     # Missing explicit routing must be rejected instead of falling back to email.
@@ -274,18 +273,30 @@ def test_connected_applications_list_and_api_key_message_access(client, setup_co
         assert status.status_code == 200
         assert get_message.call_args.kwargs["user_application_ids"] == [app_id]
 
+    create_only_key = f"external-create-only-{uuid.uuid4().hex}"
     create_only = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": app_id, "name": "Create only", "scopes": ["messages:create"]},
+        json={
+            "application_id": app_id,
+            "name": "Create only",
+            "api_key": create_only_key,
+            "scopes": ["messages:create"],
+        },
         headers=headers,
-    ).get_json()["data"]["api_key"]
-    denied_status = client.get("/api/v1/messages/msg_api_key", headers={"X-API-Key": create_only})
+    )
+    assert create_only.status_code == 201
+    denied_status = client.get("/api/v1/messages/msg_api_key", headers={"X-API-Key": create_only_key})
     assert denied_status.status_code == 403
     assert "messages:read" in denied_status.get_json()["missing_scopes"]
 
     invalid_scopes = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": app_id, "name": "Invalid scope", "scopes": ["organization:configuration:manage"]},
+        json={
+            "application_id": app_id,
+            "name": "Invalid scope",
+            "api_key": f"external-invalid-scope-{uuid.uuid4().hex}",
+            "scopes": ["organization:configuration:manage"],
+        },
         headers=headers,
     )
     assert invalid_scopes.status_code == 400
@@ -326,7 +337,11 @@ def test_application_soft_delete_revokes_keys_and_retains_record(client, setup_c
     app_id = registered.get_json()["data"]["application_id"]
     credential = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": app_id, "name": "Delete test key"},
+        json={
+            "application_id": app_id,
+            "name": "Delete test key",
+            "api_key": f"external-delete-{uuid.uuid4().hex}",
+        },
         headers=headers,
     ).get_json()["data"]
 
@@ -363,13 +378,18 @@ def test_application_lifecycle_and_cascade_deactivation(client, setup_context):
     app_id = reg_res.get_json()["data"]["application_id"]
 
     # 2. Create API credential bound to this app
+    raw_key = f"external-mobile-{uuid.uuid4().hex}"
     cred_res = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": app_id, "name": "Mobile iOS Key", "environment": "live"},
+        json={
+            "application_id": app_id,
+            "name": "Mobile iOS Key",
+            "environment": "live",
+            "api_key": raw_key,
+        },
         headers=headers
     )
     assert cred_res.status_code == 201
-    raw_key = cred_res.get_json()["data"]["api_key"]
     cred_id = cred_res.get_json()["data"]["credential_id"]
 
     # 3. Authenticate with this key - should succeed
@@ -407,14 +427,18 @@ def test_application_lifecycle_and_cascade_deactivation(client, setup_context):
     )
     assert failed_ingest.status_code == 401
 
-    # 8. Attempt to generate new credential for deactivated app must fail
+    # 8. Registering a supplied key for a deactivated app must fail
     bad_cred = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": app_id, "name": "Should Fail Key"},
+        json={
+            "application_id": app_id,
+            "name": "Should Fail Key",
+            "api_key": f"external-inactive-{uuid.uuid4().hex}",
+        },
         headers=headers
     )
     assert bad_cred.status_code == 400
-    assert "inactive/deactivated" in bad_cred.get_json()["message"]
+    assert "inactive" in bad_cred.get_json()["message"].lower()
 
 
 # ===========================================================================
@@ -434,19 +458,19 @@ def test_environment_isolation_enforcement(client, setup_context, app):
     app_id = reg_res.get_json()["data"]["application_id"]
 
     # Create test key and live key
+    live_key = f"external-live-{uuid.uuid4().hex}"
     live_res = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": app_id, "name": "Live Key", "environment": "live"},
+        json={"application_id": app_id, "name": "Live Key", "environment": "live", "api_key": live_key},
         headers=headers
     )
-    live_key = live_res.get_json()["data"]["api_key"]
 
+    test_key = f"external-test-{uuid.uuid4().hex}"
     test_res = client.post(
         "/api/v1/api-credentials/",
-        json={"application_id": app_id, "name": "Test Key", "environment": "test"},
+        json={"application_id": app_id, "name": "Test Key", "environment": "test", "api_key": test_key},
         headers=headers
     )
-    test_key = test_res.get_json()["data"]["api_key"]
 
     # In production environment: test credentials must be blocked with HTTP 403
     with patch.dict(app.config, {"APP_ENV": "production"}):

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../../components/tables/DataGrid';
+import GridActionButton from '../../components/tables/GridActionButton';
 import RejectChangeRequestModal from '../../components/modals/RejectChangeRequestModal';
 import { useToast } from '../../context/ToastContext';
 import { GlassSearch, GlassSelect } from '../../components/glass';
@@ -120,8 +121,8 @@ export default function PlatformChangeRequests() {
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 170,
-      maxWidth: 210,
+      minWidth: 72,
+      maxWidth: 82,
       sortable: false,
       filter: false,
       resizable: false,
@@ -137,20 +138,17 @@ export default function PlatformChangeRequests() {
           );
         }
         return (
-          <div style={{ display: 'inline-flex', gap: '6px' }}>
-            <button type="button" className="btn btn-success btn-sm" onClick={() => handleApprove(req)}>
-              Approve
-            </button>
-            <button
-              type="button"
-              className="btn btn-danger btn-sm"
+          <div className="ag-icon-actions" role="group" aria-label="Change request actions">
+            <GridActionButton icon="check" label="Approve change request" variant="success" onClick={() => handleApprove(req)} />
+            <GridActionButton
+              icon="close"
+              label="Reject change request"
+              variant="danger"
               onClick={() => {
                 setSelectedRequest(req);
                 setIsRejectOpen(true);
               }}
-            >
-              Reject
-            </button>
+            />
           </div>
         );
       },

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../tables/DataGrid';
+import GridActionButton from '../tables/GridActionButton';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 
@@ -129,8 +130,8 @@ export default function ChangeRequestsSection() {
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 105,
-      maxWidth: 125,
+      minWidth: 48,
+      maxWidth: 60,
       sortable: false,
       filter: false,
       resizable: false,
@@ -140,9 +141,9 @@ export default function ChangeRequestsSection() {
       cellRenderer: ({ data: req }) => {
         if (req.status !== 'PENDING' || !isOrgAdmin) return null;
         return (
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleCancel(req)}>
-            Cancel
-          </button>
+          <div className="ag-icon-actions" role="group" aria-label="Change request actions">
+            <GridActionButton icon="close" label="Cancel change request" onClick={() => handleCancel(req)} />
+          </div>
         );
       },
     },

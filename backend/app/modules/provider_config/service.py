@@ -125,11 +125,8 @@ class ProviderConfigService:
     def save_configuration(cls, provider, credentials, organization_id=None):
 
         provider = provider.lower().strip()
-        cls.validate_credentials(provider, credentials)
-
-        encrypted_credentials = cls._cipher().encrypt(
-            json.dumps(credentials).encode()
-        ).decode()
+        if not isinstance(credentials, dict) or not credentials:
+            raise ValueError("Credentials dictionary cannot be empty")
 
         collection = current_app.mongo_db[
             "provider_configs"
@@ -139,16 +136,31 @@ class ProviderConfigService:
             "provider": provider,
             "organization_id": organization_id
         }
+        existing = collection.find_one(
+            {**query, "configured": True},
+            {"credentials": 1}
+        )
+        merged_credentials = {}
+        if existing and existing.get("credentials"):
+            decrypted = cls._cipher().decrypt(existing["credentials"].encode())
+            merged_credentials = json.loads(decrypted.decode())
+        merged_credentials.update(credentials)
+        cls.validate_credentials(provider, merged_credentials)
+
+        encrypted_credentials = cls._cipher().encrypt(
+            json.dumps(merged_credentials).encode()
+        ).decode()
 
         set_doc = {
             "provider": provider,
             "organization_id": organization_id,
             "credentials": encrypted_credentials,
-            "configured": True
+            "configured": True,
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
-        if "token_expires_at" in credentials and credentials["token_expires_at"] is not None:
+        if "token_expires_at" in merged_credentials and merged_credentials["token_expires_at"] is not None:
             try:
-                set_doc["token_expires_at"] = float(credentials["token_expires_at"])
+                set_doc["token_expires_at"] = float(merged_credentials["token_expires_at"])
             except (ValueError, TypeError):
                 pass
 
@@ -178,7 +190,8 @@ class ProviderConfigService:
                 "_id": 0,
                 "provider": 1,
                 "configured": 1,
-                "organization_id": 1
+                "organization_id": 1,
+                "updated_at": 1
             }
         )
 
@@ -193,7 +206,8 @@ class ProviderConfigService:
                     "_id": 0,
                     "provider": 1,
                     "configured": 1,
-                    "organization_id": 1
+                    "organization_id": 1,
+                    "updated_at": 1
                 }
             )
 
@@ -215,7 +229,8 @@ class ProviderConfigService:
                     "_id": 0,
                     "provider": 1,
                     "configured": 1,
-                    "organization_id": 1
+                    "organization_id": 1,
+                    "updated_at": 1
                 }
             )
         )

@@ -1,6 +1,7 @@
 import re
 import uuid
 import bcrypt
+from datetime import date, datetime
 from pymongo.errors import DuplicateKeyError
 from flask import current_app
 from app.config.settings import Config
@@ -17,6 +18,13 @@ from app.modules.applications.repository import ApplicationRepository
 class UserService:
 
     ALLOWED_ORGANIZATION_PERMISSIONS = set(OrganizationService.ORG_ADMIN_PERMISSIONS)
+    ALLOWED_GENDERS = {
+        "male": "Male",
+        "female": "Female",
+        "non-binary": "Non-binary",
+        "prefer not to say": "Prefer not to say",
+        "other": "Other"
+    }
 
     PERMISSION_CATEGORIES = {
         "MESSAGING": [
@@ -129,6 +137,106 @@ class UserService:
             return None, "Phone number must contain between 7 and 15 digits"
         return clean, None
 
+    @classmethod
+    def validate_gender(cls, gender):
+        if gender is None or (isinstance(gender, str) and not gender.strip()):
+            return None, None
+        if not isinstance(gender, str):
+            return None, "Gender must be a string"
+        normalized = " ".join(gender.strip().split()).casefold()
+        canonical = cls.ALLOWED_GENDERS.get(normalized)
+        if canonical is None:
+            return None, "Select a valid gender option"
+        return canonical, None
+
+    @staticmethod
+    def _age_group_from_date_of_birth(date_of_birth):
+        if isinstance(date_of_birth, datetime):
+            birth_date = date_of_birth.date()
+        elif isinstance(date_of_birth, date):
+            birth_date = date_of_birth
+        elif isinstance(date_of_birth, str):
+            try:
+                birth_date = datetime.fromisoformat(
+                    date_of_birth.strip().replace("Z", "+00:00")
+                ).date()
+            except ValueError:
+                return None
+        else:
+            return None
+
+        today = date.today()
+        if birth_date > today:
+            return None
+        age = today.year - birth_date.year - (
+            (today.month, today.day) < (birth_date.month, birth_date.day)
+        )
+        if age < 18:
+            return "under_18"
+        if age <= 25:
+            return "18_25"
+        if age <= 35:
+            return "26_35"
+        if age <= 45:
+            return "36_45"
+        if age <= 60:
+            return "46_60"
+        return "over_60"
+
+    @staticmethod
+    def _age_group_from_age(age):
+        if isinstance(age, bool):
+            return None
+        if isinstance(age, int):
+            pass
+        elif isinstance(age, str) and age.strip().isdigit():
+            age = int(age.strip())
+        else:
+            return None
+        if age < 0:
+            return None
+        if age < 18:
+            return "under_18"
+        if age <= 25:
+            return "18_25"
+        if age <= 35:
+            return "26_35"
+        if age <= 45:
+            return "36_45"
+        if age <= 60:
+            return "46_60"
+        return "over_60"
+
+    @classmethod
+    def _new_avatar_profile(cls, gender, date_of_birth=None, age=None):
+        age_group = cls._age_group_from_date_of_birth(date_of_birth)
+        if age_group is None:
+            age_group = cls._age_group_from_age(age)
+        return {
+            "version": 1,
+            "seed": uuid.uuid4().hex,
+            "gender": gender,
+            "age_group": age_group
+        }
+
+    @staticmethod
+    def _profile_avatar_fields(user):
+        fields = (
+            "gender",
+            "date_of_birth",
+            "age",
+            "avatar_profile",
+            "avatar_url",
+            "profile_photo_url",
+            "profile_picture_url",
+            "profile_image_url",
+            "photo_url",
+            "profile_photo",
+            "profile_picture",
+            "avatar"
+        )
+        return {field: user[field] for field in fields if field in user}
+
     # ======================================================
     # EMPLOYEE MANAGEMENT
     # ======================================================
@@ -199,6 +307,10 @@ class UserService:
         if phone_err:
             return {"success": False, "message": phone_err, "status_code": 400}
 
+        gender, gender_err = cls.validate_gender(data.get("gender"))
+        if gender_err:
+            return {"success": False, "message": gender_err, "status_code": 400}
+
         # Normalize and validate role assignments
         validated_assignments, validation_err = cls._normalize_and_validate_role_assignments(
             role_ids=role_ids,
@@ -223,6 +335,8 @@ class UserService:
             "email": email,
             "department": dept_clean,
             "phone": phone_clean,
+            "gender": gender,
+            "avatar_profile": cls._new_avatar_profile(gender),
             "role_ids": derived_role_ids,
             "role_assignments": validated_assignments,
             "application_ids": derived_app_ids,
@@ -247,6 +361,7 @@ class UserService:
                     "employee_code": assigned_employee_code,
                     "department": dept_clean,
                     "phone": phone_clean,
+                    "gender": gender,
                     "role_ids": derived_role_ids,
                     "application_ids": derived_app_ids,
                     "status": "PENDING_ACTIVATION"
@@ -261,6 +376,7 @@ class UserService:
                 "email": created["email"],
                 "department": created.get("department"),
                 "phone": created.get("phone"),
+                **cls._profile_avatar_fields(created),
                 "role_ids": created["role_ids"],
                 "role_assignments": created.get("role_assignments", []),
                 "application_ids": created.get("application_ids", []),
@@ -415,6 +531,7 @@ class UserService:
                 "email": user["email"],
                 "department": user.get("department"),
                 "phone": user.get("phone"),
+                **cls._profile_avatar_fields(user),
                 "role_ids": user.get("role_ids", []),
                 "role_assignments": enriched_assignments,
                 "roles": enriched_assignments,
@@ -568,6 +685,14 @@ class UserService:
                 "allowed_actions": ["create_key", "rotate_key", "revoke_key"]
             },
             {
+                "id": "menu-channel-configurations",
+                "name": "Channel Configurations",
+                "tab_id": "tab-org-channels",
+                "required_permission": "organization:providers:read",
+                "icon": "settings",
+                "allowed_actions": ["view_provider_configs", "manage_provider_configs"]
+            },
+            {
                 "id": "menu-messages",
                 "name": "Messages",
                 "tab_id": "tab-org-messages",
@@ -673,6 +798,7 @@ class UserService:
                 "organization_id": organization_id,
                 "organization_name": organization.get("name", "Organization Workspace"),
                 "organization_status": organization.get("status", "ACTIVE"),
+                **cls._profile_avatar_fields(user),
                 "is_org_admin": is_admin,
                 "roles": user_roles_list,
                 "role_assignments": enriched_assignments,
@@ -828,6 +954,21 @@ class UserService:
             if phone_err:
                 return {"success": False, "status_code": 400, "message": phone_err}
             update_fields["phone"] = phone_clean
+
+        if "gender" in data:
+            gender, gender_err = cls.validate_gender(data.get("gender"))
+            if gender_err:
+                return {"success": False, "status_code": 400, "message": gender_err}
+            update_fields["gender"] = gender
+
+        if "refresh_avatar" in data and not isinstance(data["refresh_avatar"], bool):
+            return {"success": False, "status_code": 400, "message": "refresh_avatar must be a boolean"}
+        if data.get("refresh_avatar") is True:
+            update_fields["avatar_profile"] = cls._new_avatar_profile(
+                update_fields.get("gender", user.get("gender")),
+                user.get("date_of_birth"),
+                user.get("age")
+            )
 
         if "is_active" in data:
             if not isinstance(data["is_active"], bool):

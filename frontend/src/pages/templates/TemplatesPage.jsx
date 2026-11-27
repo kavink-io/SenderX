@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../../components/tables/DataGrid';
-import TemplateStudioModal from '../../components/templates/TemplateStudioModal';
-import TemplatePreviewModal from '../../components/modals/TemplatePreviewModal';
+import GridActionButton from '../../components/tables/GridActionButton';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { GlassSearch, GlassSelect } from '../../components/glass';
+
+const TemplateStudioModal = lazy(() => import('../../components/templates/TemplateStudioModal'));
+const TemplatePreviewModal = lazy(() => import('../../components/modals/TemplatePreviewModal'));
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState([]);
@@ -16,8 +18,10 @@ export default function TemplatesPage() {
   const [isLoading, setIsLoading] = useState(true);
 
   const [isStudioOpen, setIsStudioOpen] = useState(false);
+  const [studioMounted, setStudioMounted] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [previewTemplate, setPreviewTemplate] = useState(null);
+  const [previewMounted, setPreviewMounted] = useState(false);
 
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
@@ -54,6 +58,7 @@ export default function TemplatesPage() {
   const handleEditOpen = async (t) => {
     const tid = t.template_id || t._id || t.id;
     setEditingTemplate(t);
+    setStudioMounted(true);
     setIsStudioOpen(true);
     try {
       const res = await ApiClient.getTemplate(tid);
@@ -167,9 +172,9 @@ export default function TemplatesPage() {
     {
       headerName: 'Actions',
       colId: 'actions',
-      width: hasDraft ? 210 : 176,
-      minWidth: 176,
-      maxWidth: 215,
+      width: hasDraft ? 180 : 144,
+      minWidth: 144,
+      maxWidth: 180,
       flex: 0,
       sortable: false,
       filter: false,
@@ -180,94 +185,13 @@ export default function TemplatesPage() {
       cellRenderer: ({ data: t }) => {
         const isDraft = t.status === 'DRAFT';
 
-        const rowActions = [
-          {
-            key: 'edit',
-            title: 'Edit',
-            ariaLabel: 'Edit template',
-            className: 'icon-btn icon-btn-sm',
-            onClick: () => handleEditOpen(t),
-            icon: (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-              </svg>
-            ),
-          },
-          {
-            key: 'preview',
-            title: 'Preview',
-            ariaLabel: 'Preview template',
-            className: 'icon-btn icon-btn-sm',
-            onClick: () => setPreviewTemplate(t),
-            icon: (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            ),
-          },
-          ...(isDraft
-            ? [
-                {
-                  key: 'publish',
-                  title: 'Publish',
-                  ariaLabel: 'Publish template',
-                  className: 'icon-btn icon-btn-sm icon-btn-success',
-                  onClick: () => handlePublish(t),
-                  icon: (
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                      <polyline points="22 4 12 14.01 9 11.01" />
-                    </svg>
-                  ),
-                },
-              ]
-            : []),
-          {
-            key: 'copy',
-            title: 'Duplicate as draft',
-            ariaLabel: 'Duplicate template as draft',
-            className: 'icon-btn icon-btn-sm',
-            onClick: () => handleDuplicate(t),
-            icon: (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
-            ),
-          },
-          {
-            key: 'delete',
-            title: 'Delete',
-            ariaLabel: 'Delete template',
-            className: 'icon-btn icon-btn-sm icon-btn-danger',
-            onClick: () => handleDelete(t),
-            icon: (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6" />
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                <line x1="10" y1="11" x2="10" y2="17" />
-                <line x1="14" y1="11" x2="14" y2="17" />
-              </svg>
-            ),
-          },
-        ];
-
         return (
-          <div style={{ display: 'inline-flex', gap: '6px' }}>
-            {rowActions.map((action) => (
-              <button
-                key={action.key}
-                type="button"
-                className={action.className}
-                onClick={action.onClick}
-                title={action.title}
-                aria-label={action.ariaLabel}
-              >
-                {action.icon}
-              </button>
-            ))}
+          <div className="ag-icon-actions" role="group" aria-label="Template actions">
+            <GridActionButton icon="edit" label="Edit template" onClick={() => handleEditOpen(t)} />
+            <GridActionButton icon="view" label="Preview template" onClick={() => { setPreviewMounted(true); setPreviewTemplate(t); }} />
+            {isDraft && <GridActionButton icon="check" label="Publish template" variant="success" onClick={() => handlePublish(t)} />}
+            <GridActionButton icon="copy" label="Duplicate template as draft" onClick={() => handleDuplicate(t)} />
+            <GridActionButton icon="delete" label="Delete template" variant="danger" onClick={() => handleDelete(t)} />
           </div>
         );
       },
@@ -315,6 +239,7 @@ export default function TemplatesPage() {
             className="btn btn-primary"
             onClick={() => {
               setEditingTemplate(null);
+              setStudioMounted(true);
               setIsStudioOpen(true);
             }}
             id="btn-open-template-studio"
@@ -361,21 +286,29 @@ export default function TemplatesPage() {
         )}
       </div>
 
-      <TemplateStudioModal
-        isOpen={isStudioOpen}
-        onClose={() => {
-          setIsStudioOpen(false);
-          setEditingTemplate(null);
-        }}
-        template={editingTemplate}
-        onSaved={fetchTemplates}
-      />
+      {(isStudioOpen || studioMounted) && (
+        <Suspense fallback={null}>
+          <TemplateStudioModal
+            isOpen={isStudioOpen}
+            onClose={() => {
+              setIsStudioOpen(false);
+              setEditingTemplate(null);
+            }}
+            template={editingTemplate}
+            onSaved={fetchTemplates}
+          />
+        </Suspense>
+      )}
 
-      <TemplatePreviewModal
-        isOpen={Boolean(previewTemplate)}
-        onClose={() => setPreviewTemplate(null)}
-        template={previewTemplate}
-      />
+      {(Boolean(previewTemplate) || previewMounted) && (
+        <Suspense fallback={null}>
+          <TemplatePreviewModal
+            isOpen={Boolean(previewTemplate)}
+            onClose={() => setPreviewTemplate(null)}
+            template={previewTemplate}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

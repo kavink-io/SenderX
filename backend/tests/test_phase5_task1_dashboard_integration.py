@@ -3,7 +3,7 @@ SenderX Phase 5 Task 1: Organization Dashboard Integration Tests
 Verifies the end-to-end contract between the organization dashboard and backend API:
 - Organization identity & current profile retrieval
 - Application lifecycle: registration, stats, deactivation, activation
-- Credential lifecycle: generation, one-time secret emission, rotation, revocation
+- Credential lifecycle: supplied-key registration, replacement, and deletion
 - Ingestion telemetry & payload listing
 - Organization analytics aggregation
 - User management & admin protection invariants
@@ -109,29 +109,28 @@ def test_02_register_and_list_application(client, test_org_context):
     assert "ingested_payloads_count" in stats_data["data"]
 
 
-def test_03_generate_credential_one_time_secret(client, test_org_context):
-    """Verifies creating an API credential returns raw key once."""
+def test_03_register_credential_without_revealing_secret(client, test_org_context):
+    """Verifies a supplied API key is registered without being returned."""
     headers = {"Authorization": f"Bearer {test_org_context['token']}"}
 
     # Find registered app
     list_res = client.get("/api/v1/applications/", headers=headers)
     app_id = list_res.get_json()["data"][0]["application_id"]
 
-    # Generate credential
+    raw_key = f"external-production-{uuid.uuid4().hex}"
     cred_res = client.post("/api/v1/api-credentials/", headers=headers, json={
         "name": "Production Ingestion Key",
         "application_id": app_id,
         "environment": "live",
+        "api_key": raw_key,
         "scopes": ["payloads:write", "messages:write"]
     })
     assert cred_res.status_code == 201
     cred_data = cred_res.get_json()
     assert cred_data["success"] is True
 
-    # One-time raw secret check
-    raw_key = cred_data.get("raw_key") or cred_data.get("api_key")
-    assert raw_key is not None
-    assert raw_key.startswith("sx_live_")
+    assert "api_key" not in cred_data
+    assert "raw_key" not in cred_res.get_json()
 
     cred_id = cred_data["data"]["credential_id"]
 
@@ -140,47 +139,39 @@ def test_03_generate_credential_one_time_secret(client, test_org_context):
     assert list_creds.status_code == 200
     matched = next((c for c in list_creds.get_json()["data"] if c["credential_id"] == cred_id), None)
     assert matched is not None
-    assert matched["key_prefix"].startswith("sx_live_")
+    assert matched["key_prefix"] == "••••••••"
     assert "raw_key" not in matched
     assert "api_key" not in matched
 
 
-def test_04_rotate_and_revoke_credential(client, test_org_context):
-    """Verifies credential rotation and revocation flows."""
+def test_04_replace_and_delete_credential(client, test_org_context):
+    """Verifies external key replacement and record deletion flows."""
     headers = {"Authorization": f"Bearer {test_org_context['token']}"}
 
-    # Generate credential
+    old_key = f"external-old-{uuid.uuid4().hex}"
     list_res = client.get("/api/v1/applications/", headers=headers)
     app_id = list_res.get_json()["data"][0]["application_id"]
 
     cred_res = client.post("/api/v1/api-credentials/", headers=headers, json={
         "name": "Rotation Test Key",
         "application_id": app_id,
-        "environment": "live"
+        "environment": "live",
+        "api_key": old_key,
     })
     cred_id = cred_res.get_json()["data"]["credential_id"]
 
-    # Rotate
-    rotate_res = client.post(f"/api/v1/api-credentials/{cred_id}/rotate", headers=headers, json={
-        "environment": "live"
-    })
-    assert rotate_res.status_code == 200
-    rot_data = rotate_res.get_json()
-    assert rot_data["success"] is True
-    new_raw_key = rot_data.get("raw_key") or rot_data.get("api_key")
-    assert new_raw_key is not None
-    assert new_raw_key.startswith("sx_live_")
+    replacement_key = f"external-replacement-{uuid.uuid4().hex}"
+    replace_res = client.patch(
+        f"/api/v1/api-credentials/{cred_id}",
+        headers=headers,
+        json={"api_key": replacement_key},
+    )
+    assert replace_res.status_code == 200
+    assert "api_key" not in replace_res.get_json()["data"]
 
-    # Revoke
-    revoke_res = client.delete(f"/api/v1/api-credentials/{cred_id}", headers=headers)
-    assert revoke_res.status_code == 200
-    rev_data = revoke_res.get_json()
-    assert rev_data["success"] is True
-
-    # Verify credential is now revoked
-    cred_detail = client.get(f"/api/v1/api-credentials/{cred_id}", headers=headers)
-    assert cred_detail.status_code == 200
-    assert cred_detail.get_json()["data"]["status"] == "REVOKED"
+    delete_res = client.delete(f"/api/v1/api-credentials/{cred_id}", headers=headers)
+    assert delete_res.status_code == 200
+    assert client.get(f"/api/v1/api-credentials/{cred_id}", headers=headers).status_code == 404
 
 
 def test_05_application_deactivation_and_activation(client, test_org_context):
@@ -198,7 +189,8 @@ def test_05_application_deactivation_and_activation(client, test_org_context):
     cred_res = client.post("/api/v1/api-credentials/", headers=headers, json={
         "name": "Temp Key",
         "application_id": app_id,
-        "environment": "live"
+        "environment": "live",
+        "api_key": f"external-temp-{uuid.uuid4().hex}",
     })
     cred_id = cred_res.get_json()["data"]["credential_id"]
 

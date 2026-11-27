@@ -1,10 +1,27 @@
-import React, { useState } from 'react';
+import React, { useState, lazy, Suspense } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
 import LoginForm from '../../components/forms/LoginForm';
-import AuthOtpFlow from '../../components/forms/AuthOtpFlow';
 import ThemeToggle from '../../components/common/ThemeToggle';
+import AuthLoadingScreen from '../../components/common/AuthLoadingScreen';
+import PageLoader from '../../components/common/PageLoader';
+import { useAuth } from '../../context/AuthContext';
+import { getSafeRedirectPath } from '../../utils/authRedirect';
+
+const AuthOtpFlow = lazy(() => import('../../components/forms/AuthOtpFlow'));
 
 export default function AuthPage() {
   const [view, setView] = useState('LOGIN'); // 'LOGIN', 'FORGOT', 'ACTIVATE'
+  const { isAuthenticated, isLoading, account } = useAuth();
+  const location = useLocation();
+
+  if (isLoading) {
+    return <AuthLoadingScreen message="Checking session..." />;
+  }
+
+  if (isAuthenticated) {
+    const destination = getSafeRedirectPath(location.state?.from, account);
+    return <Navigate to={destination} replace />;
+  }
 
   return (
     <div id="auth-view" className="view active" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', padding: '1.5rem' }}>
@@ -33,19 +50,23 @@ export default function AuthPage() {
         )}
 
         {view === 'FORGOT' && (
-          <AuthOtpFlow
-            purpose="PASSWORD_RESET"
-            onCancel={() => setView('LOGIN')}
-            onSuccessDone={() => setView('LOGIN')}
-          />
+          <Suspense fallback={<PageLoader compact label="Loading verification..." />}>
+            <AuthOtpFlow
+              purpose="PASSWORD_RESET"
+              onCancel={() => setView('LOGIN')}
+              onSuccessDone={() => setView('LOGIN')}
+            />
+          </Suspense>
         )}
 
         {view === 'ACTIVATE' && (
-          <AuthOtpFlow
-            purpose="ACTIVATION"
-            onCancel={() => setView('LOGIN')}
-            onSuccessDone={() => setView('LOGIN')}
-          />
+          <Suspense fallback={<PageLoader compact label="Loading activation..." />}>
+            <AuthOtpFlow
+              purpose="ACTIVATION"
+              onCancel={() => setView('LOGIN')}
+              onSuccessDone={() => setView('LOGIN')}
+            />
+          </Suspense>
         )}
       </div>
     </div>

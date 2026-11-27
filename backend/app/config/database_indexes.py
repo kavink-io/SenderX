@@ -266,6 +266,13 @@ def ensure_database_indexes(app=None, force=False):
     # 18. Platform Settings (Centralized Meta Platform Configuration)
     db["platform_settings"].create_index([("setting_key", pymongo.ASCENDING)], unique=True)
 
+    # 19. User-Specific Appearance & Layout Preferences
+    db["user_preferences"].create_index(
+        [("user_id", pymongo.ASCENDING), ("organization_id", pymongo.ASCENDING)],
+        unique=True,
+    )
+    db["user_preferences"].create_index([("organization_id", pymongo.ASCENDING)])
+
     _ensured_dbs.add(db_name)
 
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../../components/tables/DataGrid';
+import GridActionButton from '../../components/tables/GridActionButton';
 import ViewPayloadModal from '../../components/modals/ViewPayloadModal';
 import JsonAnalyzer from '../../components/dashboard/JsonAnalyzer';
 import { useToast } from '../../context/ToastContext';
@@ -94,8 +95,8 @@ export default function JsonRequests() {
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 135,
-      maxWidth: 155,
+      minWidth: 48,
+      maxWidth: 60,
       sortable: false,
       filter: false,
       resizable: false,
@@ -103,16 +104,16 @@ export default function JsonRequests() {
       headerClass: 'ag-right-aligned-header',
       cellClass: 'ag-actions-cell',
       cellRenderer: ({ data: p }) => (
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => {
+        <div className="ag-icon-actions" role="group" aria-label="JSON request actions">
+          <GridActionButton
+            icon="view"
+            label="View JSON payload"
+            onClick={() => {
             setSelectedPayload(p);
             setIsViewOpen(true);
           }}
-        >
-          View Payload
-        </button>
+          />
+        </div>
       ),
     },
   ], []);

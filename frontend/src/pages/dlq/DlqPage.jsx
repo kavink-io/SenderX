@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../../components/tables/DataGrid';
+import GridActionButton from '../../components/tables/GridActionButton';
 import { useToast } from '../../context/ToastContext';
 
 export default function DlqPage() {
@@ -107,8 +108,8 @@ export default function DlqPage() {
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 140,
-      maxWidth: 160,
+      minWidth: 48,
+      maxWidth: 60,
       sortable: false,
       filter: false,
       resizable: false,
@@ -116,9 +117,9 @@ export default function DlqPage() {
       headerClass: 'ag-right-aligned-header',
       cellClass: 'ag-actions-cell',
       cellRenderer: ({ data: item }) => (
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => handleDlqRetry(item)}>
-          Retry Delivery
-        </button>
+        <div className="ag-icon-actions" role="group" aria-label="Dead-letter message actions">
+          <GridActionButton icon="refresh" label="Retry delivery" onClick={() => handleDlqRetry(item)} />
+        </div>
       ),
     },
   ], [handleDlqRetry]);

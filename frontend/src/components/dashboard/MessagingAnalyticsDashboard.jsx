@@ -183,8 +183,8 @@ function formatDuration(milliseconds) {
   return `${(milliseconds / 60000).toFixed(2)} min`;
 }
 
-function downloadCsv(report, range) {
-  const rows = [
+function buildAnalyticsRows(report) {
+  return [
     ['Section', 'Metric', 'Date or channel', 'Value'],
     ['Summary', 'Total messages', '', report.overview?.total_messages ?? ''],
     ['Summary', 'Delivery rate (%)', '', report.overview?.delivery_rate_percent ?? ''],
@@ -200,6 +200,10 @@ function downloadCsv(report, range) {
     ...((report.hourly_trends || []).map((item) => ['Hourly trend', 'Messages', `${String(item.hour).padStart(2, '0')}:00 UTC`, item.total])),
     ...((report.delivery_latency_trends || []).map((item) => ['Delivery latency', 'Average milliseconds', item.date, item.average_ms])),
   ];
+}
+
+function downloadCsv(report, range) {
+  const rows = buildAnalyticsRows(report);
   const csv = rows.map((row) => row.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const anchor = document.createElement('a');
@@ -207,6 +211,64 @@ function downloadCsv(report, range) {
   anchor.download = `senderx-analytics-${range.start_date}-to-${range.end_date}.csv`;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[character]));
+}
+
+function buildPrintableReport(report, range) {
+  const rows = buildAnalyticsRows(report);
+  const headers = rows[0].map((value) => `<th scope="col">${escapeHtml(value)}</th>`).join('');
+  const body = rows.slice(1).map((row) => (
+    `<tr>${row.map((value) => `<td>${escapeHtml(value)}</td>`).join('')}</tr>`
+  )).join('');
+  const exportDate = new Date();
+  const exportTimestamp = exportDate.toLocaleString();
+  const fileTitle = `senderx-analytics-${range.start_date}-to-${range.end_date}`;
+
+  return `<!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>${escapeHtml(fileTitle)}</title>
+        <style>
+          @page { size: landscape; margin: 14mm; }
+          * { box-sizing: border-box; }
+          body { color: #172033; font: 10pt/1.45 Arial, sans-serif; margin: 0; }
+          header { border-bottom: 2px solid #635bdb; margin-bottom: 18px; padding-bottom: 12px; }
+          header strong { color: #5146c8; font-size: 13pt; letter-spacing: .04em; }
+          h1 { font-size: 19pt; margin: 10px 0 4px; }
+          header p { color: #596579; margin: 3px 0; }
+          table { border-collapse: collapse; table-layout: fixed; width: 100%; }
+          thead { display: table-header-group; }
+          tr { break-inside: avoid; page-break-inside: avoid; }
+          th, td { border: 1px solid #d8deea; overflow-wrap: anywhere; padding: 6px 8px; text-align: left; }
+          th { background: #f0f2fb; color: #25304a; font-weight: 700; }
+          tbody tr:nth-child(even) { background: #f8f9fc; }
+          @media print { a { color: inherit; text-decoration: none; } }
+        </style>
+      </head>
+      <body>
+        <header>
+          <strong>SenderX</strong>
+          <h1>Messaging Analytics</h1>
+          <p>Report period: ${escapeHtml(range.start_date)} through ${escapeHtml(range.end_date)} (UTC)</p>
+          <p>Exported: ${escapeHtml(exportTimestamp)}</p>
+        </header>
+        <table>
+          <thead><tr>${headers}</tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </body>
+    </html>`;
 }
 
 export default function MessagingAnalyticsDashboard({ paneId = 'tab-org-analytics' }) {
@@ -220,6 +282,7 @@ export default function MessagingAnalyticsDashboard({ paneId = 'tab-org-analytic
   const [rangeError, setRangeError] = useState('');
   const [report, setReport] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [loadError, setLoadError] = useState('');
   const canReadAnalytics = hasPermission('organization:analytics:read');
 
@@ -286,6 +349,55 @@ export default function MessagingAnalyticsDashboard({ paneId = 'tab-org-analytic
     setAppliedRange({ start_date: customStart, end_date: customEnd });
   };
 
+  const exportPdf = () => {
+    if (!report || isLoading || isExportingPdf) return;
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      showToast('Allow pop-ups to print or save this report as a PDF.', 'error');
+      return;
+    }
+
+    setIsExportingPdf(true);
+    printWindow.opener = null;
+    let exportFinished = false;
+    let exportTimeout;
+    const releaseExport = () => {
+      if (exportFinished) return;
+      exportFinished = true;
+      window.clearTimeout(exportTimeout);
+      setIsExportingPdf(false);
+    };
+    const finishExport = () => {
+      releaseExport();
+      if (!printWindow.closed) printWindow.close();
+    };
+
+    try {
+      printWindow.document.open();
+      printWindow.document.write(buildPrintableReport(report, appliedRange));
+      printWindow.document.close();
+      printWindow.addEventListener('afterprint', finishExport, { once: true });
+      printWindow.addEventListener('pagehide', releaseExport, { once: true });
+      window.setTimeout(() => {
+        if (printWindow.closed) {
+          releaseExport();
+          return;
+        }
+        try {
+          printWindow.focus();
+          printWindow.print();
+        } catch (error) {
+          finishExport();
+          showToast(error?.message || 'Could not open the print dialog.', 'error');
+        }
+      }, 250);
+      exportTimeout = window.setTimeout(releaseExport, 60000);
+    } catch (error) {
+      finishExport();
+      showToast(error?.message || 'Could not prepare the analytics report.', 'error');
+    }
+  };
+
   const channelRows = CHANNELS.map((name) => {
     const channel = channels.find((item) => String(item.channel || '').toLowerCase() === name.toLowerCase());
     const count = Number(channel?.count) || 0;
@@ -329,8 +441,8 @@ export default function MessagingAnalyticsDashboard({ paneId = 'tab-org-analytic
           <button type="button" className="btn btn-secondary" disabled={!report || isLoading} onClick={() => downloadCsv(report, appliedRange)}>
             Export CSV
           </button>
-          <button type="button" className="btn btn-secondary" disabled title="PDF export is not supported by the current reporting API.">
-            Export PDF
+          <button type="button" className="btn btn-secondary" disabled={!report || isLoading || isExportingPdf} onClick={exportPdf}>
+            {isExportingPdf ? 'Preparing PDF…' : 'Export PDF'}
           </button>
         </div>
       </div>

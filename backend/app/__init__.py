@@ -173,9 +173,16 @@ def create_app():
             response.headers["Expires"] = "0"
         return response
 
+    def serve_frontend_index():
+        response = send_from_directory(frontend_dir, "index.html")
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
     @app.route("/")
     def index():
-        return send_from_directory(frontend_dir, "index.html")
+        return serve_frontend_index()
 
     @app.route("/assets/<path:filename>")
     def serve_assets(filename):
@@ -196,6 +203,6 @@ def create_app():
         file_path = os.path.join(frontend_dir, path)
         if os.path.isfile(file_path):
             return send_from_directory(frontend_dir, path)
-        return send_from_directory(frontend_dir, "index.html")
+        return serve_frontend_index()
 
     return app

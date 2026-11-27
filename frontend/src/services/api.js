@@ -99,10 +99,7 @@ export const ApiClient = {
       delete headers["Content-Type"];
     }
 
-    const token = this.getAccessToken();
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
+    let token = this.getAccessToken();
 
     const activeApp = this.getActiveApplicationId();
     if (activeApp && !headers["X-Application-ID"]) {
@@ -110,14 +107,43 @@ export const ApiClient = {
     }
 
     try {
+      if (token && token.split(".").length !== 3 && !endpoint.includes("/auth/login")) {
+        const refreshToken = this.getRefreshToken();
+        const refreshed = refreshToken?.split(".").length === 3 && await this.refreshToken();
+        if (!refreshed) {
+          this.clearTokens();
+          window.dispatchEvent(new CustomEvent("sx_logout"));
+          const error = new Error("Session expired. Please sign in again.");
+          error.name = "SessionExpiredError";
+          throw error;
+        }
+        token = this.getAccessToken();
+      }
+
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
       const response = await fetch(url, { ...options, headers });
 
-      if (response.status === 401 && !endpoint.includes("/auth/login")) {
+      const isMalformedJwt = response.status === 422
+        && (await response.clone().json().catch(() => null))?.msg === "Not enough segments";
+
+      if ((response.status === 401 || isMalformedJwt) && !endpoint.includes("/auth/login")) {
         // Attempt refresh
         const refreshed = await this.refreshToken();
         if (refreshed) {
           headers["Authorization"] = `Bearer ${this.getAccessToken()}`;
           const retryRes = await fetch(url, { ...options, headers });
+          const retryHasMalformedJwt = retryRes.status === 422
+            && (await retryRes.clone().json().catch(() => null))?.msg === "Not enough segments";
+          if (retryRes.status === 401 || retryHasMalformedJwt) {
+            this.clearTokens();
+            window.dispatchEvent(new CustomEvent("sx_logout"));
+            const error = new Error("Session expired. Please sign in again.");
+            error.name = "SessionExpiredError";
+            throw error;
+          }
           if ((retryRes.status === 401 || retryRes.status === 403) && !endpoint.includes("/users/me/dashboard-context")) {
             window.dispatchEvent(new CustomEvent("sx_permission_denied", {
               detail: { status: retryRes.status, endpoint }
@@ -127,12 +153,14 @@ export const ApiClient = {
         } else {
           this.clearTokens();
           window.dispatchEvent(new CustomEvent("sx_logout"));
-          if (!endpoint.includes("/users/me/dashboard-context")) {
+          if (response.status === 401 && !endpoint.includes("/users/me/dashboard-context")) {
             window.dispatchEvent(new CustomEvent("sx_permission_denied", {
-              detail: { status: 401, endpoint }
+              detail: { status: response.status, endpoint }
             }));
           }
-          throw new Error("Session expired. Please sign in again.");
+          const error = new Error("Session expired. Please sign in again.");
+          error.name = "SessionExpiredError";
+          throw error;
         }
       }
 
@@ -145,7 +173,9 @@ export const ApiClient = {
       const json = await response.json();
       return json;
     } catch (error) {
-      console.error("API Request Error:", error);
+      if (error.name !== "SessionExpiredError") {
+        console.error("API Request Error:", error);
+      }
       throw error;
     }
   },
@@ -278,6 +308,24 @@ export const ApiClient = {
       this.setTokens(res.data.access_token, res.data.refresh_token);
     }
     return res;
+  },
+
+  async getMyPreferences() {
+    return await this.request("/users/me/preferences", { method: "GET" });
+  },
+
+  async replaceMyPreferences(preferencesPayload) {
+    return await this.request("/users/me/preferences", {
+      method: "PUT",
+      body: JSON.stringify(preferencesPayload)
+    });
+  },
+
+  async updateMyPreferences(preferencesPayload) {
+    return await this.request("/users/me/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(preferencesPayload)
+    });
   },
 
   async submitChangeRequest(data) {
@@ -500,16 +548,16 @@ export const ApiClient = {
     });
   },
 
-  async revokeCredential(credentialId) {
+  async updateCredential(credentialId, data) {
     return await this.request(`/api-credentials/${credentialId}`, {
-      method: "DELETE"
+      method: "PATCH",
+      body: JSON.stringify(data)
     });
   },
 
-  async rotateCredential(credentialId, environment = "live") {
-    return await this.request(`/api-credentials/${credentialId}/rotate`, {
-      method: "POST",
-      body: JSON.stringify({ environment })
+  async deleteCredential(credentialId) {
+    return await this.request(`/api-credentials/${credentialId}`, {
+      method: "DELETE"
     });
   },
 
@@ -595,6 +643,47 @@ export const ApiClient = {
   async getOrganizationProviderConfigs(provider = null) {
     const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
     return await this.request(`/provider-config/organization${query}`);
+  },
+
+  async getTeamsConnectUrl() {
+    return await this.request("/provider-config/teams/connect", { method: "GET" });
+  },
+
+  async listWhatsAppIntegrations() {
+    return await this.request("/whatsapp/integrations", { method: "GET" });
+  },
+
+  async connectWhatsAppIntegration(data) {
+    return await this.request("/whatsapp/integrations/connect", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
+
+  async updateWhatsAppIntegration(integrationId, data) {
+    return await this.request(`/whatsapp/integrations/${encodeURIComponent(integrationId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+  },
+
+  async rotateWhatsAppIntegration(integrationId, data) {
+    return await this.request(`/whatsapp/integrations/${encodeURIComponent(integrationId)}/rotate`, {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
+
+  async verifyWhatsAppIntegration(integrationId) {
+    return await this.request(`/whatsapp/integrations/${encodeURIComponent(integrationId)}/verify`, {
+      method: "POST"
+    });
+  },
+
+  async disconnectWhatsAppIntegration(integrationId) {
+    return await this.request(`/whatsapp/integrations/${encodeURIComponent(integrationId)}`, {
+      method: "DELETE"
+    });
   },
 
   async saveProviderConfig(provider, credentials) {

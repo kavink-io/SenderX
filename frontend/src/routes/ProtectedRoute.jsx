@@ -1,24 +1,20 @@
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import AccessDenied from '../pages/common/AccessDenied';
+import AuthLoadingScreen from '../components/common/AuthLoadingScreen';
 
 export default function ProtectedRoute({
   children,
+  requiredPermission,
+  tabId,
   platformOnly = false,
   orgOnly = false,
-  requiredPermission = null,
-  tabId = null
 }) {
-  const { isAuthenticated, isPlatformAdmin, isOrgAdmin, hasPermission, allowedTabs, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, isPlatformAdmin, hasPermission, allowedTabs, isOrgAdmin } = useAuth();
   const location = useLocation();
 
   if (isLoading) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
-        <div className="spinner"></div>
-      </div>
-    );
+    return <AuthLoadingScreen message="Verifying session and workspace..." />;
   }
 
   if (!isAuthenticated) {
@@ -26,21 +22,19 @@ export default function ProtectedRoute({
   }
 
   if (platformOnly && !isPlatformAdmin) {
-    return <Navigate to="/org/overview" replace />;
+    return <Navigate to="/access-denied" replace />;
   }
 
   if (orgOnly && isPlatformAdmin) {
-    return <Navigate to="/platform/organizations" replace />;
+    return <Navigate to="/access-denied" replace />;
+  }
+
+  if (tabId && !isPlatformAdmin && !isOrgAdmin && allowedTabs.size > 0 && !allowedTabs.has(tabId)) {
+    return <Navigate to="/access-denied" replace />;
   }
 
   if (requiredPermission && !hasPermission(requiredPermission)) {
-    return <AccessDenied message={`You lack the required permission (${requiredPermission}) to access this view.`} />;
-  }
-
-  if (tabId && !isPlatformAdmin && !isOrgAdmin) {
-    if (allowedTabs.size > 0 && !allowedTabs.has(tabId)) {
-      return <AccessDenied message={`Your assigned roles do not grant access to this module.`} />;
-    }
+    return <Navigate to="/access-denied" replace />;
   }
 
   return children;

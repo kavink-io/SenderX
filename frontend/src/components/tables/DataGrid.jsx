@@ -1,7 +1,16 @@
 import React, { useMemo } from 'react';
 import {
-  AllCommunityModule,
+  ClientSideRowModelModule,
+  CellStyleModule,
+  ColumnAutoSizeModule,
+  CustomFilterModule,
+  DateFilterModule,
+  LocaleModule,
   ModuleRegistry,
+  NumberFilterModule,
+  PaginationModule,
+  RowAutoHeightModule,
+  TextFilterModule,
   themeQuartz,
   colorSchemeDarkBlue,
   colorSchemeLight,
@@ -9,7 +18,18 @@ import {
 import { AgGridReact } from 'ag-grid-react';
 import { useTheme } from '../../context/ThemeContext';
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([
+  ClientSideRowModelModule,
+  CellStyleModule,
+  ColumnAutoSizeModule,
+  CustomFilterModule,
+  DateFilterModule,
+  LocaleModule,
+  NumberFilterModule,
+  PaginationModule,
+  RowAutoHeightModule,
+  TextFilterModule,
+]);
 
 const sharedThemeParams = {
   wrapperBorder: false,

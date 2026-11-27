@@ -1,13 +1,16 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../../components/tables/DataGrid';
-import MessageComposer from '../../components/forms/MessageComposer';
-import MessageDetailsModal from '../../components/modals/MessageDetailsModal';
-import ConfirmRetryModal from '../../components/modals/ConfirmRetryModal';
+import GridActionButton from '../../components/tables/GridActionButton';
 import OffCanvasPanel from '../../components/common/OffCanvasPanel';
+import PageLoader from '../../components/common/PageLoader';
 import { useToast } from '../../context/ToastContext';
 import { useAppScope } from '../../context/ScopeContext';
 import { GlassSearch, GlassSelect } from '../../components/glass';
+
+const MessageComposer = lazy(() => import('../../components/forms/MessageComposer'));
+const MessageDetailsModal = lazy(() => import('../../components/modals/MessageDetailsModal'));
+const ConfirmRetryModal = lazy(() => import('../../components/modals/ConfirmRetryModal'));
 
 export default function MessagesPage() {
   const [messages, setMessages] = useState([]);
@@ -20,6 +23,7 @@ export default function MessagesPage() {
 
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [detailsMounted, setDetailsMounted] = useState(false);
   const [retryTargetMessage, setRetryTargetMessage] = useState(null);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
 
@@ -113,8 +117,8 @@ export default function MessagesPage() {
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 150,
-      maxWidth: 175,
+      minWidth: 72,
+      maxWidth: 82,
       sortable: false,
       filter: false,
       resizable: false,
@@ -124,25 +128,18 @@ export default function MessagesPage() {
       cellRenderer: ({ data: m }) => {
         const isFailed = m.status === 'FAILED' || m.status === 'ERROR';
         return (
-          <div style={{ display: 'inline-flex', gap: '6px' }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
+          <div className="ag-icon-actions" role="group" aria-label="Message actions">
+            <GridActionButton
+              icon="view"
+              label="View message details"
               onClick={() => {
                 setSelectedMessage(m);
+                setDetailsMounted(true);
                 setIsDetailsOpen(true);
               }}
-            >
-              Details
-            </button>
+            />
             {isFailed && (
-              <button
-                type="button"
-                className="btn btn-danger btn-sm"
-                onClick={() => setRetryTargetMessage(m)}
-              >
-                Retry
-              </button>
+              <GridActionButton icon="refresh" label="Retry message" onClick={() => setRetryTargetMessage(m)} />
             )}
           </div>
         );
@@ -164,7 +161,11 @@ export default function MessagesPage() {
         size="large"
         id="panel-message-composer"
       >
-        <MessageComposer onMessageSent={fetchMessages} inPanel />
+        {isComposerOpen && (
+          <Suspense fallback={<PageLoader compact label="Loading composer..." />}>
+            <MessageComposer onMessageSent={fetchMessages} inPanel />
+          </Suspense>
+        )}
       </OffCanvasPanel>
 
       {/* Outbox filtering bar */}
@@ -266,19 +267,27 @@ export default function MessagesPage() {
         )}
       </div>
 
-      <MessageDetailsModal
-        isOpen={isDetailsOpen}
-        onClose={() => setIsDetailsOpen(false)}
-        message={selectedMessage}
-        onRetryTrigger={(msg) => setRetryTargetMessage(msg)}
-      />
+      {(isDetailsOpen || detailsMounted) && (
+        <Suspense fallback={null}>
+          <MessageDetailsModal
+            isOpen={isDetailsOpen}
+            onClose={() => setIsDetailsOpen(false)}
+            message={selectedMessage}
+            onRetryTrigger={(msg) => setRetryTargetMessage(msg)}
+          />
+        </Suspense>
+      )}
 
-      <ConfirmRetryModal
-        isOpen={Boolean(retryTargetMessage)}
-        onClose={() => setRetryTargetMessage(null)}
-        message={retryTargetMessage}
-        onRetried={fetchMessages}
-      />
+      {Boolean(retryTargetMessage) && (
+        <Suspense fallback={null}>
+          <ConfirmRetryModal
+            isOpen={Boolean(retryTargetMessage)}
+            onClose={() => setRetryTargetMessage(null)}
+            message={retryTargetMessage}
+            onRetried={fetchMessages}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

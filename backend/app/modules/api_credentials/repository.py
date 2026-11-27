@@ -1,7 +1,6 @@
 """
 SenderX API Credentials Repository
-Persistence layer for hashed external application API credentials.
-Never stores plaintext API keys.
+Persistence layer for hashed and encrypted external application API credentials.
 """
 
 from datetime import datetime, timezone
@@ -26,7 +25,7 @@ class ApiCredentialRepository:
 
     @classmethod
     def create(cls, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Persist a new API credential with hashed key."""
+        """Persist a new API credential without plaintext key material."""
         now = cls._now()
         doc = dict(data)
         doc.setdefault("credential_id", str(uuid.uuid4()))
@@ -69,9 +68,44 @@ class ApiCredentialRepository:
 
         cursor = cls._collection().find(
             query,
-            {"_id": 0, "key_hash": 0}
+            {
+                "_id": 0,
+                "key_hash": 0,
+                "key_encrypted": 0,
+                "api_key": 0,
+                "raw_key": 0,
+                "secret_key": 0,
+            }
         ).sort("created_at", -1)
         return list(cursor)
+
+    @classmethod
+    def update(
+        cls,
+        credential_id: str,
+        organization_id: str,
+        update_fields: Dict[str, Any]
+    ) -> bool:
+        """Update credential metadata or encrypted key material within its organization."""
+        if not update_fields:
+            return False
+
+        fields = dict(update_fields)
+        fields["updated_at"] = cls._now()
+        result = cls._collection().update_one(
+            {"credential_id": credential_id, "organization_id": organization_id},
+            {"$set": fields}
+        )
+        return result.matched_count > 0
+
+    @classmethod
+    def delete(cls, credential_id: str, organization_id: str) -> bool:
+        """Permanently remove a credential scoped to its organization."""
+        result = cls._collection().delete_one({
+            "credential_id": credential_id,
+            "organization_id": organization_id,
+        })
+        return result.deleted_count > 0
 
     @classmethod
     def update_last_used(cls, credential_id: str, organization_id: str, application_id: str) -> bool:
@@ -101,35 +135,6 @@ class ApiCredentialRepository:
                     "status": "REVOKED",
                     "revoked_at": now,
                     "revoked_by": revoked_by,
-                    "updated_at": now
-                }
-            }
-        )
-        return res.modified_count > 0
-
-    @classmethod
-    def rotate(
-        cls,
-        credential_id: str,
-        organization_id: str,
-        new_key_hash: str,
-        new_key_prefix: str,
-        rotated_by: Optional[str] = None
-    ) -> bool:
-        """Atomically rotate key hash and prefix for an existing credential."""
-        now = cls._now()
-        res = cls._collection().update_one(
-            {
-                "credential_id": credential_id,
-                "organization_id": organization_id,
-                "status": "ACTIVE"
-            },
-            {
-                "$set": {
-                    "key_hash": new_key_hash,
-                    "key_prefix": new_key_prefix,
-                    "rotated_at": now,
-                    "rotated_by": rotated_by,
                     "updated_at": now
                 }
             }

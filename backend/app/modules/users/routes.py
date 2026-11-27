@@ -3,10 +3,27 @@ from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 
 from app.modules.users.service import UserService
 from app.modules.users.repository import UserRepository
+from app.modules.users.preferences_service import UserPreferencesService
 from app.modules.auth.decorators import require_permissions
 from app.modules.auth.otp_service import OTPService, OTPServiceError
 
 users_bp = Blueprint("users", __name__)
+
+
+def _resolve_authenticated_preference_owner():
+    """Verify active account + token_version from DB for preference endpoints."""
+    from app.modules.auth.routes import resolve_account
+
+    identity = get_jwt_identity()
+    claims = get_jwt()
+    account, error = resolve_account(identity, claims)
+    if error or not account:
+        return None, None, (error or "Unauthorized")
+
+    account_type = account.get("account_type")
+    if account_type == "PLATFORM_ADMIN":
+        return account.get("admin_id") or identity, None, None
+    return account.get("user_id") or identity, account.get("organization_id"), None
 
 
 # ======================================================
@@ -109,6 +126,38 @@ def update_my_profile():
 @jwt_required()
 def update_my_profile_alias():
     return update_my_profile()
+
+
+@users_bp.route("/me/preferences", methods=["GET"])
+@jwt_required()
+def get_my_preferences():
+    user_id, organization_id, auth_error = _resolve_authenticated_preference_owner()
+    if auth_error:
+        return jsonify({"success": False, "message": auth_error}), 401
+
+    result = UserPreferencesService.get_preferences(user_id, organization_id=organization_id)
+    return jsonify(result), 200
+
+
+@users_bp.route("/me/preferences", methods=["PUT", "PATCH"])
+@jwt_required()
+def update_my_preferences():
+    user_id, organization_id, auth_error = _resolve_authenticated_preference_owner()
+    if auth_error:
+        return jsonify({"success": False, "message": auth_error}), 401
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return jsonify({"success": False, "message": "Invalid or missing JSON payload"}), 400
+
+    result = UserPreferencesService.save_preferences(
+        user_id=user_id,
+        organization_id=organization_id,
+        payload=data,
+        replace=(request.method == "PUT"),
+    )
+    status_code = 200 if result.get("success") else result.get("status_code", 400)
+    return jsonify(result), status_code
 
 
 @users_bp.route("/<string:user_id>", methods=["GET"])

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ApiClient from '../../services/api';
 import DataGrid from '../../components/tables/DataGrid';
+import GridActionButton from '../../components/tables/GridActionButton';
 import RegisterAppModal from '../../components/modals/RegisterAppModal';
 import AppDetailsModal from '../../components/modals/AppDetailsModal';
 import { useToast } from '../../context/ToastContext';
@@ -123,8 +124,8 @@ export default function ConnectedApplications() {
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 230,
-      maxWidth: 255,
+      minWidth: 110,
+      maxWidth: 122,
       sortable: false,
       filter: false,
       resizable: false,
@@ -134,29 +135,24 @@ export default function ConnectedApplications() {
       cellRenderer: ({ data: app }) => {
         const isActive = app.status === 'ACTIVE' || app.status === 'active';
         return (
-          <div style={{ display: 'inline-flex', gap: '6px' }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
+          <div className="ag-icon-actions" role="group" aria-label="Connected application actions">
+            <GridActionButton
+              icon="view"
+              label="View application details"
               onClick={() => {
                 setSelectedApp(app);
                 setIsDetailsOpen(true);
               }}
-            >
-              Details
-            </button>
+            />
             {canManage && (
               <>
-                <button
-                  type="button"
-                  className={`btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}`}
+                <GridActionButton
+                  icon={isActive ? 'power-off' : 'power'}
+                  label={isActive ? 'Deactivate Application' : 'Activate Application'}
+                  variant={isActive ? 'danger' : 'success'}
                   onClick={() => handleToggleActive(app)}
-                >
-                  {isActive ? 'Deactivate' : 'Activate'}
-                </button>
-                <button type="button" className="btn btn-danger btn-sm" onClick={() => handleDelete(app)}>
-                  Delete
-                </button>
+                />
+                <GridActionButton icon="delete" label="Delete application" variant="danger" onClick={() => handleDelete(app)} />
               </>
             )}
           </div>

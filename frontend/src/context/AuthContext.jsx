@@ -24,21 +24,39 @@ export function AuthProvider({ children }) {
     return false;
   }, [isPlatformAdmin, isOrgAdmin, permissions]);
 
+  const clearAuthState = useCallback(() => {
+    ApiClient.clearTokens();
+    setAccount(null);
+    setToken(null);
+    setDashboardContext(null);
+    setPermissions(new Set());
+    setAllowedTabs(new Set());
+  }, []);
+
+  const logout = useCallback(() => {
+    clearAuthState();
+    window.dispatchEvent(new CustomEvent('sx_logout', { detail: { source: 'auth' } }));
+  }, [clearAuthState]);
+
   const loadUserContext = useCallback(async () => {
-    if (!ApiClient.getAccessToken()) {
+    const activeToken = ApiClient.getAccessToken();
+    if (!activeToken) {
+      clearAuthState();
       setIsLoading(false);
-      return;
+      return false;
     }
 
     try {
-      const stored = ApiClient.getStoredAccount();
-      if (stored?.account_type === 'PLATFORM_ADMIN') {
-        const meRes = await ApiClient.getCurrentAccount();
-        if (meRes?.success && meRes.data) {
-          ApiClient.setStoredAccount(meRes.data);
-          setAccount(meRes.data);
-        }
-      } else {
+      const meRes = await ApiClient.getCurrentAccount();
+      if (!meRes?.success || !meRes.data) {
+        logout();
+        return false;
+      }
+
+      const resolvedAccount = meRes.data;
+      ApiClient.setStoredAccount(resolvedAccount);
+
+      if (resolvedAccount.account_type !== 'PLATFORM_ADMIN') {
         const ctxRes = await ApiClient.getDashboardContext();
         if (ctxRes?.success && ctxRes.data) {
           const ctx = ctxRes.data;
@@ -69,42 +87,58 @@ export function AuthProvider({ children }) {
           }
           setAllowedTabs(tabs);
         }
-
-        const meRes = await ApiClient.getCurrentAccount();
-        if (meRes?.success && meRes.data) {
-          ApiClient.setStoredAccount(meRes.data);
-          setAccount(meRes.data);
-        }
       }
+
+      // Fetch and apply the user's saved appearance & layout preferences BEFORE unlocking protected UI.
+      try {
+        const prefsRes = await ApiClient.getMyPreferences();
+        window.dispatchEvent(new CustomEvent('sx_preferences_sync', {
+          detail: {
+            account: resolvedAccount,
+            preferences: prefsRes?.success ? prefsRes.data : null,
+          },
+        }));
+      } catch (prefErr) {
+        console.warn('Could not load saved user preferences; using defaults:', prefErr);
+        window.dispatchEvent(new CustomEvent('sx_preferences_sync', {
+          detail: {
+            account: resolvedAccount,
+            preferences: null,
+          },
+        }));
+      }
+
+      setToken(activeToken);
+      setAccount(resolvedAccount);
+      return true;
     } catch (err) {
-      console.warn('Failed to load user context:', err);
+      if (err?.name === 'SessionExpiredError' || err?.status === 401) {
+        logout();
+      } else {
+        console.warn('Failed to load user context:', err);
+      }
+      return false;
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [clearAuthState, logout]);
 
   const login = useCallback(async (email, password) => {
     const res = await ApiClient.login(email, password);
     if (res.success && res.data) {
-      setToken(res.data.access_token);
-      setAccount(res.data.account);
+      setIsLoading(true);
       await loadUserContext();
       return { success: true, account: res.data.account };
     }
     return { success: false, message: res.message || 'Login failed' };
   }, [loadUserContext]);
 
-  const logout = useCallback(() => {
-    ApiClient.clearTokens();
-    setAccount(null);
-    setToken(null);
-    setDashboardContext(null);
-    setPermissions(new Set());
-    setAllowedTabs(new Set());
-  }, []);
-
   useEffect(() => {
-    const handleLogoutEvent = () => logout();
+    const handleLogoutEvent = (event) => {
+      if (event?.detail?.source === 'auth') return;
+      clearAuthState();
+      setIsLoading(false);
+    };
     const handlePermDenied = () => {
       if (ApiClient.getAccessToken()) {
         loadUserContext();
@@ -120,7 +154,7 @@ export function AuthProvider({ children }) {
       window.removeEventListener('sx_logout', handleLogoutEvent);
       window.removeEventListener('sx_permission_denied', handlePermDenied);
     };
-  }, [logout, loadUserContext]);
+  }, [clearAuthState, loadUserContext]);
 
   return (
     <AuthContext.Provider

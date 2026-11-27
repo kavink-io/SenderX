@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import Modal from '../common/Modal';
+import OffCanvasPanel from '../common/OffCanvasPanel';
 import ApiClient from '../../services/api';
 import { useToast } from '../../context/ToastContext';
 import { GlassSelect } from '../glass';
+import GenderSelect from '../employee/GenderSelect';
 
 export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
   const [email, setEmail] = useState('');
@@ -10,6 +11,7 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
   const [employeeCode, setEmployeeCode] = useState('');
   const [department, setDepartment] = useState('');
   const [phone, setPhone] = useState('');
+  const [gender, setGender] = useState('');
   const [roleId, setRoleId] = useState('');
   const [roles, setRoles] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -20,8 +22,10 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
     if (!isOpen) return;
     setEmail('');
     setName('');
+    setEmployeeCode('');
     setDepartment('');
     setPhone('');
+    setGender('');
     setRoleId('');
 
     // Fetch next employee code and roles
@@ -42,8 +46,8 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email.trim()) {
-      showToast('Email address is required', 'error');
+    if (!email.trim() || !name.trim() || !employeeCode.trim()) {
+      showToast('Name, work email, and employee code are required', 'error');
       return;
     }
 
@@ -51,10 +55,11 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
     try {
       const payload = {
         email: email.trim().toLowerCase(),
-        name: name.trim() || undefined,
-        employee_code: employeeCode.trim() || undefined,
+        name: name.trim(),
+        employee_code: employeeCode.trim(),
         department: department.trim() || undefined,
-        phone_number: phone.trim() || undefined,
+        phone: phone.trim() || undefined,
+        gender: gender || undefined,
         role_id: roleId || undefined,
       };
 
@@ -74,12 +79,12 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
   };
 
   return (
-    <Modal
+    <OffCanvasPanel
       isOpen={isOpen}
       onClose={onClose}
       title="Create Organization Employee"
-      maxWidth="600px"
-      id="modal-create-user"
+      size="large"
+      id="panel-create-user"
     >
       <form id="form-create-user" onSubmit={handleSubmit}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
@@ -98,7 +103,7 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
           </div>
 
           <div className="form-group">
-            <label htmlFor="create-user-name">Full Name</label>
+            <label htmlFor="create-user-name">Full Name *</label>
             <input
               type="text"
               id="create-user-name"
@@ -106,11 +111,12 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Alex Smith"
+              required
             />
           </div>
 
           <div className="form-group">
-            <label htmlFor="create-user-emp-code">Employee Code</label>
+            <label htmlFor="create-user-emp-code">Employee Code *</label>
             <input
               type="text"
               id="create-user-emp-code"
@@ -119,6 +125,7 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
               onChange={(e) => setEmployeeCode(e.target.value)}
               placeholder="EMP001"
               style={{ fontFamily: 'var(--font-mono)' }}
+              required
             />
           </div>
 
@@ -146,6 +153,12 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
             />
           </div>
 
+          <GenderSelect
+            id="create-user-gender"
+            value={gender}
+            onChange={(e) => setGender(e.target.value)}
+          />
+
           <div className="form-group">
             <label htmlFor="create-user-role">Assigned Role</label>
             <GlassSelect
@@ -172,6 +185,6 @@ export default function CreateEmployeeModal({ isOpen, onClose, onCreated }) {
           </button>
         </div>
       </form>
-    </Modal>
+    </OffCanvasPanel>
   );
 }

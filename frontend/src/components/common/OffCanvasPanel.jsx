@@ -37,6 +37,7 @@ export default function OffCanvasPanel({
   description,
   children,
   size = 'medium',
+  position = 'right',
   id,
   closeOnBackdrop = true,
   closeOnEscape = true,
@@ -63,10 +64,12 @@ export default function OffCanvasPanel({
 
   useEffect(() => {
     if (isOpen) {
+      dirtyRef.current = false;
       setIsRendered(true);
       setIsClosing(false);
       return undefined;
     }
+    dirtyRef.current = false;
     if (!isRendered) return undefined;
 
     setIsClosing(true);
@@ -136,7 +139,9 @@ export default function OffCanvasPanel({
   const titleId = `${panelId}-title`;
   const descriptionId = description ? `${panelId}-description` : undefined;
   const handleDirtyInput = (event) => {
-    if (panelRef.current?.contains(event.target)) dirtyRef.current = true;
+    if (panelRef.current?.contains(event.target) && event.target.closest('form')) {
+      dirtyRef.current = true;
+    }
   };
   const handleCloseAction = (event) => {
     if (!panelRef.current?.contains(event.target)) return;
@@ -167,7 +172,7 @@ export default function OffCanvasPanel({
       <section
         ref={panelRef}
         id={panelId}
-        className={`offcanvas-panel offcanvas-panel-${size} ${className}`.trim()}
+        className={`offcanvas-panel offcanvas-panel-${size} ${position === 'left' ? 'offcanvas-panel-left' : 'offcanvas-panel-right'} ${className}`.trim()}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

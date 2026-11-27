@@ -1,63 +1,68 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import ProtectedRoute from './ProtectedRoute';
-import DashboardLayout from '../layouts/DashboardLayout';
+import AuthLoadingScreen from '../components/common/AuthLoadingScreen';
+import { getDefaultDashboardPath } from '../utils/authRedirect';
+
+const DashboardLayout = lazy(() => import('../layouts/DashboardLayout'));
 
 // Auth & Common
-import AuthPage from '../pages/auth/AuthPage';
-import AccessDenied from '../pages/common/AccessDenied';
+const AuthPage = lazy(() => import('../pages/auth/AuthPage'));
+const AccessDenied = lazy(() => import('../pages/common/AccessDenied'));
 
 // Super Admin
-import PlatformOrganizations from '../pages/super-admin/PlatformOrganizations';
-import PlatformChangeRequests from '../pages/super-admin/PlatformChangeRequests';
-import PlatformAnalytics from '../pages/super-admin/PlatformAnalytics';
-import SystemHealth from '../pages/super-admin/SystemHealth';
+const PlatformOrganizations = lazy(() => import('../pages/super-admin/PlatformOrganizations'));
+const PlatformChangeRequests = lazy(() => import('../pages/super-admin/PlatformChangeRequests'));
+const PlatformAnalytics = lazy(() => import('../pages/super-admin/PlatformAnalytics'));
+const SystemHealth = lazy(() => import('../pages/super-admin/SystemHealth'));
 
 // Org & Employee
-import OrgOverview from '../pages/organization/OrgOverview';
-import ConnectedApplications from '../pages/organization/ConnectedApplications';
-import ApiCredentials from '../pages/organization/ApiCredentials';
-import MessagesPage from '../pages/messages/MessagesPage';
-import TemplatesPage from '../pages/templates/TemplatesPage';
-import JsonRequests from '../pages/organization/JsonRequests';
-import DlqPage from '../pages/dlq/DlqPage';
-import OrgAnalytics from '../pages/organization/OrgAnalytics';
-import EmployeesAndRoles from '../pages/employee/EmployeesAndRoles';
-import OrgSettings from '../pages/settings/OrgSettings';
-import AppearancePage from '../pages/settings/AppearancePage';
+const OrgOverview = lazy(() => import('../pages/organization/OrgOverview'));
+const ConnectedApplications = lazy(() => import('../pages/organization/ConnectedApplications'));
+const ApiCredentials = lazy(() => import('../pages/organization/ApiCredentials'));
+const ChannelConfigurations = lazy(() => import('../pages/organization/ChannelConfigurations'));
+const MessagesPage = lazy(() => import('../pages/messages/MessagesPage'));
+const TemplatesPage = lazy(() => import('../pages/templates/TemplatesPage'));
+const JsonRequests = lazy(() => import('../pages/organization/JsonRequests'));
+const DlqPage = lazy(() => import('../pages/dlq/DlqPage'));
+const OrgAnalytics = lazy(() => import('../pages/organization/OrgAnalytics'));
+const EmployeesAndRoles = lazy(() => import('../pages/employee/EmployeesAndRoles'));
+const OrgSettings = lazy(() => import('../pages/settings/OrgSettings'));
+const AppearancePage = lazy(() => import('../pages/settings/AppearancePage'));
 
 function RootRedirect() {
-  const { isAuthenticated, isPlatformAdmin, isLoading } = useAuth();
+  const { isAuthenticated, account, isLoading } = useAuth();
 
   if (isLoading) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <div className="spinner"></div>
-      </div>
-    );
+    return <AuthLoadingScreen message="Loading workspace..." />;
   }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
 
-  return isPlatformAdmin ? (
-    <Navigate to="/platform/organizations" replace />
-  ) : (
-    <Navigate to="/org/overview" replace />
-  );
+  return <Navigate to={getDefaultDashboardPath(account)} replace />;
 }
 
 export default function AppRoutes() {
   return (
-    <Routes>
+    <Suspense fallback={<AuthLoadingScreen message="Loading workspace..." />}>
+      <Routes>
       {/* Public Auth Routes */}
       <Route path="/login" element={<AuthPage />} />
       <Route path="/access-denied" element={<AccessDenied />} />
 
-      {/* Root redirect */}
+      {/* Root & Dashboard redirect */}
       <Route path="/" element={<RootRedirect />} />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <RootRedirect />
+          </ProtectedRoute>
+        }
+      />
 
       <Route
         path="/appearance"
@@ -121,6 +126,14 @@ export default function AppRoutes() {
           }
         />
         <Route
+          path="channels"
+          element={
+            <ProtectedRoute tabId="tab-org-channels" requiredPermission="organization:providers:read">
+              <ChannelConfigurations />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="messages"
           element={
             <ProtectedRoute tabId="tab-org-messages" requiredPermission="organization:messages:read">
@@ -179,7 +192,15 @@ export default function AppRoutes() {
       </Route>
 
       {/* Catch-all fallback */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      <Route
+        path="*"
+        element={
+          <ProtectedRoute>
+            <RootRedirect />
+          </ProtectedRoute>
+        }
+      />
+      </Routes>
+    </Suspense>
   );
 }

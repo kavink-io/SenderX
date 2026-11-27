@@ -28,7 +28,9 @@ function MetricCard({ label, value, note, isLoading }) {
     <div className="saas-metric">
       <div className="saas-metric-label">{label}</div>
       <div className="saas-metric-value">
-        {isLoading ? <GlassSkeleton width="86px" height="27px" /> : value === null ? '—' : <AnimatedNumber value={value} />}
+        {isLoading ? <GlassSkeleton width="86px" height="27px" /> : value === null ? '—' : (
+          typeof value === 'number' ? <AnimatedNumber value={value} /> : value
+        )}
       </div>
       <div className="saas-metric-note">{note}</div>
     </div>
@@ -55,11 +57,17 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
 }
 
+const DASHBOARD_REFRESH_MS = 60000;
+const MAX_REFRESH_BACKOFF_MS = 300000;
+
 export default function MessagingOperationsDashboard() {
   const { activeAppId } = useAppScope();
-  const { hasPermission } = useAuth();
+  const { account, hasPermission } = useAuth();
   const [snapshot, setSnapshot] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [connectionState, setConnectionState] = useState('connecting');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
 
   const permissions = useMemo(() => ({
     analytics: hasPermission('organization:analytics:read'),
@@ -69,38 +77,103 @@ export default function MessagingOperationsDashboard() {
     createMessage: hasPermission('organization:messages:create'),
     createTemplate: hasPermission('organization:templates:create'),
     viewTemplates: hasPermission('organization:templates:read'),
-    manageProviders: hasPermission('organization:configuration:manage'),
+    manageProviders: hasPermission('organization:providers:manage'),
     viewDeadLetters: hasPermission('organization:dead_letters:read'),
   }), [hasPermission]);
 
   useEffect(() => {
     let active = true;
+    let hasLoaded = false;
+    let isFetching = false;
+    let consecutiveFailures = 0;
+    let refreshTimer;
+    setSnapshot(null);
+    setIsLoading(true);
+    setConnectionState('connecting');
+    setLastUpdatedAt(null);
     const applicationFilter = activeAppId ? { application_id: activeAppId } : {};
     const entries = [
-      ['analytics', permissions.analytics ? ApiClient.getOrganizationAnalytics() : null, permissions.analytics],
-      ['messages', permissions.messages ? ApiClient.listMessages(1, 6, applicationFilter) : null, permissions.messages],
-      ['failed', permissions.messages ? ApiClient.listMessages(1, 5, { ...applicationFilter, status: 'FAILED' }) : null, permissions.messages],
-      ['dead', permissions.messages ? ApiClient.listMessages(1, 5, { ...applicationFilter, status: 'DEAD' }) : null, permissions.messages],
-      ['applications', permissions.applications ? ApiClient.listApplications(1, 100, 'ACTIVE') : null, permissions.applications],
-      ['providers', permissions.providers ? ApiClient.getOrganizationProviderConfigs() : null, permissions.providers],
+      ['analytics', () => permissions.analytics ? ApiClient.getOrganizationAnalytics() : null, permissions.analytics],
+      ['messages', () => permissions.messages ? ApiClient.listMessages(1, 6, applicationFilter) : null, permissions.messages],
+      ['failed', () => permissions.messages ? ApiClient.listMessages(1, 5, { ...applicationFilter, status: 'FAILED' }) : null, permissions.messages],
+      ['dead', () => permissions.messages ? ApiClient.listMessages(1, 5, { ...applicationFilter, status: 'DEAD' }) : null, permissions.messages],
+      ['applications', () => permissions.applications ? ApiClient.listApplications(1, 100, 'ACTIVE') : null, permissions.applications],
+      ['providers', () => permissions.providers ? ApiClient.getOrganizationProviderConfigs() : null, permissions.providers],
     ];
 
-    async function loadDashboard() {
-      setIsLoading(true);
-      const results = await Promise.allSettled(entries.map(([, request]) => request || Promise.resolve(null)));
+    const scheduleRefresh = (delay) => {
       if (!active) return;
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(loadDashboard, delay);
+    };
+
+    async function loadDashboard() {
+      if (!active || isFetching) return;
+      if (document.visibilityState === 'hidden') {
+        setConnectionState('paused');
+        scheduleRefresh(DASHBOARD_REFRESH_MS);
+        return;
+      }
+
+      isFetching = true;
+      if (!hasLoaded) setIsLoading(true);
+      setConnectionState(hasLoaded ? 'updating' : 'connecting');
+      const results = await Promise.allSettled(
+        entries.map(([, request]) => request() || Promise.resolve(null))
+      );
+      if (!active) {
+        isFetching = false;
+        return;
+      }
 
       const normalized = {};
       entries.forEach(([key, , allowed], index) => {
         normalized[key] = asResult(results[index], allowed, key);
       });
+      const requestFailed = entries.some(([, , allowed], index) => (
+        allowed && (
+          results[index].status === 'rejected'
+          || !results[index].value?.success
+        )
+      ));
+
       setSnapshot(normalized);
+      setLastUpdatedAt(new Date());
+      setConnectionState(requestFailed ? 'degraded' : 'connected');
       setIsLoading(false);
+      hasLoaded = true;
+      isFetching = false;
+      consecutiveFailures = requestFailed ? consecutiveFailures + 1 : 0;
+
+      const backoff = Math.min(
+        DASHBOARD_REFRESH_MS * (2 ** Math.min(consecutiveFailures, 4)),
+        MAX_REFRESH_BACKOFF_MS
+      );
+      scheduleRefresh(requestFailed ? backoff : DASHBOARD_REFRESH_MS);
     }
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') scheduleRefresh(0);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     loadDashboard();
-    return () => { active = false; };
+    return () => {
+      active = false;
+      window.clearTimeout(refreshTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [activeAppId, permissions]);
+
+  useEffect(() => {
+    const updateTime = () => setCurrentTime(new Date());
+    const timer = window.setInterval(updateTime, 60000);
+    document.addEventListener('visibilitychange', updateTime);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', updateTime);
+    };
+  }, []);
 
   const analytics = snapshot?.analytics?.data;
   const overview = analytics?.overview;
@@ -132,9 +205,21 @@ export default function MessagingOperationsDashboard() {
   const quickActions = [
     permissions.messages && permissions.createMessage && { to: '/org/messages', label: 'Send Message', detail: 'Compose and send a message' },
     permissions.viewTemplates && permissions.createTemplate && { to: '/org/templates', label: 'Create Template', detail: 'Open the template studio' },
-    permissions.manageProviders && { to: '/org/settings?tab=PROVIDERS', label: 'Connect Integration', detail: 'Configure messaging providers' },
+    permissions.manageProviders && { to: '/org/channels', label: 'Connect Integration', detail: 'Configure messaging providers' },
     permissions.viewDeadLetters && { to: '/org/dlq', label: 'View Failed Messages', detail: 'Review and reprocess dead letters' },
   ].filter(Boolean);
+  const hour = currentTime.getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const displayName = account?.first_name?.trim() || account?.name?.trim() || account?.email || 'there';
+  const connectionText = connectionState === 'connected'
+    ? `Connected · Updated ${lastUpdatedAt?.toLocaleTimeString() || ''}`
+    : connectionState === 'updating'
+      ? 'Updating dashboard…'
+      : connectionState === 'degraded'
+        ? 'Updates unavailable · Retrying'
+        : connectionState === 'paused'
+          ? 'Updates paused while this tab is hidden'
+          : 'Connecting to SenderX…';
 
   const pendingCount = overview
     ? (Number(overview.queued) || 0) + (Number(overview.processing) || 0)
@@ -142,14 +227,35 @@ export default function MessagingOperationsDashboard() {
   const failedToday = today
     ? (Number(today.failed) || 0) + (Number(today.dead) || 0)
     : null;
+  const deliverySuccessRate = today
+    ? `${today.total_messages > 0
+      ? ((Number(today.delivered) || 0) / Number(today.total_messages) * 100).toFixed(1)
+      : '0.0'}%`
+    : null;
+  const configuredIntegrations = snapshot?.providers?.status === 'ready'
+    ? providers.filter((provider) => provider.configured).length
+    : null;
 
   return (
     <div className="tab-pane active saas-dashboard saas-operations-dashboard" id="tab-org-overview">
-      <div className="saas-metrics-card">
+      <div className="saas-dashboard-welcome">
+        <div>
+          <h1>{greeting}, {displayName}!</h1>
+          <p>Here’s what’s happening with your messaging operations today.</p>
+        </div>
+        <div className={`saas-dashboard-connection is-${connectionState}`} role="status" aria-live="polite">
+          <span aria-hidden="true" />
+          {connectionText}
+        </div>
+      </div>
+
+      <div className="saas-metrics-card saas-operations-metrics-card">
         <MetricCard label="Messages Today" value={today ? today.total_messages : null} note="Created today in UTC" isLoading={isLoading} />
         <MetricCard label="Delivered Today" value={today ? today.delivered : null} note="Successfully handed off or delivered" isLoading={isLoading} />
         <MetricCard label="Failed Today" value={failedToday} note="Failed or dead-lettered today" isLoading={isLoading} />
         <MetricCard label="Pending Messages" value={pendingCount} note="Queued or processing now" isLoading={isLoading} />
+        <MetricCard label="Configured Integrations" value={configuredIntegrations} note="Saved provider configurations" isLoading={isLoading} />
+        <MetricCard label="Delivery Success Rate" value={deliverySuccessRate} note="Delivered messages today" isLoading={isLoading} />
       </div>
 
       {quickActions.length > 0 && (

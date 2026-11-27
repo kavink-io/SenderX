@@ -996,6 +996,26 @@ select option {
   border-radius: 7px;
 }
 
+.icon-btn:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.icon-btn:disabled,
+.icon-btn:disabled:hover {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
+.ag-icon-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .icon-btn-success {
   background: #ecfdf5;
   color: #047857;
@@ -1080,6 +1100,31 @@ select option {
 .senderx-ag-grid .ag-right-aligned-header .ag-header-cell-label {
   flex-direction: row;
   justify-content: flex-end;
+}
+
+.employee-table-ellipsis {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.employee-role-badge {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.employee-status-badge {
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: 0.67rem;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
 }
 
 .senderx-ag-grid .ag-header-cell-label {
