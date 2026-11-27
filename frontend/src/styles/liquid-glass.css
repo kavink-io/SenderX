@@ -327,7 +327,7 @@ body {
 }
 
 [data-theme="light"] .nav-item.active {
-  color: #1d4ed8;
+  color: var(--accent-color, var(--lg-accent));
 }
 
 .sidebar-footer {
@@ -509,13 +509,27 @@ textarea:focus,
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  background: var(--accent-gradient, linear-gradient(135deg, var(--accent-color, var(--lg-accent)) 0%, var(--accent-hover, var(--lg-accent)) 100%));
+  color: var(--accent-foreground, #ffffff) !important;
+  border: 1px solid transparent;
+  box-shadow: 0 4px 14px var(--accent-shadow, rgba(99, 91, 219, 0.26)), inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 .btn-primary:hover:not(:disabled) {
-  box-shadow: 0 8px 22px rgba(37, 99, 235, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.34);
+  background: linear-gradient(135deg, var(--accent-hover, var(--lg-accent)) 0%, var(--accent-active, var(--lg-accent)) 100%);
+  box-shadow: 0 8px 22px var(--accent-shadow-hover, rgba(99, 91, 219, 0.36)), inset 0 1px 0 rgba(255, 255, 255, 0.34);
   transform: translateY(-1px);
+}
+
+.btn-primary:active:not(:disabled) {
+  background: var(--accent-active, var(--lg-accent));
+  transform: scale(0.98);
+}
+
+.btn-primary:focus-visible {
+  outline: 2px solid var(--accent-color, var(--lg-accent));
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--accent-focus-ring, var(--lg-accent-soft));
 }
 
 .btn-secondary {
@@ -852,15 +866,15 @@ textarea:focus,
 }
 
 .badge-primary {
-  background: rgba(37, 99, 235, 0.11);
-  color: #1d4ed8;
-  border: 1px solid rgba(37, 99, 235, 0.24);
+  background: var(--accent-subtle, var(--lg-accent-soft));
+  color: var(--accent-color, var(--lg-accent));
+  border: 1px solid var(--accent-border, var(--lg-accent-border));
 }
 
 [data-theme="dark"] .badge-primary {
-  background: rgba(86, 133, 255, 0.15);
-  color: #93b4ff;
-  border-color: rgba(86, 133, 255, 0.32);
+  background: var(--accent-subtle, rgba(130, 121, 238, 0.16));
+  color: var(--accent-color, var(--lg-accent));
+  border-color: var(--accent-border, rgba(130, 121, 238, 0.34));
 }
 
 .badge-success {
@@ -1311,7 +1325,7 @@ textarea:focus,
 
 .offcanvas-heading h2 {
   margin: 0;
-  color: var(--text-primary);
+  color: var(--lg-accent);
   font-size: 1.05rem;
   font-weight: 700;
   line-height: 1.45;
@@ -3077,6 +3091,101 @@ body::after {
 
 [data-sidebar-position="sticky"] .main-content-wrapper.sidebar-open {
   margin-inline-start: 0;
+}
+
+/* Shared AG Grid cell truncation, compact action menus, and multi-role overflow */
+.ag-cell-ellipsis {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.senderx-ag-grid .ag-row-selected::before {
+  background-color: var(--accent-subtle, var(--lg-accent-soft));
+}
+
+.grid-more-menu {
+  padding: 6px;
+}
+
+.grid-more-menu .lg-dropdown-item.is-danger {
+  color: var(--status-error, #dc2626);
+}
+
+.role-badges-wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 5px;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.role-badges-wrap .employee-role-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 118px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-overflow-badge {
+  flex: 0 0 auto;
+  cursor: pointer;
+  background: var(--accent-subtle, var(--lg-accent-soft));
+  color: var(--accent-color, var(--lg-accent));
+  border: 1px solid var(--accent-border, var(--lg-accent-border));
+  font-weight: 700;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.role-overflow-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 2px var(--accent-focus-ring, var(--lg-accent-soft));
+}
+
+.role-overflow-badge:focus-visible {
+  outline: 2px solid var(--accent-color, var(--lg-accent));
+  outline-offset: 2px;
+}
+
+.role-overflow-popover {
+  padding: 12px;
+  border-radius: var(--lg-radius-md);
+  background: var(--lg-surface-3);
+  border: 1px solid var(--lg-border);
+  backdrop-filter: var(--lg-blur-lg);
+  -webkit-backdrop-filter: var(--lg-blur-lg);
+  box-shadow: var(--lg-shadow-lg), var(--lg-inset-highlight);
+  color: var(--text-primary);
+  animation: lgPopoverIn var(--lg-duration-fast) var(--lg-ease);
+}
+
+.role-overflow-popover-header {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.role-overflow-popover-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.role-overflow-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--lg-border);
 }
 
 .saas-metric-note {

@@ -139,6 +139,64 @@ export function isLightColor(hex) {
   return luminance > 0.68;
 }
 
+function relativeLuminance(rgb) {
+  const channel = (c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b);
+}
+
+/**
+ * Select `#FFFFFF` or `#0F172A` foreground depending on WCAG contrast ratio against `hex`.
+ */
+export function getReadableForeground(hex) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return '#FFFFFF';
+  const bgLum = relativeLuminance(rgb);
+  const contrastWhite = 1.05 / (bgLum + 0.05);
+  const contrastDark = (bgLum + 0.05) / 0.068;
+  return contrastDark > contrastWhite + 0.35 ? '#0F172A' : '#FFFFFF';
+}
+
+export function mixHexColors(hexA, hexB, weightA = 0.88) {
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  if (!a || !b) return normalizeHexColor(hexA) || DEFAULT_ACCENT_COLOR;
+  const wA = clamp(weightA, 0, 1);
+  const wB = 1 - wA;
+  return rgbToHex(
+    a.r * wA + b.r * wB,
+    a.g * wA + b.g * wB,
+    a.b * wA + b.b * wB
+  );
+}
+
+/**
+ * Derive dynamic button & surface tokens from any valid accent color.
+ */
+export function deriveAccentTokens(accentHex) {
+  const color = normalizeHexColor(accentHex) || DEFAULT_ACCENT_COLOR;
+  const rgb = hexToRgb(color) || { r: 99, g: 91, b: 219 };
+  const hover = mixHexColors(color, '#000000', 0.88);
+  const active = mixHexColors(color, '#000000', 0.78);
+  const foreground = getReadableForeground(color);
+  const rgbStr = `${rgb.r}, ${rgb.g}, ${rgb.b}`;
+
+  return {
+    color,
+    hover,
+    active,
+    foreground,
+    rgb: rgbStr,
+    focusRing: `rgba(${rgbStr}, 0.28)`,
+    subtle: `rgba(${rgbStr}, 0.14)`,
+    border: `rgba(${rgbStr}, 0.34)`,
+    shadow: `rgba(${rgbStr}, 0.26)`,
+    shadowHover: `rgba(${rgbStr}, 0.36)`,
+  };
+}
+
 /**
  * Compute viewport-clamped floating popover coordinates relative to a trigger rect,
  * accounting for RTL/LTR direction and flipping above/left when space is constrained.

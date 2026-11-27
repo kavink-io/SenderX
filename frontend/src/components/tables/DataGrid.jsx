@@ -17,6 +17,7 @@ import {
 } from 'ag-grid-community';
 import { AgGridReact } from 'ag-grid-react';
 import { useTheme } from '../../context/ThemeContext';
+import { deriveAccentTokens } from '../../utils/colorUtils';
 
 ModuleRegistry.registerModules([
   ClientSideRowModelModule,
@@ -42,25 +43,23 @@ const sharedThemeParams = {
   headerFontWeight: 600,
 };
 
-const lightTheme = themeQuartz.withPart(colorSchemeLight).withParams({
+const lightBaseParams = {
   ...sharedThemeParams,
   backgroundColor: 'transparent',
   chromeBackgroundColor: 'rgba(248, 250, 252, 0.65)',
   foregroundColor: '#0f172a',
   borderColor: 'rgba(15, 23, 42, 0.08)',
   oddRowBackgroundColor: 'rgba(248, 250, 252, 0.35)',
-  selectedRowBackgroundColor: 'rgba(37, 99, 235, 0.08)',
-});
+};
 
-const darkTheme = themeQuartz.withPart(colorSchemeDarkBlue).withParams({
+const darkBaseParams = {
   ...sharedThemeParams,
   backgroundColor: 'transparent',
   chromeBackgroundColor: 'rgba(255, 255, 255, 0.035)',
   foregroundColor: '#f4f7ff',
   borderColor: 'rgba(255, 255, 255, 0.085)',
   oddRowBackgroundColor: 'rgba(255, 255, 255, 0.015)',
-  selectedRowBackgroundColor: 'rgba(56, 217, 245, 0.10)',
-});
+};
 
 /**
  * Shared AG Grid wrapper synchronized with SenderX light/dark theme and responsive layout.
@@ -77,7 +76,17 @@ export default function DataGrid({
   defaultColDef: customDefaultColDef,
   gridOptions,
 }) {
-  const { isDark } = useTheme();
+  const { isDark, preferences } = useTheme();
+  const gridTheme = useMemo(() => {
+    const accent = deriveAccentTokens(preferences?.accentColor);
+    const scheme = isDark ? colorSchemeDarkBlue : colorSchemeLight;
+    const base = isDark ? darkBaseParams : lightBaseParams;
+    return themeQuartz.withPart(scheme).withParams({
+      ...base,
+      accentColor: accent.color,
+      selectedRowBackgroundColor: accent.subtle,
+    });
+  }, [isDark, preferences?.accentColor]);
 
   const defaultColDef = useMemo(
     () => ({
@@ -111,7 +120,7 @@ export default function DataGrid({
   return (
     <div className="senderx-ag-grid" style={{ width: '100%' }}>
       <AgGridReact
-        theme={isDark ? darkTheme : lightTheme}
+        theme={gridTheme}
         rowData={Array.isArray(rowData) ? rowData : []}
         columnDefs={normalizedColumnDefs}
         defaultColDef={defaultColDef}

@@ -58,41 +58,77 @@ export default function MessagesPage() {
     fetchMessages();
   }, [fetchMessages]);
 
+  const handleCopyId = useCallback(async (mid) => {
+    if (!mid) return;
+    try {
+      await navigator.clipboard.writeText(String(mid));
+      showToast('Message ID copied to clipboard', 'success');
+    } catch {
+      showToast('Could not copy message ID', 'error');
+    }
+  }, [showToast]);
+
   const columnDefs = useMemo(() => [
+    {
+      headerName: 'Message ID',
+      colId: 'message_id',
+      field: 'message_id',
+      minWidth: 118,
+      maxWidth: 155,
+      flex: 0.9,
+      valueGetter: ({ data }) => data.message_id || data._id || data.id || '',
+      cellRenderer: ({ value }) => (
+        <span
+          className="ag-cell-ellipsis"
+          title={value}
+          style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--accent-color)' }}
+        >
+          {value}
+        </span>
+      ),
+    },
     {
       headerName: 'Recipient',
       field: 'recipient',
-      minWidth: 210,
-      flex: 1.5,
-      autoHeight: true,
-      wrapText: true,
-      cellRenderer: ({ data: m }) => {
-        const mid = m.message_id || m._id || m.id;
-        return (
-          <div>
-            <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{m.recipient}</div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)' }}>
-              {mid}
-            </div>
-          </div>
-        );
-      },
+      minWidth: 165,
+      flex: 1.4,
+      cellRenderer: ({ value }) => (
+        <span className="ag-cell-ellipsis" title={value} style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+          {value || 'N/A'}
+        </span>
+      ),
     },
     {
       headerName: 'Channel',
       field: 'channel',
-      minWidth: 110,
-      maxWidth: 135,
+      minWidth: 96,
+      maxWidth: 118,
+      flex: 0.6,
       cellRenderer: ({ value }) => <span className="badge badge-info">{value}</span>,
+    },
+    {
+      headerName: 'Provider',
+      field: 'provider',
+      minWidth: 96,
+      maxWidth: 125,
+      flex: 0.75,
+      valueGetter: ({ data }) => data.provider || 'default',
+      cellRenderer: ({ value }) => (
+        <span className="ag-cell-ellipsis" title={value} style={{ fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+          {value}
+        </span>
+      ),
     },
     {
       headerName: 'Status',
       field: 'status',
-      minWidth: 120,
-      maxWidth: 145,
+      minWidth: 105,
+      maxWidth: 126,
+      flex: 0.7,
       cellRenderer: ({ value }) => {
-        const isDelivered = value === 'DELIVERED' || value === 'SENT';
-        const isFailed = value === 'FAILED' || value === 'ERROR';
+        const normalized = String(value || '').toUpperCase();
+        const isDelivered = ['DELIVERED', 'SENT', 'READ'].includes(normalized);
+        const isFailed = ['FAILED', 'ERROR', 'DEAD'].includes(normalized);
         return (
           <span className={`badge ${isDelivered ? 'badge-success' : isFailed ? 'badge-danger' : 'badge-warning'}`}>
             {value}
@@ -101,24 +137,28 @@ export default function MessagesPage() {
       },
     },
     {
-      headerName: 'Provider',
-      field: 'provider',
-      minWidth: 110,
-      valueGetter: ({ data }) => data.provider || 'default',
-      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
-    },
-    {
-      headerName: 'Created',
+      headerName: 'Created At',
       field: 'created_at',
-      minWidth: 155,
+      minWidth: 145,
+      maxWidth: 175,
+      flex: 1,
       valueFormatter: ({ value }) => (value ? new Date(value).toLocaleString() : 'N/A'),
-      cellStyle: { fontSize: '0.85rem', color: 'var(--text-secondary)' },
+      cellRenderer: ({ value }) => {
+        const formatted = value ? new Date(value).toLocaleString() : 'N/A';
+        return (
+          <span className="ag-cell-ellipsis" title={formatted} style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            {formatted}
+          </span>
+        );
+      },
     },
     {
       headerName: 'Actions',
       colId: 'actions',
-      minWidth: 72,
-      maxWidth: 82,
+      width: 118,
+      minWidth: 118,
+      maxWidth: 118,
+      flex: 0,
       sortable: false,
       filter: false,
       resizable: false,
@@ -126,7 +166,9 @@ export default function MessagesPage() {
       headerClass: 'ag-right-aligned-header',
       cellClass: 'ag-actions-cell',
       cellRenderer: ({ data: m }) => {
-        const isFailed = m.status === 'FAILED' || m.status === 'ERROR';
+        const mid = m.message_id || m._id || m.id;
+        const normalized = String(m.status || '').toUpperCase();
+        const isFailed = ['FAILED', 'ERROR', 'DEAD'].includes(normalized);
         return (
           <div className="ag-icon-actions" role="group" aria-label="Message actions">
             <GridActionButton
@@ -138,14 +180,23 @@ export default function MessagesPage() {
                 setIsDetailsOpen(true);
               }}
             />
+            <GridActionButton
+              icon="copy"
+              label="Copy message ID"
+              onClick={() => handleCopyId(mid)}
+            />
             {isFailed && (
-              <GridActionButton icon="refresh" label="Retry message" onClick={() => setRetryTargetMessage(m)} />
+              <GridActionButton
+                icon="refresh"
+                label="Retry message"
+                onClick={() => setRetryTargetMessage(m)}
+              />
             )}
           </div>
         );
       },
     },
-  ], []);
+  ], [handleCopyId]);
 
   return (
     <div className="tab-pane active" id="tab-org-messages">

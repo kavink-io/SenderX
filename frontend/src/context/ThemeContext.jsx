@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import ApiClient from '../services/api';
-import { DEFAULT_ACCENT_COLOR, normalizeHexColor } from '../utils/colorUtils';
+import { DEFAULT_ACCENT_COLOR, deriveAccentTokens, normalizeHexColor } from '../utils/colorUtils';
 
 const ThemeContext = createContext();
 
@@ -24,16 +24,27 @@ const FONT_FAMILY_STACKS = {
 };
 
 function applyAccentCssVariables(root, color) {
-  const safeColor = normalizeHexColor(color) || DEFAULT_ACCENT_COLOR;
-  root.style.setProperty('--accent-blue', safeColor);
-  root.style.setProperty('--accent-primary', safeColor);
-  root.style.setProperty('--accent-cyan', safeColor);
-  root.style.setProperty('--accent-hover', safeColor);
-  root.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${safeColor} 0%, ${safeColor} 100%)`);
-  root.style.setProperty('--lg-accent', safeColor);
-  root.style.setProperty('--lg-accent-cyan', safeColor);
-  root.style.setProperty('--lg-accent-border', `${safeColor}55`);
-  root.style.setProperty('--lg-accent-soft', `${safeColor}30`);
+  const tokens = deriveAccentTokens(color);
+  root.style.setProperty('--accent-color', tokens.color);
+  root.style.setProperty('--accent-hover', tokens.hover);
+  root.style.setProperty('--accent-active', tokens.active);
+  root.style.setProperty('--accent-foreground', tokens.foreground);
+  root.style.setProperty('--accent-focus-ring', tokens.focusRing);
+  root.style.setProperty('--accent-subtle', tokens.subtle);
+  root.style.setProperty('--accent-border', tokens.border);
+  root.style.setProperty('--accent-shadow', tokens.shadow);
+  root.style.setProperty('--accent-shadow-hover', tokens.shadowHover);
+  root.style.setProperty('--accent-rgb', tokens.rgb);
+
+  // Sync existing theme aliases across CSS & glass components
+  root.style.setProperty('--accent-blue', tokens.color);
+  root.style.setProperty('--accent-primary', tokens.color);
+  root.style.setProperty('--accent-cyan', tokens.color);
+  root.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${tokens.color} 0%, ${tokens.hover} 100%)`);
+  root.style.setProperty('--lg-accent', tokens.color);
+  root.style.setProperty('--lg-accent-cyan', tokens.color);
+  root.style.setProperty('--lg-accent-border', tokens.border);
+  root.style.setProperty('--lg-accent-soft', tokens.subtle);
 }
 
 function accountStorageKey(account) {

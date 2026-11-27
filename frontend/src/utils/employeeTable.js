@@ -17,25 +17,86 @@ function readableRoleName(role) {
   return name.toUpperCase() === 'ORG_ADMIN' ? 'Organization Admin' : name;
 }
 
-export function getEmployeeRoleLabel(employee = {}) {
-  if (employee.is_org_admin) return 'Organization Admin';
+/**
+ * Resolve normalized, human-readable role entries for an employee without exposing raw UUIDs.
+ */
+export function getEmployeeRolesList(employee = {}) {
+  if (employee.is_org_admin) {
+    return [{ key: 'org-admin', id: 'ORG_ADMIN', name: 'Organization Admin', isAdmin: true }];
+  }
 
   const assignments = [employee.roles, employee.role_assignments]
     .find((roles) => Array.isArray(roles) && roles.length) || [];
-  const roleNames = assignments
-    .map((role) => readableRoleName(role) || (
-      typeof role === 'string'
-        ? (role.trim() ? 'Unknown Role' : null)
-        : role && typeof role === 'object' && (role.role_id || role.id)
-          ? 'Unknown Role'
-          : null
-    ))
-    .filter(Boolean);
 
-  if (roleNames.length) return [...new Set(roleNames)].join(', ');
+  const resolved = [];
+  const seenNames = new Set();
 
-  const roleIds = Array.isArray(employee.role_ids) ? employee.role_ids : [];
-  return roleIds.length ? 'Unknown Role' : 'Unassigned';
+  for (let i = 0; i < assignments.length; i += 1) {
+    const role = assignments[i];
+    const roleId = typeof role === 'string'
+      ? role.trim()
+      : (role && typeof role === 'object' ? (role.role_id || role.id || null) : null);
+
+    let name = readableRoleName(role);
+    if (!name && roleId) {
+      name = 'Unknown Role';
+    }
+    if (!name) continue;
+
+    const dedupeKey = name === 'Unknown Role' ? `unknown-${roleId || i}` : name.toLowerCase();
+    if (seenNames.has(dedupeKey)) continue;
+    seenNames.add(dedupeKey);
+
+    resolved.push({
+      key: String(roleId || `${name}-${i}`),
+      id: roleId,
+      name,
+      isAdmin: false,
+    });
+  }
+
+  if (resolved.length > 0) return resolved;
+
+  const roleIds = Array.isArray(employee.role_ids) ? employee.role_ids.filter(Boolean) : [];
+  if (roleIds.length > 0) {
+    return roleIds.map((rid, idx) => ({
+      key: String(rid || idx),
+      id: rid,
+      name: 'Unknown Role',
+      isAdmin: false,
+    }));
+  }
+
+  return [];
+}
+
+/**
+ * Split roles into visible badges (1-2 depending on length) and overflow items for `+N`.
+ */
+export function partitionRoleBadges(roles = []) {
+  if (!Array.isArray(roles) || roles.length === 0) {
+    return { visible: [], overflow: [] };
+  }
+  if (roles.length === 1) {
+    return { visible: roles, overflow: [] };
+  }
+  if (roles.length === 2) {
+    const combinedLen = roles[0].name.length + roles[1].name.length;
+    return combinedLen <= 26
+      ? { visible: roles, overflow: [] }
+      : { visible: [roles[0]], overflow: [roles[1]] };
+  }
+  const firstTwoLen = roles[0].name.length + roles[1].name.length;
+  const visibleCount = firstTwoLen <= 24 ? 2 : 1;
+  return {
+    visible: roles.slice(0, visibleCount),
+    overflow: roles.slice(visibleCount),
+  };
+}
+
+export function getEmployeeRoleLabel(employee = {}) {
+  const list = getEmployeeRolesList(employee);
+  return list.length ? list.map((r) => r.name).join(', ') : 'Unassigned';
 }
 
 export function getEmployeeStatus(employee = {}) {

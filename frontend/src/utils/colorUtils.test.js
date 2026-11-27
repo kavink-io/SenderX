@@ -5,6 +5,8 @@ import {
   ACCENT_PRESETS,
   DEFAULT_ACCENT_COLOR,
   calculatePopoverPosition,
+  deriveAccentTokens,
+  getReadableForeground,
   hexToHsv,
   hexToRgb,
   hsvToHex,
@@ -77,4 +79,16 @@ test('calculatePopoverPosition respects RTL and narrow mobile viewports', () => 
   });
   assert.ok(rtlPos.left >= 12);
   assert.ok(rtlPos.left + rtlPos.width <= 360 - 12);
+});
+
+test('deriveAccentTokens generates readable contrast foreground and darker hover/active shades', () => {
+  const darkAccent = deriveAccentTokens('#635BDB');
+  assert.equal(darkAccent.color, '#635BDB');
+  assert.equal(darkAccent.foreground, '#FFFFFF');
+  assert.notEqual(darkAccent.hover, darkAccent.color);
+  assert.notEqual(darkAccent.active, darkAccent.hover);
+
+  // Bright yellow accent must automatically pick dark foreground text for legibility
+  assert.equal(getReadableForeground('#FACC15'), '#0F172A');
+  assert.equal(getReadableForeground('#1E293B'), '#FFFFFF');
 });

@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { calculatePopoverPosition } from '../../utils/colorUtils';
 
 const icons = {
   view: (
@@ -25,6 +27,13 @@ const icons = {
     <>
       <rect x="8" y="8" width="13" height="13" rx="2" />
       <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
     </>
   ),
   refresh: (
@@ -82,6 +91,13 @@ const icons = {
       <path d="m2 2 20 20" />
     </>
   ),
+  ellipsis: (
+    <>
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+      <circle cx="5" cy="12" r="1" />
+    </>
+  ),
   close: (
     <>
       <path d="m18 6-12 12M6 6l12 12" />
@@ -89,14 +105,26 @@ const icons = {
   ),
 };
 
-export default function GridActionButton({ icon, label, onClick, variant = '', disabled = false }) {
+export default function GridActionButton({
+  icon,
+  label,
+  onClick,
+  variant = '',
+  disabled = false,
+  ariaExpanded,
+  ariaHaspopup,
+  buttonRef,
+}) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={`icon-btn icon-btn-sm${variant ? ` icon-btn-${variant}` : ''}`}
       onClick={onClick}
       title={label}
       aria-label={label}
+      aria-expanded={ariaExpanded}
+      aria-haspopup={ariaHaspopup}
       disabled={disabled}
     >
       <svg
@@ -114,5 +142,130 @@ export default function GridActionButton({ icon, label, onClick, variant = '', d
         {icons[icon]}
       </svg>
     </button>
+  );
+}
+
+/**
+ * Portal-rendered overflow menu for dense AG Grid action columns.
+ */
+export function GridMoreMenu({ items = [], label = 'More actions' }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 196, openUp: false });
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+
+  const visibleItems = items.filter((item) => item && !item.hidden);
+  if (!visibleItems.length) return null;
+
+  const updatePos = () => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const menuRect = menuRef.current?.getBoundingClientRect();
+    const isRtl = document.documentElement.getAttribute('dir') === 'rtl';
+    setPos(
+      calculatePopoverPosition({
+        triggerRect: rect,
+        popoverWidth: menuRect?.width || 196,
+        popoverHeight: menuRect?.height || Math.min(240, visibleItems.length * 38 + 16),
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        isRtl: !isRtl, // In LTR, prefer aligning menu right edge with trigger right edge
+      })
+    );
+  };
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    updatePos();
+    const raf = window.requestAnimationFrame(updatePos);
+    return () => window.cancelAnimationFrame(raf);
+  }, [isOpen, visibleItems.length]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handleOutside = (event) => {
+      if (triggerRef.current?.contains(event.target) || menuRef.current?.contains(event.target)) return;
+      setIsOpen(false);
+    };
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setIsOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    const handleReposition = () => updatePos();
+
+    document.addEventListener('mousedown', handleOutside, true);
+    document.addEventListener('keydown', handleEscape, true);
+    window.addEventListener('resize', handleReposition);
+    window.addEventListener('scroll', handleReposition, true);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside, true);
+      document.removeEventListener('keydown', handleEscape, true);
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('scroll', handleReposition, true);
+    };
+  }, [isOpen]);
+
+  return (
+    <>
+      <GridActionButton
+        buttonRef={triggerRef}
+        icon="ellipsis"
+        label={label}
+        ariaExpanded={isOpen}
+        ariaHaspopup="menu"
+        onClick={() => setIsOpen((prev) => !prev)}
+      />
+      {isOpen && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          className={`lg-dropdown-menu grid-more-menu${pos.openUp ? ' is-up' : ''}`}
+          style={{
+            position: 'fixed',
+            top: `${pos.top}px`,
+            left: `${pos.left}px`,
+            minWidth: '188px',
+            width: `${pos.width}px`,
+            zIndex: 3000,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {visibleItems.map((item) => (
+            <button
+              key={item.key || item.label}
+              type="button"
+              role="menuitem"
+              className={`lg-dropdown-item${item.variant === 'danger' ? ' is-danger' : ''}`}
+              disabled={item.disabled}
+              onClick={() => {
+                setIsOpen(false);
+                item.onClick?.();
+              }}
+            >
+              {item.icon && icons[item.icon] && (
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  {icons[item.icon]}
+                </svg>
+              )}
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
   );
 }

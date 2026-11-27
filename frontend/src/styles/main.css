@@ -441,17 +441,17 @@ textarea {
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: var(--accent-blue);
+  border-color: var(--accent-color, var(--lg-accent));
   background: var(--bg-secondary);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  box-shadow: 0 0 0 3px var(--accent-focus-ring, var(--lg-accent-soft));
 }
 
 [data-theme="dark"] input:focus,
 [data-theme="dark"] select:focus,
 [data-theme="dark"] textarea:focus {
-  border-color: var(--accent-cyan);
+  border-color: var(--accent-color, var(--lg-accent));
   background: rgba(255, 255, 255, 0.07);
-  box-shadow: 0 0 0 3px rgba(56, 217, 245, 0.16);
+  box-shadow: 0 0 0 3px var(--accent-focus-ring, var(--lg-accent-soft));
 }
 
 input::placeholder,
@@ -494,19 +494,20 @@ select option {
 }
 
 .btn-primary {
-  background: var(--accent-gradient);
-  color: #ffffff !important;
+  background: var(--accent-gradient, linear-gradient(135deg, var(--accent-color, var(--lg-accent)) 0%, var(--accent-hover, var(--lg-accent)) 100%));
+  color: var(--accent-foreground, #ffffff) !important;
   font-weight: 600;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
+  box-shadow: 0 2px 8px var(--accent-shadow, rgba(99, 91, 219, 0.25));
 }
 
-.btn-primary:hover {
-  background: linear-gradient(135deg, #0369a1 0%, #1d4ed8 100%);
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--accent-hover, var(--lg-accent)) 0%, var(--accent-active, var(--lg-accent)) 100%);
+  box-shadow: 0 4px 14px var(--accent-shadow-hover, rgba(99, 91, 219, 0.35));
   transform: translateY(-1px);
 }
 
-.btn-primary:active {
+.btn-primary:active:not(:disabled) {
+  background: var(--accent-active, var(--lg-accent));
   transform: translateY(0);
 }
 
@@ -3024,10 +3025,10 @@ select option {
 }
 
 .btn-subtab.active {
-  background: var(--accent-blue, #2563eb);
-  color: #ffffff !important;
+  background: var(--accent-color, var(--lg-accent));
+  color: var(--accent-foreground, #ffffff) !important;
   font-weight: 600;
-  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.3);
+  box-shadow: 0 1px 4px var(--accent-shadow, rgba(99, 91, 219, 0.3));
 }
 
 .btn-xs {
@@ -3037,9 +3038,9 @@ select option {
 }
 
 .btn-xs.active {
-  background: var(--accent-blue, #2563eb);
-  color: #ffffff !important;
-  border-color: var(--accent-blue, #2563eb);
+  background: var(--accent-color, var(--lg-accent));
+  color: var(--accent-foreground, #ffffff) !important;
+  border-color: var(--accent-color, var(--lg-accent));
 }
 
 

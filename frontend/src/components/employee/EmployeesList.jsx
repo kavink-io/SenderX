@@ -11,6 +11,7 @@ import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { GlassSearch, GlassSelect } from '../glass';
 import ProfessionalAvatar from '../common/ProfessionalAvatar';
+import RoleBadgesCell from './RoleBadgesCell';
 import { getEmployeeRoleLabel, getEmployeeStatus } from '../../utils/employeeTable';
 
 export default function EmployeesList() {
@@ -140,16 +141,28 @@ export default function EmployeesList() {
       ),
     },
     {
-      headerName: 'Role',
+      headerName: 'Roles',
       field: 'roles',
-      minWidth: 145,
-      maxWidth: 240,
-      flex: 1.1,
+      minWidth: 185,
+      maxWidth: 260,
+      flex: 1.2,
       valueGetter: ({ data: emp }) => getEmployeeRoleLabel(emp),
-      cellRenderer: ({ data: emp, value }) => (
-        <span className={`badge ${emp.is_org_admin ? 'badge-primary' : 'badge-info'} employee-role-badge`} title={value}>
-          {value}
-        </span>
+      cellRenderer: ({ data: emp }) => (
+        <RoleBadgesCell
+          employee={emp}
+          onViewProfile={() => {
+            setSelectedEmp(emp);
+            setIsDetailsOpen(true);
+          }}
+          onManageRoles={
+            canManage
+              ? () => {
+                  setSelectedEmp(emp);
+                  setIsAssignOpen(true);
+                }
+              : undefined
+          }
+        />
       ),
     },
     {
