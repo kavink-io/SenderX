@@ -96,6 +96,17 @@ export default function JsonAnalyzer() {
                   )}
                 </div>
 
+                {analysisResult.threats && analysisResult.threats.length > 0 && (
+                  <div style={{ color: 'var(--status-error)', marginBottom: '0.75rem' }}>
+                    <div style={{ fontWeight: 600 }}>Security Threats Detected:</div>
+                    <ul style={{ paddingLeft: '1.25rem', margin: '0.25rem 0' }}>
+                      {analysisResult.threats.map((threat, i) => (
+                        <li key={i}>{typeof threat === 'string' ? threat : JSON.stringify(threat)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
                 {analysisResult.errors && analysisResult.errors.length > 0 && (
                   <div style={{ color: 'var(--status-error)', marginBottom: '0.75rem' }}>
                     <div style={{ fontWeight: 600 }}>Detected Schema Violations:</div>

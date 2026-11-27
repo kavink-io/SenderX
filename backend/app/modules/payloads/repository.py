@@ -107,16 +107,32 @@ class PayloadRepository:
         # Remove internal Mongo ObjectId before returning
         return cls.find_by_id(doc["payload_id"], organization_id=doc.get("organization_id"))
 
+    @staticmethod
+    def _apply_application_filter(query: Dict[str, Any], application_ids: Any = None) -> Dict[str, Any]:
+        if application_ids is None:
+            return query
+        if isinstance(application_ids, (list, set, tuple)):
+            query["application_id"] = {"$in": list(application_ids)}
+        elif isinstance(application_ids, str):
+            query["application_id"] = application_ids.strip()
+        return query
+
     # -----------------------------------------------------------------------
     # 2. RETRIEVAL (TENANT-SCOPED)
     # -----------------------------------------------------------------------
 
     @classmethod
-    def find_by_id(cls, payload_id: str, organization_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Retrieve payload by ID strictly scoped to organization_id when provided, decrypting at rest."""
+    def find_by_id(
+        cls,
+        payload_id: str,
+        organization_id: Optional[str] = None,
+        application_ids: Any = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve payload by ID strictly scoped to organization_id and application_ids when provided."""
         query: Dict[str, Any] = {"payload_id": payload_id}
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_ids)
 
         doc = cls._payloads_col().find_one(query, {"_id": 0})
         return cls._decrypt_payload_doc(doc)
@@ -130,11 +146,11 @@ class PayloadRepository:
         status: Optional[str] = None,
         channel: Optional[str] = None,
         validation_status: Optional[str] = None,
-        application_id: Optional[str] = None,
+        application_id: Any = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Paginated list of received JSON requests scoped to an organization."""
+        """Paginated list of received JSON requests scoped to an organization and optional applications."""
         query: Dict[str, Any] = {"organization_id": organization_id}
 
         if status:
@@ -143,8 +159,11 @@ class PayloadRepository:
             query["channel"] = channel.lower().strip()
         if validation_status:
             query["validation_status"] = validation_status
-        if application_id:
-            query["application_id"] = application_id
+        if application_id is not None:
+            if isinstance(application_id, (list, set, tuple)):
+                query["application_id"] = {"$in": list(application_id)}
+            elif isinstance(application_id, str) and application_id.strip():
+                query["application_id"] = application_id.strip()
 
         if start_date or end_date:
             date_filter: Dict[str, Any] = {}
@@ -199,14 +218,15 @@ class PayloadRepository:
         reason: str,
         validation_status: str,
         validation_errors: Optional[List[str]] = None,
-        new_channel: Optional[str] = None
+        new_channel: Optional[str] = None,
+        application_ids: Any = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Create a new version snapshot while keeping original_payload intact.
         Atomically increments version and appends to version history.
         Encrypts new payload at rest.
         """
-        existing = cls.find_by_id(payload_id, organization_id=organization_id)
+        existing = cls.find_by_id(payload_id, organization_id=organization_id, application_ids=application_ids)
         if not existing:
             return None
 
@@ -238,11 +258,14 @@ class PayloadRepository:
         if new_channel:
             update_fields["channel"] = new_channel
 
+        query: Dict[str, Any] = {
+            "payload_id": payload_id,
+            "organization_id": organization_id,
+        }
+        cls._apply_application_filter(query, application_ids)
+
         res = cls._payloads_col().update_one(
-            {
-                "payload_id": payload_id,
-                "organization_id": organization_id
-            },
+            query,
             {
                 "$set": update_fields,
                 "$push": {"versions": version_entry}
@@ -252,7 +275,7 @@ class PayloadRepository:
         if res.matched_count == 0:
             return None
 
-        return cls.find_by_id(payload_id, organization_id=organization_id)
+        return cls.find_by_id(payload_id, organization_id=organization_id, application_ids=application_ids)
 
     # -----------------------------------------------------------------------
     # 4. STATUS & DISPATCH UPDATES (IDEMPOTENCY GUARDS)
@@ -268,12 +291,14 @@ class PayloadRepository:
         dlq_id: Optional[str] = None,
         failure_code: Optional[str] = None,
         failure_reason: Optional[str] = None,
-        extra_fields: Optional[Dict[str, Any]] = None
+        extra_fields: Optional[Dict[str, Any]] = None,
+        application_ids: Any = None,
     ) -> bool:
         """Update payload lifecycle status."""
         query: Dict[str, Any] = {"payload_id": payload_id}
         if organization_id:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_ids)
 
         update: Dict[str, Any] = {
             "status": new_status,
@@ -298,18 +323,22 @@ class PayloadRepository:
     def transition_to_dispatching_atomically(
         cls,
         payload_id: str,
-        organization_id: str
+        organization_id: str,
+        application_ids: Any = None,
     ) -> bool:
         """
         Atomic transition to DISPATCHING preventing concurrent or duplicate retries.
         Only succeeds if status is in eligible retry states (IN_DLQ, EDITED, FAILED).
         """
+        query: Dict[str, Any] = {
+            "payload_id": payload_id,
+            "organization_id": organization_id,
+            "status": {"$in": ["IN_DLQ", "EDITED", "FAILED"]},
+        }
+        cls._apply_application_filter(query, application_ids)
+
         res = cls._payloads_col().update_one(
-            {
-                "payload_id": payload_id,
-                "organization_id": organization_id,
-                "status": {"$in": ["IN_DLQ", "EDITED", "FAILED"]}
-            },
+            query,
             {
                 "$set": {
                     "status": "DISPATCHING",
@@ -332,7 +361,8 @@ class PayloadRepository:
         event_type: str,
         details: Dict[str, Any],
         performed_by: str = "SYSTEM",
-        version: Optional[int] = None
+        version: Optional[int] = None,
+        application_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Record an immutable audit log entry for this payload."""
         import json
@@ -345,6 +375,7 @@ class PayloadRepository:
             "audit_id": str(uuid.uuid4()),
             "payload_id": payload_id,
             "organization_id": organization_id,
+            "application_id": application_id,
             "event_type": event_type,
             "version": version,
             "details": safe_details,
@@ -360,12 +391,14 @@ class PayloadRepository:
         cls,
         payload_id: str,
         organization_id: Optional[str] = None,
-        limit: int = 100
+        limit: int = 100,
+        application_ids: Any = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve audit log entries for a payload in chronological order."""
         query: Dict[str, Any] = {"payload_id": payload_id}
         if organization_id:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_ids)
 
         cursor = cls._audit_col().find(query, {"_id": 0}).sort("timestamp", 1).limit(limit)
         return list(cursor)

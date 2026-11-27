@@ -37,6 +37,8 @@ from app.adapters.base_adapter import BaseChannelAdapter, ProviderError
 from app.adapters.email.email_utils import (
     parse_recipients,
     validate_attachments,
+    validate_email_headers,
+    validate_no_crlf,
     render_template,
     redact_sensitive,
     normalize_provider_response,
@@ -109,7 +111,7 @@ class SendGridAdapter(BaseChannelAdapter):
         recipients = parse_recipients(to_list)
 
         raw_subject = data.get("subject") or message.get("subject") or ""
-        subject = render_template(raw_subject, template_vars)
+        subject = validate_no_crlf(render_template(raw_subject, template_vars), "subject")
 
         raw_text = data.get("message") or data.get("content") or data.get("text") or ""
         plain_content = render_template(raw_text, template_vars) if raw_text else None
@@ -119,10 +121,10 @@ class SendGridAdapter(BaseChannelAdapter):
 
         cc_list = parse_recipients(data.get("cc")) if data.get("cc") else []
         bcc_list = parse_recipients(data.get("bcc")) if data.get("bcc") else []
-        reply_to = data.get("reply_to")
+        reply_to = validate_no_crlf(data.get("reply_to"), "reply_to") if data.get("reply_to") else None
 
         attachments = validate_attachments(data.get("attachments", []))
-        headers = data.get("headers", {})
+        headers = validate_email_headers(data.get("headers", {}))
 
         return {
             "from_email": self.from_email,

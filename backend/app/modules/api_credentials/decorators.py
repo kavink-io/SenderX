@@ -8,7 +8,8 @@ from functools import wraps
 from typing import Any, Callable, List, Optional
 
 from flask import current_app, g, jsonify, request
-from app.modules.api_credentials.rate_limiter import DistributedRateLimiter
+from app.core.client_ip import resolve_client_ip
+from app.modules.api_credentials.rate_limiter import DistributedRateLimiter, RateLimiterError
 from app.modules.api_credentials.service import ApiCredentialService
 from app.modules.auth.decorators import require_permissions
 
@@ -54,15 +55,40 @@ def require_api_key_or_token(required_permissions: Optional[List[str]] = None) -
             # 1. Check for external API key first
             api_key = extract_api_key_from_request()
             if api_key:
-                client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+                client_ip = resolve_client_ip(request)
+
+                try:
+                    pre_allowed, pre_retry = DistributedRateLimiter.peek_auth_failure(client_ip)
+                except RateLimiterError:
+                    return jsonify({
+                        "success": False,
+                        "message": "Rate limiting service temporarily unavailable. Please retry later."
+                    }), 503
+
+                if not pre_allowed:
+                    resp = jsonify({
+                        "success": False,
+                        "message": "Too many failed authentication attempts. Please try again later.",
+                        "retry_after": pre_retry,
+                    })
+                    resp.headers["Retry-After"] = str(pre_retry)
+                    return resp, 429
 
                 cred, org = ApiCredentialService.verify_api_key(api_key)
                 if not cred or not org:
-                    allowed, retry_after = DistributedRateLimiter.record_auth_failure(client_ip)
+                    try:
+                        allowed, retry_after = DistributedRateLimiter.record_auth_failure(client_ip)
+                    except RateLimiterError:
+                        return jsonify({
+                            "success": False,
+                            "message": "Rate limiting service temporarily unavailable. Please retry later."
+                        }), 503
+
                     if not allowed:
                         resp = jsonify({
                             "success": False,
-                            "message": "Too many failed authentication attempts. Please try again later."
+                            "message": "Too many failed authentication attempts. Please try again later.",
+                            "retry_after": retry_after,
                         })
                         resp.headers["Retry-After"] = str(retry_after)
                         return resp, 429
@@ -75,28 +101,39 @@ def require_api_key_or_token(required_permissions: Optional[List[str]] = None) -
                 # Establish verified context
                 g.current_organization = org
                 g.current_application_id = cred["application_id"]
+                g.user_application_ids = [cred["application_id"]]
                 g.auth_type = "API_KEY"
                 g.current_credential = cred
 
                 # API-key scopes are intentionally narrower than dashboard RBAC.
                 # Map organization permissions to the equivalent public API scope.
                 scope_aliases = {
-                    "organization:messages:create": "messages:create",
-                    "organization:messages:read": "messages:read",
-                    "organization:messages:manage": "messages:manage",
+                    "organization:messages:create": ["messages:create"],
+                    "organization:messages:read": ["messages:read"],
+                    "organization:messages:manage": ["messages:manage"],
+                    "organization:payloads:read": ["messages:read", "payloads:read"],
+                    "organization:payloads:edit": ["payloads:edit"],
+                    "organization:payloads:validate": ["payloads:ingest", "messages:create"],
+                    "organization:analytics:read": ["messages:read", "analytics:read"],
+                    "organization:dead_letters:read": ["messages:read", "dead_letters:read"],
+                    "organization:dlq:read": ["messages:read", "dlq:read"],
+                    "organization:dead_letters:manage": ["messages:manage"],
+                    "organization:dlq:retry": ["messages:manage"],
                 }
                 scope_compatibility = {"payloads:write": "payloads:ingest", "messages:write": "messages:create"}
                 granted_scopes = {
                     scope_compatibility.get(scope, scope)
                     for scope in (cred.get("scopes") or [])
                 }
-                missing_scopes = [
-                    ("payloads:ingest" if permission == "organization:messages:create" and "/payloads" in request.path
-                     else scope_aliases.get(permission, permission))
-                    for permission in required_permissions
-                    if ("payloads:ingest" if permission == "organization:messages:create" and "/payloads" in request.path
-                        else scope_aliases.get(permission, permission)) not in granted_scopes
-                ]
+                missing_scopes = []
+                for permission in required_permissions:
+                    if permission == "organization:messages:create" and "/payloads" in request.path:
+                        candidates = ["payloads:ingest"]
+                    else:
+                        mapped = scope_aliases.get(permission, [permission])
+                        candidates = mapped if isinstance(mapped, list) else [mapped]
+                    if not any(c in granted_scopes for c in candidates):
+                        missing_scopes.append(candidates[0])
                 if missing_scopes:
                     return jsonify({
                         "success": False,
@@ -106,20 +143,27 @@ def require_api_key_or_token(required_permissions: Optional[List[str]] = None) -
 
                 # Rate limiting (CRED-06)
                 for dim, ident in [
-                    ("credential", cred["credential_id"]),
+                    ("credential", DistributedRateLimiter.hash_identifier("cred", cred["credential_id"])),
                     ("application", cred["application_id"]),
                     ("organization", org["organization_id"])
                 ]:
                     custom_limit = current_app.config.get(f"RATE_LIMIT_{dim.upper()}_RPM")
-                    is_allowed, retry_after = DistributedRateLimiter.check_rate_limit(
-                        dimension=dim,
-                        identifier=ident,
-                        limit=custom_limit
-                    )
+                    try:
+                        is_allowed, retry_after = DistributedRateLimiter.check_rate_limit(
+                            dimension=dim,
+                            identifier=ident,
+                            limit=custom_limit
+                        )
+                    except RateLimiterError:
+                        return jsonify({
+                            "success": False,
+                            "message": "Rate limiting service temporarily unavailable. Please retry later."
+                        }), 503
+
                     if not is_allowed:
                         resp = jsonify({
                             "success": False,
-                            "message": f"Rate limit exceeded for {dim}. Please throttle requests.",
+                            "message": "Rate limit exceeded. Please throttle requests.",
                             "retry_after": retry_after
                         })
                         resp.headers["Retry-After"] = str(retry_after)
@@ -142,26 +186,41 @@ def require_api_key_or_token(required_permissions: Optional[List[str]] = None) -
                         "message": "Live credentials cannot be used in a test environment"
                     }), 403
 
-                # Verify client did not spoof a mismatched application_id
-                client_app_id = request.headers.get("X-Application-ID")
-                if not client_app_id and request.is_json:
+                # Verify client did not spoof a mismatched application_id in ANY request carrier
+                supplied_apps = [
+                    request.headers.get("X-Application-ID"),
+                    request.args.get("application_id"),
+                    kwargs.get("application_id"),
+                ]
+                if request.is_json:
                     json_body = request.get_json(silent=True) or {}
-                    if isinstance(json_body, dict):
-                        client_app_id = json_body.get("application_id")
+                    if isinstance(json_body, dict) and "application_id" in json_body:
+                        supplied_apps.append(json_body.get("application_id"))
 
-                if client_app_id and str(client_app_id).strip() != str(cred["application_id"]).strip():
-                    return jsonify({
-                        "success": False,
-                        "message": (
-                            f"Application ID mismatch: API credential is bound to application "
-                            f"'{cred['application_id']}', cannot submit for '{client_app_id}'"
-                        )
-                    }), 403
+                for candidate_app in supplied_apps:
+                    if candidate_app is None:
+                        continue
+                    if not isinstance(candidate_app, str):
+                        return jsonify({
+                            "success": False,
+                            "message": "application_id must be a string",
+                        }), 400
+                    clean_app = candidate_app.strip()
+                    if clean_app and clean_app != str(cred["application_id"]).strip():
+                        return jsonify({
+                            "success": False,
+                            "message": (
+                                f"Application ID mismatch: API credential is bound to application "
+                                f"'{cred['application_id']}', cannot submit for '{clean_app}'"
+                            )
+                        }), 403
 
                 return func(*args, **kwargs)
 
             # Preserve the project's full RBAC behavior for dashboard callers,
             # including application-scoped role assignments and token versioning.
+            g.auth_type = None
+            g.current_credential = None
             return require_permissions(*required_permissions)(func)(*args, **kwargs)
 
         return wrapper

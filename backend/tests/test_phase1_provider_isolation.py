@@ -563,7 +563,7 @@ def test_celery_process_message_fails_closed_without_org_credentials():
             "status_history": [],
         })
 
-        result = process_message("msg-isolated-1")
+        result = process_message.run("msg-isolated-1")
         assert result["success"] is False
         assert result["status"] == "FAILED"
         assert result.get("error_code") == ProviderResolutionError.PROVIDER_NOT_CONFIGURED

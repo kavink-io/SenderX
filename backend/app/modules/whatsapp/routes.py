@@ -5,9 +5,13 @@ Provides REST API endpoints for:
 - Centralized encrypted Meta platform settings management for Platform Admins.
 """
 
-from flask import Blueprint, jsonify, request, g
+from flask import Blueprint, current_app, jsonify, request, g
 
-from app.modules.auth.decorators import require_permissions, require_roles
+from app.modules.auth.decorators import (
+    require_permissions,
+    require_roles,
+    require_organization_wide_scope,
+)
 from app.modules.whatsapp.meta_client import (
     WhatsAppVerificationError,
     WhatsAppVerificationErrorCode,
@@ -24,6 +28,9 @@ whatsapp_bp = Blueprint("whatsapp", __name__)
 @whatsapp_bp.route("/integrations/<integration_id>/flows", methods=["GET", "POST"])
 @require_permissions("organization:providers:manage")
 def manage_flows(integration_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     actor = getattr(g, "current_user", None)
     try:
@@ -43,6 +50,9 @@ def manage_flows(integration_id):
 @whatsapp_bp.route("/integrations/<integration_id>/flows/<flow_id>", methods=["GET", "PATCH"])
 @require_permissions("organization:providers:manage")
 def flow_detail(integration_id, flow_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     try:
         if request.method == "GET":
@@ -65,6 +75,9 @@ def flow_detail(integration_id, flow_id):
 @whatsapp_bp.route("/integrations/<integration_id>/flows/<flow_id>/publish", methods=["POST"])
 @require_permissions("organization:providers:manage")
 def publish_flow(integration_id, flow_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     try:
         result = WhatsAppFlowService.publish_flow(
             g.current_organization["organization_id"], integration_id, flow_id, getattr(g, "current_user", None)
@@ -79,6 +92,9 @@ def publish_flow(integration_id, flow_id):
 @whatsapp_bp.route("/integrations/<integration_id>/flows/<flow_id>/deprecate", methods=["POST"])
 @require_permissions("organization:providers:manage")
 def deprecate_flow(integration_id, flow_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     try:
         flow = WhatsAppFlowService.deprecate_flow(
             g.current_organization["organization_id"], integration_id, flow_id, getattr(g, "current_user", None)
@@ -93,6 +109,9 @@ def deprecate_flow(integration_id, flow_id):
 @whatsapp_bp.route("/integrations/<integration_id>/flows/encryption-key", methods=["POST"])
 @require_permissions("organization:providers:manage")
 def register_flow_encryption_key(integration_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     try:
         result = WhatsAppFlowService.setup_encryption_key(
             g.current_organization["organization_id"], integration_id, getattr(g, "current_user", None)
@@ -163,6 +182,9 @@ def connect_manual_integration():
     Connect an organization WhatsApp Business Account manually using WABA ID,
     Phone Number ID, and Access Token verified against the real Meta Graph API.
     """
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     data = request.get_json(silent=True) or {}
     organization_id = g.current_organization["organization_id"]
     actor = getattr(g, "current_user", None)
@@ -201,10 +223,11 @@ def connect_manual_integration():
             "success": False,
             "message": msg
         }), status_code
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to connect WhatsApp Business Account")
         return jsonify({
             "success": False,
-            "message": f"Failed to connect WhatsApp Business Account: {str(e)}"
+            "message": "Failed to connect WhatsApp Business Account"
         }), 500
 
 
@@ -212,6 +235,9 @@ def connect_manual_integration():
 @require_permissions("organization:providers:manage")
 def create_integration():
     """Connect a new WhatsApp Business phone number for this organization."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     data = request.get_json(silent=True) or {}
     organization_id = g.current_organization["organization_id"]
     actor = getattr(g, "current_user", None)
@@ -234,10 +260,11 @@ def create_integration():
             "success": False,
             "message": msg
         }), status_code
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to create WhatsApp integration")
         return jsonify({
             "success": False,
-            "message": f"Failed to create WhatsApp integration: {str(e)}"
+            "message": "Failed to create WhatsApp integration"
         }), 500
 
 
@@ -245,6 +272,9 @@ def create_integration():
 @require_permissions("organization:providers:read")
 def list_integrations():
     """List all WhatsApp phone number integrations for this organization."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     status_filter = request.args.get("status")
     include_deleted = request.args.get("include_deleted", "false").lower() == "true"
@@ -265,10 +295,11 @@ def list_integrations():
             "success": False,
             "message": str(e)
         }), 400
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to list WhatsApp integrations")
         return jsonify({
             "success": False,
-            "message": f"Failed to list WhatsApp integrations: {str(e)}"
+            "message": "Failed to list WhatsApp integrations"
         }), 500
 
 
@@ -276,6 +307,9 @@ def list_integrations():
 @require_permissions("organization:providers:read")
 def get_integration(integration_id):
     """Retrieve details of a specific WhatsApp integration (strictly scoped to current org)."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
 
     try:
@@ -298,10 +332,11 @@ def get_integration(integration_id):
             "success": False,
             "message": str(e)
         }), 400
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to retrieve WhatsApp integration")
         return jsonify({
             "success": False,
-            "message": f"Failed to retrieve WhatsApp integration: {str(e)}"
+            "message": "Failed to retrieve WhatsApp integration"
         }), 500
 
 
@@ -309,6 +344,9 @@ def get_integration(integration_id):
 @require_permissions("organization:providers:manage")
 def update_integration(integration_id):
     """Update metadata for an existing WhatsApp integration."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     data = request.get_json(silent=True) or {}
     organization_id = g.current_organization["organization_id"]
     actor = getattr(g, "current_user", None)
@@ -332,10 +370,11 @@ def update_integration(integration_id):
             "success": False,
             "message": msg
         }), status_code
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to update WhatsApp integration")
         return jsonify({
             "success": False,
-            "message": f"Failed to update WhatsApp integration: {str(e)}"
+            "message": "Failed to update WhatsApp integration"
         }), 500
 
 
@@ -343,6 +382,9 @@ def update_integration(integration_id):
 @require_permissions("organization:providers:manage")
 def rotate_credentials(integration_id):
     """Rotate access token credentials for a WhatsApp integration."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     data = request.get_json(silent=True) or {}
     organization_id = g.current_organization["organization_id"]
     actor = getattr(g, "current_user", None)
@@ -374,10 +416,11 @@ def rotate_credentials(integration_id):
             "success": False,
             "message": msg
         }), status_code
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to rotate WhatsApp credentials")
         return jsonify({
             "success": False,
-            "message": f"Failed to rotate WhatsApp credentials: {str(e)}"
+            "message": "Failed to rotate WhatsApp credentials"
         }), 500
 
 
@@ -385,6 +428,9 @@ def rotate_credentials(integration_id):
 @require_permissions("organization:providers:manage")
 def verify_credential_status(integration_id):
     """Verify integrity and format of stored WhatsApp credentials without exposing token."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     actor = getattr(g, "current_user", None)
 
@@ -412,10 +458,11 @@ def verify_credential_status(integration_id):
             "success": False,
             "message": msg
         }), status_code
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to verify WhatsApp credentials")
         return jsonify({
             "success": False,
-            "message": f"Failed to verify WhatsApp credentials: {str(e)}"
+            "message": "Failed to verify WhatsApp credentials"
         }), 500
 
 
@@ -423,6 +470,9 @@ def verify_credential_status(integration_id):
 @require_permissions("organization:providers:manage")
 def disconnect_integration(integration_id):
     """Soft-delete / disconnect a WhatsApp integration."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     actor = getattr(g, "current_user", None)
 
@@ -449,10 +499,11 @@ def disconnect_integration(integration_id):
             "success": False,
             "message": msg
         }), status_code
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to disconnect WhatsApp integration")
         return jsonify({
             "success": False,
-            "message": f"Failed to disconnect WhatsApp integration: {str(e)}"
+            "message": "Failed to disconnect WhatsApp integration"
         }), 500
 
 
@@ -470,10 +521,11 @@ def get_platform_settings():
             "success": True,
             "data": settings
         }), 200
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to retrieve platform settings")
         return jsonify({
             "success": False,
-            "message": f"Failed to retrieve platform settings: {str(e)}"
+            "message": "Failed to retrieve platform settings"
         }), 500
 
 
@@ -496,8 +548,9 @@ def update_platform_settings():
             "success": False,
             "message": str(e)
         }), 400
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("Failed to update platform settings")
         return jsonify({
             "success": False,
-            "message": f"Failed to update platform settings: {str(e)}"
+            "message": "Failed to update platform settings"
         }), 500

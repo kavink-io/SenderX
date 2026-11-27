@@ -57,6 +57,10 @@ def require_roles(*allowed_roles):
                 }), 403
 
             g.current_admin = admin
+            g.auth_type = "PLATFORM_ADMIN"
+            g.current_credential = None
+            g.current_application_id = None
+            g.user_application_ids = None
 
             return func(*args, **kwargs)
 
@@ -65,12 +69,105 @@ def require_roles(*allowed_roles):
     return decorator
 
 
+def _expand_organization_permissions(raw_permissions):
+    """Expand organization permissions with compatibility aliases."""
+    effective = set(raw_permissions)
+    if "organization:users:manage" in raw_permissions:
+        effective.add("organization:users:delete")
+    if "organization:users:delete" in raw_permissions:
+        effective.add("organization:users:manage")
+    if "organization:dead_letters:read" in raw_permissions:
+        effective.add("organization:dlq:read")
+    if "organization:dlq:read" in raw_permissions:
+        effective.add("organization:dead_letters:read")
+    if "organization:dead_letters:manage" in raw_permissions:
+        effective.add("organization:dlq:retry")
+    if "organization:dlq:retry" in raw_permissions:
+        effective.add("organization:dead_letters:manage")
+    if "organization:configuration:manage" in raw_permissions:
+        effective.add("organization:providers:manage")
+        effective.add("organization:providers:read")
+    if "organization:providers:manage" in raw_permissions:
+        effective.add("organization:providers:read")
+    if "organization:templates:manage" in raw_permissions:
+        effective.update([
+            "organization:templates:create",
+            "organization:templates:read",
+            "templates.read",
+            "templates.create",
+            "templates.update",
+            "templates.publish",
+            "templates.delete"
+        ])
+    if "organization:templates:read" in raw_permissions:
+        effective.add("templates.read")
+    if "templates.read" in raw_permissions:
+        effective.add("organization:templates:read")
+    if any(p in raw_permissions for p in ["templates.create", "templates.update", "templates.publish", "templates.delete"]):
+        effective.add("organization:templates:manage")
+    return effective
+
+
+def _extract_target_application_id(kwargs):
+    """Extract and validate target application_id across header, query, body, and route kwargs."""
+    candidates = []
+    header_app = request.headers.get("X-Application-ID")
+    query_app = request.args.get("application_id")
+    body_app = None
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        if isinstance(body, dict) and "application_id" in body:
+            body_app = body.get("application_id")
+    kwarg_app = kwargs.get("application_id")
+
+    for val in (header_app, query_app, body_app, kwarg_app):
+        if val is None:
+            continue
+        if not isinstance(val, str):
+            return None, ("application_id must be a string", 400)
+        cleaned = val.strip()
+        if cleaned:
+            candidates.append(cleaned)
+
+    distinct = list(dict.fromkeys(candidates))
+    if len(distinct) > 1:
+        return None, ("Conflicting application_id values supplied in request", 403)
+    return (distinct[0] if distinct else None), None
+
+
+def resolve_authorized_application_scope():
+    """
+    Return the authoritative application ID scope for the current request:
+    - None when caller has verified organization-wide scope for this endpoint.
+    - A non-empty list[str] of authorized application IDs when caller is application-scoped or API-key bound.
+    """
+    if getattr(g, "auth_type", None) == "API_KEY":
+        app_id = getattr(g, "current_application_id", None)
+        return [str(app_id).strip()] if app_id else []
+
+    user_scopes = getattr(g, "user_application_ids", None)
+    if user_scopes is not None:
+        return [str(aid).strip() for aid in user_scopes if aid]
+
+    return None
+
+
+def require_organization_wide_scope():
+    """Reject callers restricted to specific applications on organization-wide configuration routes."""
+    if resolve_authorized_application_scope() is not None:
+        return jsonify({
+            "success": False,
+            "message": "Organization-wide permission scope is required for this resource"
+        }), 403
+    return None
+
+
 def require_permissions(*required_permissions):
     """
     Organization-user permission authorization.
 
     All requested permissions must be assigned to the user's
-    organization-scoped roles.
+    organization-scoped roles and match any targeted or assigned application scope.
     """
 
     def decorator(func):
@@ -115,19 +212,12 @@ def require_permissions(*required_permissions):
                     "message": "Organization is inactive or unavailable"
                 }), 403
 
-            # 1. Extract Target Application Context (if present in request)
-            header_app = request.headers.get("X-Application-ID")
-            query_app = request.args.get("application_id")
-            body_app = None
-            if request.is_json:
-                body = request.get_json(silent=True) or {}
-                if isinstance(body, dict):
-                    body_app = body.get("application_id")
-            kwarg_app = kwargs.get("application_id")
+            # 1. Extract and validate Target Application Context
+            target_app_id, extract_err = _extract_target_application_id(kwargs)
+            if extract_err:
+                err_msg, err_code = extract_err
+                return jsonify({"success": False, "message": err_msg}), err_code
 
-            target_app_id = (header_app or query_app or body_app or kwarg_app or "").strip() or None
-
-            # Validate target application ownership if explicitly specified
             if target_app_id:
                 from app.modules.applications.repository import ApplicationRepository
                 app_record = ApplicationRepository.find_by_id(target_app_id, organization_id=organization_id)
@@ -140,12 +230,11 @@ def require_permissions(*required_permissions):
             # 2. Resolve roles and role_assignments from database
             role_assignments = user.get("role_assignments")
             if not isinstance(role_assignments, list) or not role_assignments:
-                # Fallback to role_ids with None application_id (organization-wide)
                 role_assignments = [{"role_id": r, "application_id": None} for r in user.get("role_ids", [])]
 
-            granted_permissions = set()
+            org_wide_raw_permissions = set()
+            app_raw_permissions = {}
             user_roles = []
-            user_app_scopes = set()
             has_org_wide_scope = False
 
             for assignment in role_assignments:
@@ -160,132 +249,78 @@ def require_permissions(*required_permissions):
                     organization_id=organization_id
                 )
 
-                if not role:
-                    continue
-
-                # Only organization-scoped roles are accepted.
-                if role.get("scope") != "ORGANIZATION":
+                if not role or role.get("scope") != "ORGANIZATION":
                     continue
 
                 permissions = role.get("permissions", [])
                 if not isinstance(permissions, list):
                     continue
 
+                clean_perms = [p for p in permissions if isinstance(p, str)]
+                if "*" in clean_perms or "organization:*" in clean_perms:
+                    return jsonify({
+                        "success": False,
+                        "message": "Invalid wildcard permission configuration"
+                    }), 403
+
                 user_roles.append(role)
 
-                # Determine effective application scope for this role assignment
                 assigned_app = assignment.get("application_id") or role.get("application_id")
                 if assigned_app and str(assigned_app).strip().lower() not in ("all", "none", "", "null"):
                     assigned_app_clean = str(assigned_app).strip()
-                    user_app_scopes.add(assigned_app_clean)
-
-                    # Application-scoped role:
-                    # If target_app_id is specified, must match assigned_app_clean
-                    if target_app_id:
-                        if str(target_app_id).strip() == assigned_app_clean:
-                            granted_permissions.update(
-                                permission for permission in permissions if isinstance(permission, str)
-                            )
-                    else:
-                        # Request is not targeting an application.
-                        # Application-scoped roles do not grant organization-wide permissions.
-                        pass
+                    app_raw_permissions.setdefault(assigned_app_clean, set()).update(clean_perms)
                 else:
-                    # Organization-wide role (e.g. ORG_ADMIN, application_id=None or 'all'):
-                    # Applies unconditionally to all applications and org-wide operations.
                     has_org_wide_scope = True
-                    granted_permissions.update(
-                        permission for permission in permissions if isinstance(permission, str)
+                    org_wide_raw_permissions.update(clean_perms)
+
+            req_set = set(required_permissions)
+            org_wide_effective = _expand_organization_permissions(org_wide_raw_permissions)
+            has_required_org_wide = bool(has_org_wide_scope and req_set.issubset(org_wide_effective))
+
+            if target_app_id:
+                combined_raw = org_wide_raw_permissions | app_raw_permissions.get(target_app_id, set())
+                effective_permissions = _expand_organization_permissions(combined_raw)
+                missing_permissions = req_set - effective_permissions
+                if missing_permissions:
+                    return jsonify({
+                        "success": False,
+                        "message": f"You do not have permission to perform this action for application '{target_app_id}'",
+                        "missing_permissions": sorted(missing_permissions)
+                    }), 403
+                authorized_app_ids = None if has_required_org_wide else [target_app_id]
+            else:
+                if has_required_org_wide:
+                    authorized_app_ids = None
+                else:
+                    eligible_apps = sorted(
+                        aid for aid, perms in app_raw_permissions.items()
+                        if req_set.issubset(_expand_organization_permissions(org_wide_raw_permissions | perms))
                     )
-
-            # If target_app_id was not explicitly specified in header/query/body,
-            # but user has role assignments scoped exclusively to a single application,
-            # infer target_app_id to that assigned application scope for seamless API access.
-            if not target_app_id and len(user_app_scopes) == 1 and not any(
-                (assign.get("application_id") is None or str(assign.get("application_id")).strip().lower() in ("all", "none", "", "null"))
-                for assign in role_assignments if isinstance(assign, dict)
-            ):
-                target_app_id = next(iter(user_app_scopes))
-                for assignment in role_assignments:
-                    if not isinstance(assignment, dict):
-                        continue
-                    r_id = assignment.get("role_id")
-                    role = RoleRepository.find_by_id(r_id, organization_id=organization_id)
-                    if not role:
-                        continue
-                    assigned_app = assignment.get("application_id") or role.get("application_id")
-                    if assigned_app and str(assigned_app).strip() == target_app_id:
-                        granted_permissions.update(
-                            permission for permission in role.get("permissions", []) if isinstance(permission, str)
-                        )
-
-            # Wildcard permissions are intentionally not supported.
-            if "*" in granted_permissions or "organization:*" in granted_permissions:
-                return jsonify({
-                    "success": False,
-                    "message": "Invalid wildcard permission configuration"
-                }), 403
-
-            # Expand granted permissions with aliases for backward/forward compatibility
-            effective_permissions = set(granted_permissions)
-            if "organization:users:manage" in granted_permissions:
-                effective_permissions.add("organization:users:delete")
-            if "organization:users:delete" in granted_permissions:
-                effective_permissions.add("organization:users:manage")
-            if "organization:dead_letters:read" in granted_permissions:
-                effective_permissions.add("organization:dlq:read")
-            if "organization:dlq:read" in granted_permissions:
-                effective_permissions.add("organization:dead_letters:read")
-            if "organization:dead_letters:manage" in granted_permissions:
-                effective_permissions.add("organization:dlq:retry")
-            if "organization:dlq:retry" in granted_permissions:
-                effective_permissions.add("organization:dead_letters:manage")
-            # Provider / WhatsApp configuration permission aliases
-            if "organization:configuration:manage" in granted_permissions:
-                effective_permissions.add("organization:providers:manage")
-                effective_permissions.add("organization:providers:read")
-            if "organization:providers:manage" in granted_permissions:
-                effective_permissions.add("organization:providers:read")
-            # Template permission aliases
-            if "organization:templates:manage" in granted_permissions:
-                effective_permissions.update([
-                    "organization:templates:create",
-                    "organization:templates:read",
-                    "templates.read",
-                    "templates.create",
-                    "templates.update",
-                    "templates.publish",
-                    "templates.delete"
-                ])
-            if "organization:templates:read" in granted_permissions:
-                effective_permissions.add("templates.read")
-            if "templates.read" in granted_permissions:
-                effective_permissions.add("organization:templates:read")
-            if any(p in granted_permissions for p in ["templates.create", "templates.update", "templates.publish", "templates.delete"]):
-                effective_permissions.add("organization:templates:manage")
-
-            missing_permissions = (
-                set(required_permissions) - effective_permissions
-            )
-
-            if missing_permissions:
-                msg = (
-                    f"You do not have permission to perform this action for application '{target_app_id}'"
-                    if target_app_id
-                    else "You do not have permission to perform this action"
-                )
-                return jsonify({
-                    "success": False,
-                    "message": msg,
-                    "missing_permissions": sorted(missing_permissions)
-                }), 403
+                    if not eligible_apps:
+                        all_combined = set(org_wide_raw_permissions)
+                        for perms in app_raw_permissions.values():
+                            all_combined.update(perms)
+                        effective_all = _expand_organization_permissions(all_combined)
+                        missing_permissions = req_set - effective_all
+                        if not missing_permissions:
+                            missing_permissions = req_set
+                        return jsonify({
+                            "success": False,
+                            "message": "You do not have permission to perform this action",
+                            "missing_permissions": sorted(missing_permissions)
+                        }), 403
+                    authorized_app_ids = eligible_apps
+                    if len(eligible_apps) == 1:
+                        target_app_id = eligible_apps[0]
 
             # Store verified account context for the route handler.
+            g.auth_type = "ORGANIZATION_USER"
+            g.current_credential = None
             g.current_user = user
             g.current_organization = organization
             g.current_roles = user_roles
             g.current_application_id = target_app_id
-            g.user_application_ids = None if has_org_wide_scope else (list(user_app_scopes) if user_app_scopes else None)
+            g.user_application_ids = authorized_app_ids
 
             return func(*args, **kwargs)
 

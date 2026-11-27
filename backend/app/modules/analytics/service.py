@@ -46,10 +46,15 @@ class AnalyticsService:
         scope_filter = {}
         if organization_id is not None:
             scope_filter["organization_id"] = organization_id
-        if application_id:
+        if application_ids is not None:
+            if application_id:
+                scope_filter["application_id"] = (
+                    application_id if application_id in application_ids else {"$in": []}
+                )
+            else:
+                scope_filter["application_id"] = {"$in": list(application_ids)}
+        elif application_id:
             scope_filter["application_id"] = application_id
-        elif application_ids is not None:
-            scope_filter["application_id"] = {"$in": list(application_ids)}
 
         date_filter = cls._created_at_filter(start_date, end_date)
         match_filter = {**scope_filter, **date_filter}

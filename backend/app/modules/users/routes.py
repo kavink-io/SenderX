@@ -232,10 +232,11 @@ def resend_activation_otp(user_id):
         for role in getattr(g, "current_roles", [])
     )
     try:
+        from app.core.client_ip import resolve_client_ip
         result = OTPService.request_code(
             target_user.get("email"),
             OTPService.ACTIVATION,
-            client_ip=request.remote_addr,
+            client_ip=resolve_client_ip(request),
             target_user_id=user_id,
             organization_id=organization_id,
             actor={

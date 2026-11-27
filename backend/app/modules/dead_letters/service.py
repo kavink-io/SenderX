@@ -8,6 +8,18 @@ from app.modules.messages.repository import MessageRepository
 class DeadLetterService:
 
     @staticmethod
+    def _resolve_scope(application_id=None, user_application_ids=None):
+        """Resolve effective application filter while enforcing authorized boundaries."""
+        if user_application_ids is not None:
+            if application_id:
+                clean_app = str(application_id).strip()
+                if clean_app not in user_application_ids:
+                    return []
+                return clean_app
+            return list(user_application_ids)
+        return str(application_id).strip() if isinstance(application_id, str) and application_id.strip() else None
+
+    @staticmethod
     def get_all_dead_letters(
         limit=50,
         page=1,
@@ -15,7 +27,9 @@ class DeadLetterService:
         message_id=None,
         recipient=None,
         provider=None,
-        organization_id=None
+        organization_id=None,
+        application_id=None,
+        user_application_ids=None,
     ):
         try:
             limit = int(limit)
@@ -33,6 +47,11 @@ class DeadLetterService:
                     "message": "Page must be greater than or equal to 1"
                 }
 
+            effective_app_filter = DeadLetterService._resolve_scope(
+                application_id=application_id,
+                user_application_ids=user_application_ids,
+            )
+
             result = DeadLetterRepository.find_all(
                 limit=limit,
                 page=page,
@@ -41,7 +60,8 @@ class DeadLetterService:
                 recipient=recipient,
                 provider=provider,
                 include_metadata=True,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_id=effective_app_filter,
             )
 
             from app.modules.payloads.models import redact_sensitive_payload
@@ -78,10 +98,15 @@ class DeadLetterService:
 
         
     @staticmethod
-    def get_statistics(organization_id=None):
+    def get_statistics(organization_id=None, application_id=None, user_application_ids=None):
         try:
+            effective_app_filter = DeadLetterService._resolve_scope(
+                application_id=application_id,
+                user_application_ids=user_application_ids,
+            )
             statistics = DeadLetterRepository.get_statistics(
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_id=effective_app_filter,
             )
 
             return {
@@ -99,10 +124,15 @@ class DeadLetterService:
                 "message": "Failed to retrieve DLQ statistics"
             }
     @staticmethod
-    def get_provider_analytics(organization_id=None):
+    def get_provider_analytics(organization_id=None, application_id=None, user_application_ids=None):
         try:
+            effective_app_filter = DeadLetterService._resolve_scope(
+                application_id=application_id,
+                user_application_ids=user_application_ids,
+            )
             analytics = DeadLetterRepository.get_provider_analytics(
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_id=effective_app_filter,
             )
 
             return {
@@ -121,14 +151,21 @@ class DeadLetterService:
             }
 
     @staticmethod
-    def get_dead_letter(message_id, organization_id=None):
+    def get_dead_letter(message_id, organization_id=None, user_application_ids=None):
         try:
             dead_letter = DeadLetterRepository.find_by_message_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=user_application_ids,
             )
 
             if not dead_letter:
+                return {
+                    "success": False,
+                    "message": "Dead letter not found"
+                }
+
+            if user_application_ids is not None and not dead_letter.get("application_id"):
                 return {
                     "success": False,
                     "message": "Dead letter not found"
@@ -154,14 +191,15 @@ class DeadLetterService:
 
         
     @staticmethod
-    def get_retry_history(message_id, organization_id=None):
+    def get_retry_history(message_id, organization_id=None, user_application_ids=None):
         try:
             dead_letter = DeadLetterRepository.find_by_message_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=user_application_ids,
             )
 
-            if not dead_letter:
+            if not dead_letter or (user_application_ids is not None and not dead_letter.get("application_id")):
                 return {
                     "success": False,
                     "message": "Dead letter not found"
@@ -213,7 +251,8 @@ class DeadLetterService:
     def delete_dead_letter(
         message_id,
         confirm=False,
-        organization_id=None
+        organization_id=None,
+        user_application_ids=None,
     ):
         try:
             if confirm is not True:
@@ -224,10 +263,11 @@ class DeadLetterService:
 
             dead_letter = DeadLetterRepository.find_by_message_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=user_application_ids,
             )
 
-            if not dead_letter:
+            if not dead_letter or (user_application_ids is not None and not dead_letter.get("application_id")):
                 return {
                     "success": False,
                     "message": "Dead letter not found"
@@ -239,9 +279,13 @@ class DeadLetterService:
                     "message": "Only PENDING_REVIEW messages can be deleted"
                 }
 
+            dlq_app_id = dead_letter.get("application_id")
+            scope_filter = dlq_app_id if dlq_app_id is not None else user_application_ids
+
             deleted = DeadLetterRepository.delete_by_message_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=scope_filter,
             )
 
             if not deleted:
@@ -275,7 +319,12 @@ class DeadLetterService:
 
     
     @staticmethod
-    def retry_dead_letter(message_id, organization_id=None):
+    def retry_dead_letter(
+        message_id,
+        organization_id=None,
+        user_application_ids=None,
+        expected_application_id=None,
+    ):
 
         reserved = False
         requeued = False
@@ -285,16 +334,38 @@ class DeadLetterService:
         previous_manual_retry_count = 0
 
         try:
-            # 1. Retrieve DLQ record within the tenant.
+            # 1. Retrieve DLQ record within the tenant and application scope.
             dead_letter = DeadLetterRepository.find_by_message_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=user_application_ids,
             )
 
             if not dead_letter:
                 return {
                     "success": False,
                     "message": "Dead letter not found"
+                }
+
+            effective_org_id = organization_id or dead_letter.get("organization_id")
+            if organization_id and dead_letter.get("organization_id") != organization_id:
+                return {
+                    "success": False,
+                    "message": "Dead letter not found"
+                }
+
+            dlq_app_id = dead_letter.get("application_id")
+            if user_application_ids is not None and not dlq_app_id:
+                return {
+                    "success": False,
+                    "message": "Dead letter not found"
+                }
+
+            if expected_application_id is not None and dlq_app_id is not None and str(dlq_app_id) != str(expected_application_id):
+                return {
+                    "success": False,
+                    "status_code": 409,
+                    "message": "Ambiguous or mismatched application ownership on dead letter record"
                 }
 
             if dead_letter.get("dead_letter_status") != "PENDING_REVIEW":
@@ -308,14 +379,17 @@ class DeadLetterService:
                 from app.modules.payloads.service import PayloadService
                 return PayloadService.retry_payload(
                     payload_id=dead_letter.get("payload_id", message_id),
-                    organization_id=organization_id,
-                    user_id=None
+                    organization_id=effective_org_id,
+                    user_id=None,
+                    user_application_ids=user_application_ids,
+                    expected_application_id=dlq_app_id,
                 )
 
-            # 2. Retrieve original message within the same tenant.
+            # 2. Retrieve original message within the same tenant and application scope.
             message = MessageRepository.find_by_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=effective_org_id,
+                application_ids=user_application_ids,
             )
 
             if not message:
@@ -324,11 +398,45 @@ class DeadLetterService:
                     "message": "Original message not found"
                 }
 
+            if effective_org_id and message.get("organization_id") != effective_org_id:
+                return {
+                    "success": False,
+                    "status_code": 409,
+                    "message": "Ambiguous or mismatched organization ownership on dead letter record"
+                }
+
+            msg_app_id = message.get("application_id")
+            if dlq_app_id is not None and msg_app_id is not None and str(dlq_app_id) != str(msg_app_id):
+                return {
+                    "success": False,
+                    "status_code": 409,
+                    "message": "Ambiguous or mismatched application ownership on dead letter record"
+                }
+
+            if user_application_ids is not None and (not msg_app_id or msg_app_id not in user_application_ids):
+                return {
+                    "success": False,
+                    "message": "Original message not found"
+                }
+
+            trusted_app_id = msg_app_id if msg_app_id is not None else dlq_app_id
+            from app.modules.messages.service import MessageService
+            app_ok, app_err = MessageService._validate_persisted_application_active(trusted_app_id, effective_org_id)
+            if not app_ok:
+                return {
+                    "success": False,
+                    "status_code": 403,
+                    "message": app_err
+                }
+
             if message.get("status") != "DEAD":
                 return {
                     "success": False,
                     "message": "Original message is not in DEAD status"
                 }
+
+            dlq_scope = dlq_app_id if dlq_app_id is not None else user_application_ids
+            msg_scope = msg_app_id if msg_app_id is not None else user_application_ids
 
             # 3. Preserve previous retry counters.
             previous_retry_count = message.get("retry_count", 0)
@@ -336,10 +444,11 @@ class DeadLetterService:
                 "manual_retry_count", 0
             )
 
-            # 4. Reserve DLQ record for retry.
+            # 4. Reserve DLQ record for retry with atomic ownership constraint.
             dispatch = DeadLetterRepository.mark_retry_requested(
                 message_id,
-                organization_id=organization_id
+                organization_id=effective_org_id,
+                application_ids=dlq_scope,
             )
 
             if not dispatch:
@@ -351,17 +460,19 @@ class DeadLetterService:
             reserved = True
             task_id = dispatch["task_id"]
 
-            # 5. Requeue the original message within the tenant.
+            # 5. Requeue the original message within the tenant and application scope.
             requeued = MessageRepository.requeue_dead_message(
                 message_id,
                 previous_retry_count,
-                organization_id=organization_id
+                organization_id=effective_org_id,
+                application_ids=msg_scope,
             )
 
             if not requeued:
                 restored = DeadLetterRepository.restore_pending_review(
                     message_id,
-                    organization_id=organization_id
+                    organization_id=effective_org_id,
+                    application_ids=dlq_scope,
                 )
 
                 return {
@@ -370,11 +481,15 @@ class DeadLetterService:
                     "dlq_restored": restored
                 }
 
-            # 6. Publish using the pre-generated task ID.
+            # 6. Publish using the pre-generated task ID and trusted ownership context.
             try:
                 task = current_app.celery.send_task(
                     "senderx.process_message",
                     args=[message_id],
+                    kwargs={
+                        "expected_organization_id": effective_org_id,
+                        "expected_application_id": trusted_app_id,
+                    },
                     task_id=task_id
                 )
 
@@ -386,8 +501,6 @@ class DeadLetterService:
                     message_id
                 )
 
-                # Do not roll back. The broker may have accepted
-                # the task before the publishing error was reported.
                 return {
                     "success": False,
                     "message": "Dispatch outcome uncertain; recovery required",
@@ -397,11 +510,12 @@ class DeadLetterService:
                     "error": str(error)
                 }
 
-            # 7. Record successful dispatch within the tenant.
+            # 7. Record successful dispatch within the tenant and application scope.
             audit_updated = DeadLetterRepository.mark_retry_queued(
                 message_id,
                 task.id,
-                organization_id=organization_id
+                organization_id=effective_org_id,
+                application_ids=dlq_scope,
             )
 
             if not audit_updated:
@@ -415,6 +529,7 @@ class DeadLetterService:
                     "success": True,
                     "message": "Task published; DLQ reconciliation required",
                     "message_id": message_id,
+                    "application_id": trusted_app_id,
                     "task_id": task.id,
                     "dispatch_state": "DISPATCHING",
                     "audit_updated": False
@@ -424,6 +539,7 @@ class DeadLetterService:
                 "success": True,
                 "message": "Manual retry successfully queued",
                 "message_id": message_id,
+                "application_id": trusted_app_id,
                 "previous_retry_count": previous_retry_count,
                 "previous_manual_retry_count": previous_manual_retry_count,
                 "current_retry_count": 0,
@@ -445,12 +561,12 @@ class DeadLetterService:
                         message_id,
                         previous_retry_count,
                         previous_manual_retry_count,
-                        organization_id=organization_id
+                        organization_id=organization_id,
                     )
 
                     restored = DeadLetterRepository.restore_pending_review(
                         message_id,
-                        organization_id=organization_id
+                        organization_id=organization_id,
                     )
 
                 except Exception:
@@ -480,14 +596,21 @@ class DeadLetterService:
         start_date=None,
         end_date=None,
         provider=None,
-        organization_id=None
+        organization_id=None,
+        application_id=None,
+        user_application_ids=None,
     ):
         try:
+            effective_app_filter = DeadLetterService._resolve_scope(
+                application_id=application_id,
+                user_application_ids=user_application_ids,
+            )
             trends = DeadLetterRepository.get_daily_failure_trends(
                 start_date=start_date,
                 end_date=end_date,
                 provider=provider,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_id=effective_app_filter,
             )
 
             return {

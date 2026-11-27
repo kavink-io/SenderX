@@ -29,6 +29,7 @@ from flask_jwt_extended import create_access_token
 
 from app import create_app
 from app.adapters.base_adapter import ProviderError
+from app.adapters.errors import ProviderResolutionError
 from app.adapters.adapter_registry import AdapterRegistry
 from app.adapters.whatsapp.cloud_adapter import WhatsAppCloudAdapter
 from app.adapters.whatsapp.mock_adapter import MockWhatsAppAdapter
@@ -1383,18 +1384,17 @@ def test_whatsapp_tenant_credential_isolation(client, app, test_setup):
         assert "EAA_ORG_A_SYSTEM_USER_TOKEN" not in str(raw_doc["credentials"])
         assert raw_doc["configured"] is True
 
-        # Verify AdapterRegistry resolves Org A adapter with Org A credentials
-        adapter_a = AdapterRegistry.get_adapter(
-            provider="meta",
-            channel="whatsapp",
-            organization_id=org_a
-        )
-        assert isinstance(adapter_a, WhatsAppCloudAdapter)
-        assert adapter_a.access_token == "EAA_ORG_A_SYSTEM_USER_TOKEN"
-        assert adapter_a.phone_number_id == "1009990001"
+        # Fail-closed check: Org A's module-fixture WhatsApp integration has no encrypted_access_token,
+        # so multi-tenant dispatch resolution rejects it rather than silently using legacy provider_configs.
+        with pytest.raises(ProviderResolutionError, match="has no configured access token"):
+            AdapterRegistry.get_adapter(
+                provider="meta",
+                channel="whatsapp",
+                organization_id=org_a
+            )
 
         # Verify Org B does NOT have Org A's credentials
-        with pytest.raises(ValueError, match="WhatsApp Cloud API configuration not found"):
+        with pytest.raises(ProviderResolutionError, match="No active WhatsApp integration found for this organization"):
             AdapterRegistry.get_adapter(
                 provider="meta",
                 channel="whatsapp",
@@ -1409,8 +1409,8 @@ def test_whatsapp_mock_vs_production_separation(app):
         mock_adapter = AdapterRegistry.get_adapter(provider="mock", channel="whatsapp")
         assert isinstance(mock_adapter, MockWhatsAppAdapter)
 
-        # Meta provider without credentials raises ValueError, NEVER falls back to mock
-        with pytest.raises(ValueError, match="WhatsApp Cloud API configuration not found"):
+        # Meta provider without credentials raises ProviderResolutionError, NEVER falls back to mock
+        with pytest.raises(ProviderResolutionError, match="No active WhatsApp integration found for this organization"):
             AdapterRegistry.get_adapter(
                 provider="meta",
                 channel="whatsapp",

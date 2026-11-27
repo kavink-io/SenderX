@@ -22,7 +22,7 @@ class DuplicateApiKeyError(ValueError):
 class ApiCredentialService:
     """Service managing encrypted, externally supplied API keys."""
 
-    ALLOWED_SCOPES = {"payloads:ingest", "messages:create", "messages:read"}
+    ALLOWED_SCOPES = {"payloads:ingest", "messages:create", "messages:read", "messages:manage"}
     SCOPE_ALIASES = {"payloads:write": "payloads:ingest", "messages:write": "messages:create"}
     ALLOWED_ENVIRONMENTS = {"live", "test"}
     ALLOWED_STATUSES = {"ACTIVE", "INACTIVE"}

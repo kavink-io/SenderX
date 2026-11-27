@@ -107,16 +107,26 @@ def ensure_database_indexes(app=None, force=False):
     # 5. Messages
     db["messages"].create_index([("message_id", pymongo.ASCENDING)], unique=True)
     db["messages"].create_index([("organization_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
+    db["messages"].create_index([("organization_id", pymongo.ASCENDING), ("application_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
+    db["messages"].create_index([("organization_id", pymongo.ASCENDING), ("application_id", pymongo.ASCENDING), ("message_id", pymongo.ASCENDING)])
     db["messages"].create_index([("organization_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
     db["messages"].create_index([("organization_id", pymongo.ASCENDING), ("provider", pymongo.ASCENDING)])
     db["messages"].create_index([("organization_id", pymongo.ASCENDING), ("channel", pymongo.ASCENDING)])
     db["messages"].create_index([("organization_id", pymongo.ASCENDING), ("recipient", pymongo.ASCENDING)])
     db["messages"].create_index([("provider_message_id", pymongo.ASCENDING)])
     db["messages"].create_index([("organization_id", pymongo.ASCENDING), ("provider_message_id", pymongo.ASCENDING)])
+    db["messages"].create_index([
+        ("organization_id", pymongo.ASCENDING),
+        ("channel", pymongo.ASCENDING),
+        ("provider", pymongo.ASCENDING),
+        ("provider_message_id", pymongo.ASCENDING),
+    ])
 
     # 6. Dead Letters
     db["dead_letters"].create_index([("message_id", pymongo.ASCENDING)], unique=True)
     db["dead_letters"].create_index([("message_id", pymongo.ASCENDING), ("organization_id", pymongo.ASCENDING)], unique=True)
+    db["dead_letters"].create_index([("organization_id", pymongo.ASCENDING), ("application_id", pymongo.ASCENDING), ("created_in_dlq_at", pymongo.DESCENDING)])
+    db["dead_letters"].create_index([("organization_id", pymongo.ASCENDING), ("application_id", pymongo.ASCENDING), ("message_id", pymongo.ASCENDING)])
     db["dead_letters"].create_index([
         ("dead_letter_status", pymongo.ASCENDING),
         ("manual_retry_dispatch_state", pymongo.ASCENDING),
@@ -131,6 +141,8 @@ def ensure_database_indexes(app=None, force=False):
         [("provider", pymongo.ASCENDING), ("organization_id", pymongo.ASCENDING)],
         unique=True
     )
+    db["provider_configs"].create_index([("provider", pymongo.ASCENDING), ("account_sid_digest", pymongo.ASCENDING)])
+    db["provider_configs"].create_index([("config_id", pymongo.ASCENDING)], sparse=True)
 
     # 8. Templates
     db["templates"].create_index([("template_id", pymongo.ASCENDING)], unique=True)
@@ -262,6 +274,20 @@ def ensure_database_indexes(app=None, force=False):
         ("integration_id", pymongo.ASCENDING),
         ("flow_id", pymongo.ASCENDING),
     ])
+    db["whatsapp_flows"].create_index([
+        ("organization_id", pymongo.ASCENDING),
+        ("integration_id", pymongo.ASCENDING),
+        ("flow_id", pymongo.ASCENDING),
+    ], unique=True)
+    db["whatsapp_flows"].create_index([
+        ("organization_id", pymongo.ASCENDING),
+        ("integration_id", pymongo.ASCENDING),
+        ("created_at", pymongo.DESCENDING),
+    ])
+    try:
+        db["oauth_transactions"].create_index([("state", pymongo.ASCENDING)], unique=True)
+    except pymongo.errors.OperationFailure:
+        db["oauth_transactions"].create_index([("state", pymongo.ASCENDING)])
 
     # 18. Platform Settings (Centralized Meta Platform Configuration)
     db["platform_settings"].create_index([("setting_key", pymongo.ASCENDING)], unique=True)

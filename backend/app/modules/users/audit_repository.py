@@ -49,14 +49,24 @@ EVENT_LABELS = {
     "WHATSAPP_INTEGRATION_DISCONNECTED": "WhatsApp Integration Disconnected",
     "WHATSAPP_INTEGRATION_RECONNECTED": "WhatsApp Integration Reconnected",
     "WHATSAPP_INTEGRATION_STATUS_CHECKED": "WhatsApp Credential Status Verified",
-    "PLATFORM_SETTINGS_UPDATED": "Platform Settings Updated"
+    "PLATFORM_SETTINGS_UPDATED": "Platform Settings Updated",
+    "TWILIO_WEBHOOK_INVALID_SIGNATURE": "Twilio Webhook Signature Rejected",
+    "TWILIO_WEBHOOK_UNKNOWN_ACCOUNT": "Twilio Webhook Unknown Account Rejected",
+    "TWILIO_WEBHOOK_INACTIVE_INTEGRATION": "Twilio Webhook Inactive Integration Rejected",
+    "TWILIO_WEBHOOK_AMBIGUOUS_INTEGRATION": "Twilio Webhook Ambiguous Integration Rejected",
+    "TWILIO_WEBHOOK_CREDENTIAL_ERROR": "Twilio Webhook Credential Error",
+    "TWILIO_WEBHOOK_UNMAPPED_MESSAGE": "Twilio Webhook Unmapped Message Rejected",
+    "TWILIO_WEBHOOK_AMBIGUOUS_MESSAGE": "Twilio Webhook Ambiguous Message Rejected",
+    "TWILIO_WEBHOOK_IDENTITY_MISMATCH": "Twilio Webhook Identity Mismatch Rejected",
+    "TWILIO_WEBHOOK_INVALID_TRANSITION": "Twilio Webhook Invalid Status Transition Rejected"
 }
 
 SENSITIVE_KEYS = {
     "password", "password_hash", "current_password", "new_password",
     "token", "refresh_token", "access_token", "encrypted_access_token", "secret", "api_key",
     "private_key", "secret_key", "meta_app_secret", "encrypted_app_secret", "otp",
-    "verification_code", "reset_token", "webhook_verify_token", "encrypted_webhook_verify_token"
+    "verification_code", "reset_token", "webhook_verify_token", "encrypted_webhook_verify_token",
+    "auth_token", "twilio_auth_token", "signature", "x-twilio-signature", "x_twilio_signature"
 }
 
 

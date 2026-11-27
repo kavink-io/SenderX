@@ -96,6 +96,22 @@ class MessageService:
     @classmethod
     def create_message(cls, payload, organization_id, application_id=None):
 
+        # Fail closed if any caller attempts to smuggle platform fallback flags
+        if isinstance(payload, dict):
+            nested_data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            if (
+                "use_platform_provider" in payload
+                or "allow_platform_fallback" in payload
+                or "use_platform_provider" in nested_data
+                or "allow_platform_fallback" in nested_data
+            ):
+                return {
+                    "success": False,
+                    "status_code": 403,
+                    "message": "Platform-level provider fallback cannot be enabled by message payloads",
+                    "errors": ["Platform-level provider fallback cannot be enabled by message payloads"],
+                }
+
         # Handle multiple recipients if a list is provided
         recipients = payload.get("recipient")
         if isinstance(recipients, list) and len(recipients) > 1:
@@ -159,13 +175,36 @@ class MessageService:
                 "errors": ["Choose either template_id or raw HTML body"]
             }
 
-        # Threat scan on incoming payload fields (script tags, event handlers, javascript:, CR/LF in subject/recipient)
+        # Early iterative security, resource-limit, and type validation before template/media processing
         from app.validators.dynamic_json_validator import DynamicJSONValidator
-        _, threats = DynamicJSONValidator.scan_for_markup_and_threats(payload)
+        limits = DynamicJSONValidator.resolve_limits()
+        inspect_res = DynamicJSONValidator.inspect_limits_and_threats(
+            payload,
+            limits=limits,
+            allow_template_var_html=bool(template_id),
+        )
+        if inspect_res["limit_errors"]:
+            return {
+                "success": False,
+                "status_code": 422,
+                "status": DynamicJSONValidator.LIMIT_STATUS,
+                "message": f"Payload complexity limit exceeded: {'; '.join(inspect_res['limit_errors'])}",
+                "errors": inspect_res["limit_errors"]
+            }
+        if inspect_res["type_errors"]:
+            return {
+                "success": False,
+                "status_code": 422,
+                "status": DynamicJSONValidator.INVALID_STATUS,
+                "message": f"Unsupported payload data type: {'; '.join(inspect_res['type_errors'])}",
+                "errors": inspect_res["type_errors"]
+            }
+        threats = inspect_res["threats"]
         if threats:
             return {
                 "success": False,
                 "status_code": 422,
+                "status": DynamicJSONValidator.THREAT_STATUS,
                 "message": f"Dangerous input pattern detected: {'; '.join(threats)}",
                 "errors": threats
             }
@@ -323,7 +362,10 @@ class MessageService:
                     "errors": [str(e)]
                 }
 
-        result = MessageEngine.prepare_message(payload)
+        result = MessageEngine.prepare_message(
+            payload,
+            template_rendered=bool(template_metadata),
+        )
 
         if not result["success"]:
             return result
@@ -333,10 +375,44 @@ class MessageService:
         # Never trust organization_id supplied by the client.
         message["organization_id"] = organization_id
 
-        # Associate application_id if supplied
-        app_id = application_id or payload.get("application_id")
-        if app_id:
-            message["application_id"] = str(app_id).strip()
+        # Enforce authoritative application_id when provided and reject mismatches.
+        body_app_id = payload.get("application_id") if isinstance(payload, dict) else None
+        if body_app_id is not None and not isinstance(body_app_id, str):
+            return {
+                "success": False,
+                "status_code": 400,
+                "message": "application_id must be a string",
+                "errors": ["application_id must be a string"],
+            }
+
+        if application_id is not None:
+            clean_explicit_app = str(application_id).strip() or None
+            if body_app_id and str(body_app_id).strip() and str(body_app_id).strip() != clean_explicit_app:
+                return {
+                    "success": False,
+                    "status_code": 403,
+                    "message": "Application ID mismatch",
+                    "errors": ["Application ID mismatch"],
+                }
+            resolved_app_id = clean_explicit_app
+        else:
+            resolved_app_id = str(body_app_id).strip() if isinstance(body_app_id, str) and body_app_id.strip() else None
+
+        if resolved_app_id and hasattr(current_app, "mongo_db") and current_app.mongo_db is not None:
+            app_doc = current_app.mongo_db["connected_applications"].find_one({"application_id": resolved_app_id})
+            if app_doc is not None and (
+                app_doc.get("organization_id") != organization_id
+                or app_doc.get("deleted_at")
+                or str(app_doc.get("status", "")).upper() != "ACTIVE"
+            ):
+                return {
+                    "success": False,
+                    "status_code": 403,
+                    "message": "Connected application is inactive or unauthorized",
+                    "errors": ["Connected application is inactive or unauthorized"],
+                }
+
+        message["application_id"] = resolved_app_id
 
         if template_metadata:
             message.update(template_metadata)
@@ -350,26 +426,48 @@ class MessageService:
         }
 
     @staticmethod
-    def get_message(message_id, organization_id, user_application_ids=None):
+    def _validate_persisted_application_active(application_id, organization_id):
+        """Fail closed when a persisted connected application record is deleted, inactive, or cross-tenant."""
+        if not application_id or not hasattr(current_app, "mongo_db") or current_app.mongo_db is None:
+            return True, None
+        app_col = current_app.mongo_db["connected_applications"]
+        if not hasattr(app_col, "find_one"):
+            return True, None
+        app_doc = app_col.find_one({"application_id": application_id})
+        if app_doc is None:
+            return True, None
+        if (
+            app_doc.get("organization_id") != organization_id
+            or app_doc.get("deleted_at")
+            or str(app_doc.get("status", "")).upper() != "ACTIVE"
+        ):
+            return False, "Connected application is inactive, deleted, or does not belong to this organization"
+        return True, None
+
+    @staticmethod
+    def get_message(message_id, organization_id, user_application_ids=None, forbid_cross_app=True):
 
         message = MessageRepository.find_by_id(
             message_id,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=user_application_ids,
         )
 
-        if not message:
-            return None
+        if message:
+            return message
 
-        # Enforce application scope for employees
-        if user_application_ids:
-            msg_app = message.get("application_id")
-            if not msg_app or msg_app not in user_application_ids:
+        if user_application_ids is not None and forbid_cross_app:
+            org_msg = MessageRepository.find_by_id(
+                message_id,
+                organization_id=organization_id,
+            )
+            if org_msg:
                 return {
                     "_error": "FORBIDDEN",
                     "message": "Access denied for this application scope"
                 }
 
-        return message
+        return None
 
     @staticmethod
     def get_all_messages(
@@ -388,8 +486,8 @@ class MessageService:
     ):
         effective_app_id = application_id
 
-        # Application scope enforcement for employees
-        if user_application_ids:
+        # Application scope enforcement for scoped users and API keys
+        if user_application_ids is not None:
             if application_id:
                 if application_id not in user_application_ids:
                     return {
@@ -423,14 +521,15 @@ class MessageService:
     def retry_message(cls, message_id, organization_id, user_application_ids=None):
         """
         Manually retry an eligible failed or dead message.
-        - Verifies organization ownership and employee application scope.
+        - Verifies organization and application ownership directly in repository queries.
         - Rejects retry if message is currently processing, queued, sent, or delivered.
         - For DEAD messages in DLQ, delegates to DeadLetterService.retry_dead_letter.
-        - For FAILED messages, updates status to QUEUED and dispatches Celery task.
+        - For FAILED messages, updates status to QUEUED and dispatches Celery task with trusted scope.
         """
         message = MessageRepository.find_by_id(
             message_id,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=user_application_ids,
         )
 
         if not message:
@@ -440,15 +539,21 @@ class MessageService:
                 "message": "Message not found"
             }
 
-        # Check employee application scope
-        if user_application_ids:
-            msg_app = message.get("application_id")
-            if not msg_app or msg_app not in user_application_ids:
-                return {
-                    "success": False,
-                    "status_code": 403,
-                    "message": "You do not have permission to retry messages for this application scope"
-                }
+        trusted_app_id = message.get("application_id")
+        if user_application_ids is not None and not trusted_app_id:
+            return {
+                "success": False,
+                "status_code": 404,
+                "message": "Message not found"
+            }
+
+        app_ok, app_err = cls._validate_persisted_application_active(trusted_app_id, organization_id)
+        if not app_ok:
+            return {
+                "success": False,
+                "status_code": 403,
+                "message": app_err,
+            }
 
         if str(message.get("last_error") or "").startswith("DELIVERY_OUTCOME_UNKNOWN:"):
             return {
@@ -474,30 +579,44 @@ class MessageService:
             }
 
         if current_status == "DEAD":
-            try:
-                from app.modules.dead_letters.service import DeadLetterService
-                dlq_res = DeadLetterService.retry_dead_letter(
-                    message_id=message_id,
-                    organization_id=organization_id
-                )
-                if dlq_res.get("success"):
-                    return dlq_res
-            except Exception as dlq_err:
-                current_app.logger.warning("DLQ retry failed, trying direct requeue: %s", dlq_err)
+            from app.modules.dead_letters.service import DeadLetterService
+            dlq_res = DeadLetterService.retry_dead_letter(
+                message_id=message_id,
+                organization_id=organization_id,
+                user_application_ids=user_application_ids,
+                expected_application_id=trusted_app_id,
+            )
+            if dlq_res.get("success"):
+                return dlq_res
+            err_msg = str(dlq_res.get("message") or "").lower()
+            if (
+                dlq_res.get("status_code") in (403, 409)
+                or "mismatch" in err_msg
+                or "inactive" in err_msg
+                or "already requested" in err_msg
+                or "unauthorized" in err_msg
+            ):
+                return {
+                    **dlq_res,
+                    "status_code": dlq_res.get("status_code", 409 if "mismatch" in err_msg else 400),
+                }
 
-        # Transition status to QUEUED
+        scope_filter = trusted_app_id if trusted_app_id is not None else user_application_ids
+
+        # Transition status to QUEUED with atomic ownership filter
         requeued = MessageRepository.requeue_failed_message(
             message_id=message_id,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=scope_filter,
         )
 
-        if not requeued:
-            if current_status == "DEAD":
-                requeued = MessageRepository.requeue_dead_message(
-                    message_id=message_id,
-                    previous_retry_count=message.get("retry_count", 0),
-                    organization_id=organization_id
-                )
+        if not requeued and current_status == "DEAD":
+            requeued = MessageRepository.requeue_dead_message(
+                message_id=message_id,
+                previous_retry_count=message.get("retry_count", 0),
+                organization_id=organization_id,
+                application_ids=scope_filter,
+            )
 
         if not requeued:
             return {
@@ -509,13 +628,18 @@ class MessageService:
         try:
             task = current_app.celery.send_task(
                 "senderx.process_message",
-                args=[message_id]
+                args=[message_id],
+                kwargs={
+                    "expected_organization_id": organization_id,
+                    "expected_application_id": trusted_app_id,
+                },
             )
             return {
                 "success": True,
                 "status_code": 200,
                 "message": "Message successfully requeued for retry",
                 "message_id": message_id,
+                "application_id": trusted_app_id,
                 "status": "QUEUED",
                 "task_id": task.id
             }
@@ -526,23 +650,25 @@ class MessageService:
                 "status_code": 200,
                 "message": "Message status marked QUEUED for retry (dispatch pending)",
                 "message_id": message_id,
+                "application_id": trusted_app_id,
                 "status": "QUEUED"
             }
 
     @classmethod
-    def queue_message(cls, message_id, organization_id):
+    def queue_message(cls, message_id, organization_id, user_application_ids=None):
         """
         Safely queue a message for processing:
-        - Verifies message exists and belongs to the authenticated organization.
+        - Verifies message exists and belongs to the authenticated organization and application scope.
         - Allows queueing only from valid initial states (CREATED, VALIDATED).
         - Prevents duplicate dispatches and concurrent queue requests.
         - Atomically transitions status to QUEUED.
-        - Dispatches task to Celery.
+        - Dispatches task to Celery carrying trusted organization_id and application_id.
         - Safely rolls back status if broker dispatch fails.
         """
         message = MessageRepository.find_by_id(
             message_id,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=user_application_ids,
         )
 
         if not message:
@@ -552,6 +678,23 @@ class MessageService:
                 "message": "Message not found"
             }
 
+        trusted_app_id = message.get("application_id")
+        if user_application_ids is not None and not trusted_app_id:
+            return {
+                "success": False,
+                "status_code": 404,
+                "message": "Message not found"
+            }
+
+        app_ok, app_err = cls._validate_persisted_application_active(trusted_app_id, organization_id)
+        if not app_ok:
+            return {
+                "success": False,
+                "status_code": 403,
+                "message": app_err,
+            }
+
+        scope_filter = trusted_app_id if trusted_app_id is not None else user_application_ids
         current_status = message.get("status")
 
         if current_status == "QUEUED":
@@ -580,13 +723,15 @@ class MessageService:
             message_id=message_id,
             new_status="QUEUED",
             old_status=current_status,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=scope_filter,
         )
 
         if not updated:
             refetched = MessageRepository.find_by_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=scope_filter,
             )
             if refetched and refetched.get("status") == "QUEUED":
                 return {
@@ -604,11 +749,15 @@ class MessageService:
                 "message_id": message_id
             }
 
-        # Dispatch Celery task
+        # Dispatch Celery task with trusted ownership metadata
         try:
             task = current_app.celery.send_task(
                 "senderx.process_message",
-                args=[message_id]
+                args=[message_id],
+                kwargs={
+                    "expected_organization_id": organization_id,
+                    "expected_application_id": trusted_app_id,
+                },
             )
 
             current_app.logger.info(
@@ -622,6 +771,7 @@ class MessageService:
                 "status_code": 200,
                 "message": "Message successfully queued for processing",
                 "message_id": message_id,
+                "application_id": trusted_app_id,
                 "status": "QUEUED",
                 "task_id": task.id
             }
@@ -638,7 +788,8 @@ class MessageService:
                 message_id=message_id,
                 new_status=current_status,
                 old_status="QUEUED",
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=scope_filter,
             )
 
             return {
@@ -651,14 +802,15 @@ class MessageService:
             }
 
     @classmethod
-    def update_status(cls, message_id, new_status, organization_id):
+    def update_status(cls, message_id, new_status, organization_id, user_application_ids=None):
 
         if new_status == "QUEUED":
-            return cls.queue_message(message_id, organization_id)
+            return cls.queue_message(message_id, organization_id, user_application_ids=user_application_ids)
 
         message = MessageRepository.find_by_id(
             message_id,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=user_application_ids,
         )
 
         if not message:
@@ -668,6 +820,15 @@ class MessageService:
                 "message": "Message not found"
             }
 
+        trusted_app_id = message.get("application_id")
+        if user_application_ids is not None and not trusted_app_id:
+            return {
+                "success": False,
+                "status_code": 404,
+                "message": "Message not found"
+            }
+
+        scope_filter = trusted_app_id if trusted_app_id is not None else user_application_ids
         current_status = message.get("status")
 
         result = StatusManager.transition(
@@ -686,7 +847,8 @@ class MessageService:
             message_id,
             new_status,
             current_status,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=scope_filter,
         )
 
         if not updated:
@@ -702,16 +864,85 @@ class MessageService:
             "message": "Message status updated successfully",
             "data": MessageRepository.find_by_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=scope_filter,
             )
         }
 
+    _TWILIO_STATUS_MAP = {
+        "delivered": "DELIVERED",
+        "read": "READ",
+        "failed": "FAILED",
+        "undelivered": "FAILED",
+        "canceled": "FAILED",
+        "sent": "SENT",
+        "sending": "SENT",
+        "queued": "ACCEPTED",
+        "accepted": "ACCEPTED",
+        "scheduled": "ACCEPTED",
+    }
+
     @classmethod
-    def handle_twilio_callback(cls, callback_data):
+    def handle_twilio_callback(
+        cls,
+        callback_data=None,
+        *,
+        signature=None,
+        callback_url=None,
+        validation_params=None,
+        endpoint_path=None,
+        endpoint_kind="status_callback",
+        is_json=False,
+        has_body_sha256=False,
+    ):
         """
-        Process incoming Twilio StatusCallback events.
-        Updates message delivery status, handles carrier errors, and records status history.
+        Process incoming Twilio webhook / StatusCallback events with fail-closed
+        signature verification, tenant-safe integration lookup, strict scoped
+        message resolution, and idempotent status transitions.
         """
+        from app.modules.messages.twilio_webhook import (
+            log_twilio_security_event,
+            resolve_twilio_integration_for_callback,
+            verify_twilio_signature,
+        )
+
+        # Fail fast if signature header is absent before parsing/decrypting integration creds
+        if not isinstance(signature, str) or not signature.strip():
+            log_twilio_security_event(
+                event_type="TWILIO_WEBHOOK_INVALID_SIGNATURE",
+                summary="Rejected Twilio callback missing X-Twilio-Signature header",
+                endpoint=endpoint_path,
+                reason_code="MISSING_SIGNATURE",
+            )
+            return {
+                "success": False,
+                "status_code": 401,
+                "error_code": "MISSING_SIGNATURE",
+                "message": "Missing X-Twilio-Signature header",
+            }
+
+        if is_json and not has_body_sha256:
+            log_twilio_security_event(
+                event_type="TWILIO_WEBHOOK_INVALID_SIGNATURE",
+                summary="Rejected JSON Twilio callback without bodySHA256 verification digest",
+                endpoint=endpoint_path,
+                reason_code="INVALID_SIGNATURE",
+            )
+            return {
+                "success": False,
+                "status_code": 401,
+                "error_code": "INVALID_SIGNATURE",
+                "message": "Twilio JSON webhooks require signed bodySHA256 digest",
+            }
+
+        if not isinstance(callback_url, str) or not callback_url.strip():
+            return {
+                "success": False,
+                "status_code": 400,
+                "error_code": "INVALID_CALLBACK_URL",
+                "message": "Callback URL is required for signature verification",
+            }
+
         if not isinstance(callback_data, dict):
             return {"success": False, "status_code": 400, "message": "Invalid callback data"}
 
@@ -721,6 +952,46 @@ class MessageService:
             or callback_data.get("sms_sid")
             or callback_data.get("message_sid")
         )
+        if isinstance(provider_message_id, str):
+            provider_message_id = provider_message_id.strip()
+
+        account_sid = (
+            callback_data.get("AccountSid")
+            or callback_data.get("account_sid")
+        )
+
+        # 1. Resolve integration & owning organization BEFORE touching message records
+        integration_res = resolve_twilio_integration_for_callback(
+            account_sid=account_sid,
+            endpoint=endpoint_path,
+            provider_message_id=provider_message_id,
+        )
+        if not integration_res.get("success"):
+            return integration_res
+
+        integration = integration_res["integration"]
+        resolved_org_id = integration["organization_id"]
+        resolved_config_id = integration.get("config_id")
+        resolved_sid_digest = integration.get("account_sid_digest")
+        auth_token = integration["auth_token"]
+
+        # 2. Verify cryptographic X-Twilio-Signature against exact URL, params, and org Auth Token
+        params_for_sig = validation_params if validation_params is not None else callback_data
+        sig_ok, sig_err = verify_twilio_signature(
+            auth_token=auth_token,
+            callback_url=callback_url,
+            params=params_for_sig,
+            signature=signature,
+            organization_id=resolved_org_id,
+            integration_id=resolved_config_id,
+            account_sid=account_sid,
+            provider_message_id=provider_message_id,
+            endpoint=endpoint_path,
+        )
+        if not sig_ok:
+            return sig_err
+
+        # 3. Validate callback payload specifics by endpoint responsibility
         if not provider_message_id:
             return {"success": False, "status_code": 400, "message": "MessageSid is required"}
 
@@ -729,47 +1000,173 @@ class MessageService:
             or callback_data.get("SmsStatus")
             or callback_data.get("status")
             or ""
-        ).lower().strip()
+        )
+        if isinstance(raw_status, str):
+            raw_status = raw_status.lower().strip()
+        else:
+            raw_status = ""
+
+        # General Twilio webhook endpoint may receive non-status events (e.g. inbound SMS Body without status);
+        # dedicated /callbacks/twilio status callback always requires an explicit delivery status.
+        if not raw_status:
+            if endpoint_kind == "webhook" and callback_data.get("Body") is not None and callback_data.get("From"):
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "event_type": "twilio_webhook_acknowledged",
+                    "organization_id": resolved_org_id,
+                    "provider_message_id": provider_message_id,
+                    "updated": False,
+                }
+            return {
+                "success": False,
+                "status_code": 400,
+                "error_code": "MISSING_MESSAGE_STATUS",
+                "message": "MessageStatus is required",
+            }
+
+        new_status = cls._TWILIO_STATUS_MAP.get(raw_status)
+        if not new_status:
+            return {
+                "success": False,
+                "status_code": 400,
+                "error_code": "INVALID_TWILIO_STATUS",
+                "message": f"Unsupported Twilio status '{raw_status}'",
+            }
 
         error_code = callback_data.get("ErrorCode") or callback_data.get("error_code")
         error_message = callback_data.get("ErrorMessage") or callback_data.get("error_message")
+        callback_recipient = callback_data.get("To")
 
-        # Map Twilio status to SenderX status
-        if raw_status == "delivered":
-            new_status = "DELIVERED"
-        elif raw_status in ("failed", "undelivered"):
-            new_status = "FAILED"
-        elif raw_status in ("sent", "sending"):
-            new_status = "SENT"
-        elif raw_status in ("queued", "accepted", "scheduled"):
-            new_status = "ACCEPTED"
-        else:
-            new_status = raw_status.upper() or "ACCEPTED"
-
-        message = MessageRepository.find_by_provider_message_id(provider_message_id)
-        if not message:
-            return {
-                "success": False,
-                "status_code": 404,
-                "message": f"Message with provider_message_id '{provider_message_id}' not found"
-            }
-
-        updated = MessageRepository.update_delivery_status(
+        # 4. Scoped message resolution & lifecycle transition update
+        outcome_res = MessageRepository.resolve_and_update_twilio_delivery_status(
+            organization_id=resolved_org_id,
             provider_message_id=provider_message_id,
             new_status=new_status,
             raw_status=raw_status,
             error_code=error_code,
-            error_message=error_message
+            error_message=error_message,
+            provider_config_id=resolved_config_id,
+            provider_account_sid_digest=resolved_sid_digest,
+            expected_recipient=callback_recipient,
         )
 
+        outcome = outcome_res.get("outcome")
+
+        if outcome == "ambiguous":
+            log_twilio_security_event(
+                event_type="TWILIO_WEBHOOK_AMBIGUOUS_MESSAGE",
+                summary="Rejected Twilio callback because multiple message records matched provider_message_id in tenant scope",
+                organization_id=resolved_org_id,
+                integration_id=resolved_config_id,
+                account_sid=account_sid,
+                provider_message_id=provider_message_id,
+                endpoint=endpoint_path,
+                reason_code="AMBIGUOUS_MESSAGE_RECORD",
+            )
+            return {
+                "success": False,
+                "status_code": 409,
+                "error_code": "AMBIGUOUS_MESSAGE_RECORD",
+                "message": "Multiple message records matched callback identifier; update rejected",
+                "updated": False,
+            }
+
+        if outcome == "not_found":
+            log_twilio_security_event(
+                event_type="TWILIO_WEBHOOK_UNMAPPED_MESSAGE",
+                summary="Twilio callback referenced a MessageSid not found in verified organization scope",
+                organization_id=resolved_org_id,
+                integration_id=resolved_config_id,
+                account_sid=account_sid,
+                provider_message_id=provider_message_id,
+                endpoint=endpoint_path,
+                reason_code="MESSAGE_NOT_FOUND",
+            )
+            return {
+                "success": False,
+                "status_code": 404,
+                "error_code": "MESSAGE_NOT_FOUND",
+                "message": "Message not found for verified Twilio integration",
+                "updated": False,
+            }
+
+        if outcome == "identity_mismatch":
+            log_twilio_security_event(
+                event_type="TWILIO_WEBHOOK_IDENTITY_MISMATCH",
+                summary="Rejected Twilio callback due to integration or recipient identity mismatch",
+                organization_id=resolved_org_id,
+                integration_id=resolved_config_id,
+                account_sid=account_sid,
+                provider_message_id=provider_message_id,
+                endpoint=endpoint_path,
+                reason_code="IDENTITY_MISMATCH",
+            )
+            return {
+                "success": False,
+                "status_code": 409,
+                "error_code": "IDENTITY_MISMATCH",
+                "message": "Callback identity does not match stored message record",
+                "updated": False,
+            }
+
+        if outcome == "rejected_transition":
+            log_twilio_security_event(
+                event_type="TWILIO_WEBHOOK_INVALID_TRANSITION",
+                summary=(
+                    f"Rejected regressive or invalid Twilio status transition "
+                    f"{outcome_res.get('previous_status')} -> {outcome_res.get('attempted_status')}"
+                ),
+                organization_id=resolved_org_id,
+                integration_id=resolved_config_id,
+                account_sid=account_sid,
+                provider_message_id=provider_message_id,
+                endpoint=endpoint_path,
+                reason_code="INVALID_STATUS_TRANSITION",
+            )
+            return {
+                "success": False,
+                "status_code": 409,
+                "error_code": "INVALID_STATUS_TRANSITION",
+                "message_id": outcome_res.get("message_id"),
+                "provider_message_id": provider_message_id,
+                "status": outcome_res.get("previous_status"),
+                "attempted_status": new_status,
+                "updated": False,
+                "message": "Status transition rejected to preserve message lifecycle integrity",
+            }
+
+        if outcome == "duplicate":
+            return {
+                "success": True,
+                "status_code": 200,
+                "message_id": outcome_res.get("message_id"),
+                "provider_message_id": provider_message_id,
+                "status": outcome_res.get("status"),
+                "raw_status": raw_status,
+                "updated": False,
+                "duplicate": True,
+                "idempotent": True,
+            }
+
+        if outcome == "updated":
+            return {
+                "success": True,
+                "status_code": 200,
+                "message_id": outcome_res.get("message_id"),
+                "provider_message_id": provider_message_id,
+                "status": new_status,
+                "raw_status": raw_status,
+                "updated": True,
+                "duplicate": False,
+            }
+
         return {
-            "success": True,
-            "status_code": 200,
-            "message_id": message.get("message_id"),
-            "provider_message_id": provider_message_id,
-            "status": new_status,
-            "raw_status": raw_status,
-            "updated": updated
+            "success": False,
+            "status_code": 409,
+            "error_code": "STATUS_CONFLICT",
+            "message": "Concurrent status modification prevented callback update",
+            "updated": False,
         }
 
     @classmethod

@@ -244,7 +244,10 @@ class MicrosoftTeamsAdapter(BaseChannelAdapter):
                 try:
                     from app.modules.media.storage import get_storage_backend
                     storage = get_storage_backend()
-                    raw_bytes = storage.get_bytes(ref["storage_key"])
+                    raw_bytes = storage.get_bytes(
+                        ref["storage_key"],
+                        organization_id=self.organization_id or message.get("organization_id"),
+                    )
                 except Exception as exc:
                     logger.warning("Could not read Teams media bytes from storage: %s", exc)
 

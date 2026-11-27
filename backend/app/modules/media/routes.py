@@ -6,7 +6,7 @@ and deleting media attachments.
 
 from typing import List
 from flask import Blueprint, request, jsonify, g, send_file, redirect, Response
-from app.modules.auth.decorators import require_permissions
+from app.modules.auth.decorators import require_permissions, require_organization_wide_scope
 from app.modules.media.service import MediaService
 
 media_bp = Blueprint("media", __name__)
@@ -18,6 +18,9 @@ media_bp = Blueprint("media", __name__)
 @media_bp.route("/upload", methods=["POST"])
 @require_permissions("organization:media:upload")
 def upload_media():
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     """
     POST /api/v1/media/upload
     Form-data parameters:
@@ -62,6 +65,9 @@ def upload_media():
 @media_bp.route("/bulk-upload", methods=["POST"])
 @require_permissions("organization:media:upload")
 def bulk_upload_media():
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     """
     POST /api/v1/media/bulk-upload
     Multipart form-data with multiple files under 'files' or 'file'.
@@ -206,6 +212,9 @@ def download_media(media_id: str):
 @media_bp.route("/<string:media_id>", methods=["DELETE"])
 @require_permissions("organization:media:delete")
 def delete_media(media_id: str):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     """
     DELETE /api/v1/media/<media_id>
     Deletes the underlying storage file and marks metadata as DELETED.

@@ -126,7 +126,10 @@ class WhatsAppCloudAdapter(BaseChannelAdapter):
                     try:
                         from app.modules.media.storage import get_storage_backend
                         storage = get_storage_backend()
-                        raw_bytes = storage.get_bytes(first_media["storage_key"])
+                        raw_bytes = storage.get_bytes(
+                            first_media["storage_key"],
+                            organization_id=message.get("organization_id"),
+                        )
                     except Exception as e:
                         logger.warning("Could not read media bytes from storage: %s", e)
 

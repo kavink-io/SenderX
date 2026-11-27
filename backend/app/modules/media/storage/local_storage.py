@@ -156,12 +156,14 @@ class LocalStorage(BaseStorage):
         self,
         storage_key: str,
         expires_in: int = 3600,
-        filename: Optional[str] = None
+        filename: Optional[str] = None,
+        organization_id: Optional[str] = None
     ) -> Optional[str]:
         """
         Generate a secure HMAC-SHA256 token for local media downloads.
         URL format: /api/v1/media/download-signed?key=...&exp=...&sig=...
         """
+        self._resolve_safe_path(storage_key, organization_id=organization_id)
         exp = int(time.time()) + expires_in
         msg = f"{storage_key}:{exp}:{filename or ''}".encode("utf-8")
         sig = hmac.new(self.signing_secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()

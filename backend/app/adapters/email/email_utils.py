@@ -9,11 +9,44 @@ from datetime import datetime, timezone
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
-import jinja2
+from jinja2.sandbox import SandboxedEnvironment
 
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_SINGLE_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MB
 MAX_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024   # 25 MB
+PROTECTED_EMAIL_HEADERS = {
+    "from", "to", "cc", "bcc", "sender", "subject", "reply-to", "return-path"
+}
+
+
+def validate_no_crlf(value: Any, field_name: str = "header value") -> str:
+    """Reject CR, LF, and NUL characters to prevent SMTP/email header injection."""
+    if value is None:
+        return ""
+    text = str(value)
+    if any(ch in text for ch in ("\r", "\n", "\x00")):
+        raise ValueError(f"Illegal newline or control character in email {field_name}")
+    return text
+
+
+def validate_email_headers(headers: Any) -> Dict[str, str]:
+    """Validate custom email headers against header injection and protected-header overrides."""
+    if not headers:
+        return {}
+    if not isinstance(headers, dict):
+        raise ValueError("Email headers must be a key-value object")
+    cleaned: Dict[str, str] = {}
+    for raw_key, raw_val in headers.items():
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise ValueError("Custom email header name must be a non-empty string")
+        key = validate_no_crlf(raw_key.strip(), "header name")
+        if ":" in key:
+            raise ValueError("Custom email header name cannot contain ':'")
+        if key.lower() in PROTECTED_EMAIL_HEADERS:
+            raise ValueError(f"Email header '{key}' cannot be overridden via custom headers")
+        val = validate_no_crlf(raw_val, f"header '{key}'")
+        cleaned[key] = val
+    return cleaned
 
 
 def is_valid_email(email: str) -> bool:
@@ -139,7 +172,7 @@ def render_template(template_text: str, variables: Optional[Dict[str, Any]] = No
         return template_text or ""
 
     try:
-        env = jinja2.Environment(autoescape=True)
+        env = SandboxedEnvironment(autoescape=True)
         tmpl = env.from_string(template_text)
         return tmpl.render(**variables)
     except Exception:

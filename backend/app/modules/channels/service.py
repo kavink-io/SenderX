@@ -3,23 +3,24 @@ class ChannelService:
     SUPPORTED_CHANNELS = {
         "email": {
             "name": "Email",
-            "providers": ["sendgrid", "amazon_ses"],
+            "providers": ["sendgrid", "ses", "smtp"],
             "status": "available"
         },
         "whatsapp": {
             "name": "WhatsApp",
-            "providers": ["meta_cloud_api"],
+            "providers": ["meta"],
             "status": "available"
         },
         "sms": {
             "name": "SMS",
-            "providers": ["twilio", "msg91"],
+            "providers": ["twilio"],
             "status": "available"
         },
         "telegram": {
             "name": "Telegram",
-            "providers": ["telegram_bot_api"],
-            "status": "available"
+            "providers": ["mock"],
+            "status": "mock_only",
+            "note": "Mock adapter only; live Telegram Bot API delivery is not implemented."
         },
         "slack": {
             "name": "Slack",
@@ -28,8 +29,8 @@ class ChannelService:
         },
         "microsoft_teams": {
             "name": "Microsoft Teams",
-            "providers": ["microsoft_graph"],
-            "status": "planned"
+            "providers": ["teams"],
+            "status": "available"
         },
         "webhook": {
             "name": "Webhook",

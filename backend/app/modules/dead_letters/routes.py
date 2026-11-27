@@ -2,9 +2,10 @@
 from flask import Blueprint, request, jsonify, current_app, g
 
 from app.modules.dead_letters.service import DeadLetterService
+from app.modules.api_credentials.decorators import require_api_key_or_token
 from app.modules.auth.decorators import (
     require_roles,
-    require_permissions
+    resolve_authorized_application_scope,
 )
 
 
@@ -254,10 +255,12 @@ def resolve_recovery(message_id):
 # --------------------------------------------------
 
 @dead_letters_bp.route("/organization", methods=["GET"])
-@require_permissions("organization:dead_letters:read")
+@require_api_key_or_token(required_permissions=["organization:dead_letters:read"])
 def get_organization_dead_letters():
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
+    requested_app = (request.args.get("application_id") or "").strip() or getattr(g, "current_application_id", None)
 
     result = DeadLetterService.get_all_dead_letters(
         limit=request.args.get("limit", 50),
@@ -266,7 +269,9 @@ def get_organization_dead_letters():
         message_id=request.args.get("message_id"),
         recipient=request.args.get("recipient"),
         provider=request.args.get("provider"),
-        organization_id=organization_id
+        organization_id=organization_id,
+        application_id=requested_app,
+        user_application_ids=user_app_scopes,
     )
 
     return jsonify(result), 200 if result["success"] else 400
@@ -276,14 +281,16 @@ def get_organization_dead_letters():
     "/organization/<string:message_id>",
     methods=["GET"]
 )
-@require_permissions("organization:dead_letters:read")
+@require_api_key_or_token(required_permissions=["organization:dead_letters:read"])
 def get_organization_dead_letter(message_id):
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
 
     result = DeadLetterService.get_dead_letter(
         message_id,
-        organization_id=organization_id
+        organization_id=organization_id,
+        user_application_ids=user_app_scopes,
     )
 
     return jsonify(result), 200 if result["success"] else 404
@@ -293,14 +300,16 @@ def get_organization_dead_letter(message_id):
     "/organization/<string:message_id>/history",
     methods=["GET"]
 )
-@require_permissions("organization:dead_letters:read")
+@require_api_key_or_token(required_permissions=["organization:dead_letters:read"])
 def get_organization_retry_history(message_id):
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
 
     result = DeadLetterService.get_retry_history(
         message_id,
-        organization_id=organization_id
+        organization_id=organization_id,
+        user_application_ids=user_app_scopes,
     )
 
     return jsonify(result), 200 if result["success"] else 404
@@ -309,13 +318,17 @@ def get_organization_retry_history(message_id):
     "/organization/statistics",
     methods=["GET"]
 )
-@require_permissions("organization:dead_letters:read")
+@require_api_key_or_token(required_permissions=["organization:dead_letters:read"])
 def get_organization_dlq_statistics():
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
+    requested_app = (request.args.get("application_id") or "").strip() or getattr(g, "current_application_id", None)
 
     result = DeadLetterService.get_statistics(
-        organization_id=organization_id
+        organization_id=organization_id,
+        application_id=requested_app,
+        user_application_ids=user_app_scopes,
     )
 
     return jsonify(result), 200 if result["success"] else 500
@@ -325,13 +338,17 @@ def get_organization_dlq_statistics():
     "/organization/analytics/providers",
     methods=["GET"]
 )
-@require_permissions("organization:analytics:read")
+@require_api_key_or_token(required_permissions=["organization:analytics:read"])
 def get_organization_provider_analytics():
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
+    requested_app = (request.args.get("application_id") or "").strip() or getattr(g, "current_application_id", None)
 
     result = DeadLetterService.get_provider_analytics(
-        organization_id=organization_id
+        organization_id=organization_id,
+        application_id=requested_app,
+        user_application_ids=user_app_scopes,
     )
 
     return jsonify(result), 200 if result["success"] else 500
@@ -341,17 +358,21 @@ def get_organization_provider_analytics():
     "/organization/analytics/trends",
     methods=["GET"]
 )
-@require_permissions("organization:analytics:read")
+@require_api_key_or_token(required_permissions=["organization:analytics:read"])
 def get_organization_failure_trends():
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
+    requested_app = (request.args.get("application_id") or "").strip() or getattr(g, "current_application_id", None)
 
     try:
         result = DeadLetterService.get_failure_trends(
             start_date=request.args.get("start_date"),
             end_date=request.args.get("end_date"),
             provider=request.args.get("provider"),
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_id=requested_app,
+            user_application_ids=user_app_scopes,
         )
 
         return jsonify(result), 200 if result.get("success") else 500
@@ -368,7 +389,7 @@ def get_organization_failure_trends():
     "/organization/<string:message_id>/payload",
     methods=["PUT", "POST"]
 )
-@require_permissions("organization:payloads:edit")
+@require_api_key_or_token(required_permissions=["organization:payloads:edit"])
 def edit_organization_dead_letter_payload(message_id):
     """Edit payload directly from DLQ entry view."""
     data = request.get_json(silent=True)
@@ -383,7 +404,12 @@ def edit_organization_dead_letter_payload(message_id):
         reason = edited_json.pop("reason", "Payload edited from DLQ")
 
     organization_id = g.current_organization["organization_id"]
-    user_id = g.current_user["user_id"]
+    user_app_scopes = resolve_authorized_application_scope()
+    if getattr(g, "auth_type", None) == "API_KEY":
+        cred = getattr(g, "current_credential", {})
+        user_id = f"api_key:{cred.get('credential_id')}"
+    else:
+        user_id = g.current_user["user_id"]
 
     from app.modules.payloads.service import PayloadService
     result = PayloadService.edit_payload(
@@ -391,7 +417,8 @@ def edit_organization_dead_letter_payload(message_id):
         organization_id=organization_id,
         edited_json=edited_json,
         user_id=user_id,
-        reason=reason
+        reason=reason,
+        user_application_ids=user_app_scopes,
     )
     return jsonify(result), result.get("status_code", 200)
 
@@ -400,7 +427,7 @@ def edit_organization_dead_letter_payload(message_id):
     "/organization/<string:message_id>/validate",
     methods=["POST"]
 )
-@require_permissions("organization:payloads:validate")
+@require_api_key_or_token(required_permissions=["organization:payloads:validate"])
 def validate_organization_dead_letter_payload(message_id):
     """Validate payload directly from DLQ entry view."""
     data = request.get_json(silent=True) or {}
@@ -412,12 +439,14 @@ def validate_organization_dead_letter_payload(message_id):
             return jsonify({"success": False, "message": "version must be an integer"}), 400
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
 
     from app.modules.payloads.service import PayloadService
     result = PayloadService.validate_payload(
         payload_id=message_id,
         organization_id=organization_id,
-        version_num=version_num
+        version_num=version_num,
+        user_application_ids=user_app_scopes,
     )
     return jsonify(result), result.get("status_code", 200)
 
@@ -430,19 +459,23 @@ def validate_organization_dead_letter_payload(message_id):
     "/organization/<string:message_id>/retry",
     methods=["POST"]
 )
-@require_permissions("organization:dead_letters:manage")
+@require_api_key_or_token(required_permissions=["organization:dead_letters:manage"])
 def retry_organization_dead_letter(message_id):
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
 
     result = DeadLetterService.retry_dead_letter(
         message_id,
-        organization_id=organization_id
+        organization_id=organization_id,
+        user_application_ids=user_app_scopes,
     )
 
     if not result["success"]:
 
-        if result["message"] == "Dead letter not found":
+        if result.get("status_code") in (403, 404, 409):
+            status_code = result["status_code"]
+        elif result["message"] == "Dead letter not found":
             status_code = 404
         elif result["message"] == "Original message not found":
             status_code = 404
@@ -460,10 +493,11 @@ def retry_organization_dead_letter(message_id):
     "/organization/<string:message_id>",
     methods=["DELETE"]
 )
-@require_permissions("organization:dead_letters:manage")
+@require_api_key_or_token(required_permissions=["organization:dead_letters:manage"])
 def delete_organization_dead_letter(message_id):
 
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
 
     payload = request.get_json(silent=True) or {}
     confirm = payload.get("confirm", False)
@@ -471,7 +505,8 @@ def delete_organization_dead_letter(message_id):
     result = DeadLetterService.delete_dead_letter(
         message_id,
         confirm=confirm,
-        organization_id=organization_id
+        organization_id=organization_id,
+        user_application_ids=user_app_scopes,
     )
 
     if not result["success"]:

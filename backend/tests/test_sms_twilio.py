@@ -25,6 +25,7 @@ import bcrypt
 from flask_jwt_extended import create_access_token
 
 from twilio.base.exceptions import TwilioRestException
+from twilio.request_validator import RequestValidator
 
 from app import create_app
 from app.adapters.base_adapter import ProviderError
@@ -571,8 +572,20 @@ def test_sms_template_creation_rendering_and_dispatch(client, test_setup, app):
 
 def test_twilio_delivery_status_callback(client, app, test_setup):
     org_a = test_setup["org_a"]
+    account_sid_a = "AC" + "1" * 32
+    auth_token_a = "twilio_test_auth_token_a_123456"
 
     with app.app_context():
+        ProviderConfigService.save_configuration(
+            "twilio",
+            {
+                "account_sid": account_sid_a,
+                "auth_token": auth_token_a,
+                "from_number": "+14155550000",
+            },
+            organization_id=org_a,
+        )
+
         # 1. Create a message in SENT status with provider_message_id
         provider_msg_id = "SM" + uuid.uuid4().hex
         msg_id = str(uuid.uuid4())
@@ -599,13 +612,23 @@ def test_twilio_delivery_status_callback(client, app, test_setup):
         assert sent_doc["status"] == "SENT"
         assert sent_doc["provider_message_id"] == provider_msg_id
 
+        validator = RequestValidator(auth_token_a)
+        callback_url = "http://localhost/api/v1/messages/webhook/twilio"
+
         # 2. Simulate Twilio StatusCallback: MessageStatus = 'delivered'
-        cb_res = client.post("/api/v1/messages/webhook/twilio", data={
+        deliv_form = {
+            "AccountSid": account_sid_a,
             "MessageSid": provider_msg_id,
             "MessageStatus": "delivered",
             "To": "+14155552671",
             "From": "+14155550000"
-        })
+        }
+        deliv_sig = validator.compute_signature(callback_url, deliv_form)
+        cb_res = client.post(
+            "/api/v1/messages/webhook/twilio",
+            data=deliv_form,
+            headers={"X-Twilio-Signature": deliv_sig},
+        )
         assert cb_res.status_code == 200
         cb_body = cb_res.get_json()
         assert cb_body["success"] is True
@@ -637,12 +660,19 @@ def test_twilio_delivery_status_callback(client, app, test_setup):
             organization_id=org_a
         )
 
-        fail_cb_res = client.post("/api/v1/messages/webhook/twilio", data={
+        fail_form = {
+            "AccountSid": account_sid_a,
             "MessageSid": fail_provider_id,
             "MessageStatus": "failed",
             "ErrorCode": "30008",
             "ErrorMessage": "Unknown carrier delivery failure"
-        })
+        }
+        fail_sig = validator.compute_signature(callback_url, fail_form)
+        fail_cb_res = client.post(
+            "/api/v1/messages/webhook/twilio",
+            data=fail_form,
+            headers={"X-Twilio-Signature": fail_sig},
+        )
         assert fail_cb_res.status_code == 200
         assert fail_cb_res.get_json()["status"] == "FAILED"
 

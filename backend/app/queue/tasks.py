@@ -43,21 +43,37 @@ def send_auth_otp_email(self, encrypted_payload, provider):
     name="senderx.process_message",
     max_retries=3
 )
-def process_message(self, message_id):
+def process_message(self, message_id, expected_organization_id=None, expected_application_id=None):
 
     # --------------------------------------------------
-    # 1. Retrieve message and trusted organization ID
+    # 1. Retrieve message and trusted organization & application IDs
     # --------------------------------------------------
 
-    message = MessageRepository.find_by_id(message_id)
+    message = MessageRepository.find_by_id(
+        message_id,
+        organization_id=expected_organization_id,
+        application_ids=expected_application_id,
+    )
 
     if not message:
         return {
             "success": False,
-            "message": "Message not found"
+            "message": "Message not found or ownership mismatch"
         }
 
     organization_id = message.get("organization_id")
+    application_id = message.get("application_id")
+    if expected_organization_id is not None and str(organization_id or "") != str(expected_organization_id):
+        return {
+            "success": False,
+            "message": "Organization ownership mismatch"
+        }
+    if expected_application_id is not None and str(application_id or "") != str(expected_application_id):
+        return {
+            "success": False,
+            "message": "Application ownership mismatch"
+        }
+
     current_status = message.get("status")
 
     if current_status not in ["QUEUED", "RETRYING"]:
@@ -65,6 +81,43 @@ def process_message(self, message_id):
             "success": False,
             "message": f"Message cannot be processed: {current_status}"
         }
+
+    # Verify tenant and application ownership BEFORE claiming PROCESSING status
+    if not organization_id or not isinstance(organization_id, str) or not organization_id.strip():
+        return {
+            "success": False,
+            "message": "Message must belong to a valid organization for tenant dispatch",
+        }
+
+    if hasattr(current_app, "mongo_db") and current_app.mongo_db is not None:
+        try:
+            org_col = current_app.mongo_db["organizations"]
+            if org_col is not None and hasattr(org_col, "find_one"):
+                org_doc = org_col.find_one({"organization_id": organization_id})
+                if org_doc is not None and str(org_doc.get("status", "")).upper() != "ACTIVE":
+                    return {
+                        "success": False,
+                        "message": "Organization is inactive and cannot dispatch messages",
+                    }
+        except Exception:
+            pass
+
+        if application_id:
+            try:
+                app_col = current_app.mongo_db["connected_applications"]
+                if app_col is not None and hasattr(app_col, "find_one"):
+                    app_doc = app_col.find_one({"application_id": application_id})
+                    if app_doc is not None and (
+                        app_doc.get("organization_id") != organization_id
+                        or app_doc.get("deleted_at")
+                        or str(app_doc.get("status", "")).upper() != "ACTIVE"
+                    ):
+                        return {
+                            "success": False,
+                            "message": "Connected application is inactive, deleted, or unauthorized for dispatch",
+                        }
+            except Exception:
+                pass
 
     # --------------------------------------------------
     # 2. Validate status transition
@@ -79,14 +132,15 @@ def process_message(self, message_id):
         return transition
 
     # --------------------------------------------------
-    # 3. Update message status with tenant scope
+    # 3. Update message status with tenant and application scope
     # --------------------------------------------------
 
     updated = MessageRepository.update_status(
         message_id=message_id,
         new_status="PROCESSING",
         old_status=current_status,
-        organization_id=organization_id
+        organization_id=organization_id,
+        application_ids=application_id,
     )
 
     if not updated:
@@ -96,9 +150,10 @@ def process_message(self, message_id):
         }
 
     current_app.logger.info(
-        "Processing message: %s | Organization: %s",
+        "Processing message: %s | Organization: %s | Application: %s",
         message_id,
-        organization_id
+        organization_id,
+        application_id,
     )
 
     try:
@@ -255,11 +310,26 @@ def process_message(self, message_id):
                     # The selected tenant integration is authoritative for the Meta catalog.
                     action["catalog_id"] = str(configured_catalog_id)
 
+        # Never trust message-level client/stored flags (`use_platform_provider`,
+        # `allow_platform_fallback`, or payload `data` flags) to escalate to
+        # platform credentials. Only explicit server-side policy authorizes it.
+        from app.modules.provider_config.service import PlatformProviderPolicy
+        server_platform_fallback = False
+        if hasattr(current_app, "mongo_db") and current_app.mongo_db is not None:
+            org_policy_col = current_app.mongo_db["organizations"]
+            org_policy_doc = org_policy_col.find_one({"organization_id": organization_id}) if hasattr(org_policy_col, "find_one") else None
+            if org_policy_doc and org_policy_doc.get("allow_platform_fallback") is True:
+                server_platform_fallback = PlatformProviderPolicy.is_authorized(
+                    organization_id=organization_id,
+                    provider=provider,
+                    channel=channel,
+                )
+
         adapter = AdapterRegistry.get_adapter(
             provider=provider,
             channel=channel,
             organization_id=organization_id,
-            allow_platform_fallback=bool(message.get("use_platform_provider")),
+            allow_platform_fallback=server_platform_fallback,
             **extra_kwargs
         )
 
@@ -291,6 +361,24 @@ def process_message(self, message_id):
         # --------------------------------------------------
 
         actual_provider = result.get("provider") or provider or "unknown"
+        provider_config_id = None
+        provider_account_sid_digest = None
+        if actual_provider == "twilio" and organization_id:
+            try:
+                import hashlib
+                from app.modules.provider_config.service import ProviderConfigService
+
+                cfg_meta = ProviderConfigService.get_configuration_status(
+                    "twilio",
+                    organization_id=organization_id,
+                )
+                if isinstance(cfg_meta, dict):
+                    provider_config_id = cfg_meta.get("config_id")
+                sid = getattr(adapter, "account_sid", None)
+                if isinstance(sid, str) and sid.strip():
+                    provider_account_sid_digest = hashlib.sha256(sid.strip().encode("utf-8")).hexdigest()
+            except Exception:
+                pass
 
         saved = MessageRepository.mark_sent(
             message_id=message_id,
@@ -298,7 +386,10 @@ def process_message(self, message_id):
             provider_message_id=result.get(
                 "provider_message_id"
             ),
-            organization_id=organization_id
+            organization_id=organization_id,
+            provider_config_id=provider_config_id,
+            provider_account_sid_digest=provider_account_sid_digest,
+            application_ids=application_id,
         )
 
         if not saved:
@@ -332,7 +423,8 @@ def process_message(self, message_id):
 
             dlq_record = DeadLetterRepository.find_by_message_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=application_id,
             )
 
             if (
@@ -360,7 +452,8 @@ def process_message(self, message_id):
                             provider_message_id=result.get(
                                 "provider_message_id"
                             ),
-                            organization_id=organization_id
+                            organization_id=organization_id,
+                            application_ids=application_id,
                         )
                     )
 
@@ -435,7 +528,8 @@ def process_message(self, message_id):
                 message_id=message_id,
                 retry_count=retry_count,
                 error=error_message,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=application_id,
             )
 
             current_app.logger.error(
@@ -480,7 +574,8 @@ def process_message(self, message_id):
                 old_status="PROCESSING",
                 new_status="DEAD",
                 error=error_message,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=application_id,
             )
 
             if not saved:
@@ -499,7 +594,8 @@ def process_message(self, message_id):
             # Fetch latest DEAD message.
             dead_message = MessageRepository.find_by_id(
                 message_id,
-                organization_id=organization_id
+                organization_id=organization_id,
+                application_ids=application_id,
             )
 
             if not dead_message:
@@ -521,15 +617,16 @@ def process_message(self, message_id):
             # --------------------------------------------------
 
             current_app.logger.info(
-                "DLQ DEBUG | message_id=%s | organization_id=%s",
+                "DLQ DEBUG | message_id=%s | organization_id=%s | application_id=%s",
                 message_id,
-                organization_id
+                organization_id,
+                application_id,
             )
 
-            if dead_message.get("organization_id") != organization_id:
+            if dead_message.get("organization_id") != organization_id or dead_message.get("application_id") != application_id:
 
                 current_app.logger.error(
-                    "Organization ID mismatch for message %s",
+                    "Ownership mismatch for message %s",
                     message_id
                 )
 
@@ -538,7 +635,7 @@ def process_message(self, message_id):
                     "message_id": message_id,
                     "status": "DEAD",
                     "dlq_saved": False,
-                    "error": "Organization ID mismatch"
+                    "error": "Ownership mismatch"
                 }
 
             # --------------------------------------------------
@@ -550,7 +647,8 @@ def process_message(self, message_id):
                 dlq_record = DeadLetterRepository.save_from_message(
                     message=dead_message,
                     error=error_message,
-                    organization_id=organization_id
+                    organization_id=organization_id,
+                    application_id=application_id,
                 )
 
                 if not dlq_record:
@@ -589,6 +687,7 @@ def process_message(self, message_id):
                 "status": "DEAD",
                 "dlq_saved": True,
                 "organization_id": organization_id,
+                "application_id": application_id,
                 "retry_count": retry_count,
                 "error": error_message
             }
@@ -606,7 +705,8 @@ def process_message(self, message_id):
             old_status="PROCESSING",
             new_status="RETRYING",
             error=error_message,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=application_id,
         )
 
         if not saved:

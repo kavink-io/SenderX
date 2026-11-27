@@ -8,6 +8,11 @@ from flask_jwt_extended import (
     create_access_token
 )
 
+from app.core.client_ip import resolve_client_ip
+from app.modules.api_credentials.rate_limiter import (
+    DistributedRateLimiter,
+    RateLimiterError,
+)
 from app.modules.auth.decorators import require_permissions
 from app.modules.auth.service import AuthService
 from app.modules.auth.repository import AuthRepository
@@ -124,6 +129,24 @@ def resolve_account(identity, claims):
     return None, "Account not found or inactive"
 
 
+def _rate_limit_429(message, retry_after):
+    resp = jsonify({
+        "success": False,
+        "message": message,
+        "retry_after": retry_after,
+    })
+    resp.status_code = 429
+    resp.headers["Retry-After"] = str(retry_after)
+    return resp
+
+
+def _rate_limit_503():
+    return jsonify({
+        "success": False,
+        "message": "Rate limiting service temporarily unavailable. Please retry later.",
+    }), 503
+
+
 @auth_bp.route("/login", methods=["POST"])
 def login():
 
@@ -152,11 +175,85 @@ def login():
             "message": "Invalid email or password"
         }), 400
 
+    client_ip = resolve_client_ip(request)
+    login_window = int(current_app.config.get("RATE_LIMIT_AUTH_LOGIN_WINDOW_SECONDS", 300))
+    ip_limit = int(current_app.config.get("RATE_LIMIT_AUTH_LOGIN_IP_RPM", 20))
+    pair_limit = int(
+        current_app.config.get(
+            "RATE_LIMIT_AUTH_LOGIN_PAIR_FAILURE_MAX",
+            current_app.config.get("RATE_LIMIT_AUTH_LOGIN_FAILURE_MAX", 5),
+        )
+    )
+    global_limit = int(current_app.config.get("RATE_LIMIT_AUTH_LOGIN_GLOBAL_FAILURE_MAX", 15))
+    global_window = int(current_app.config.get("RATE_LIMIT_AUTH_LOGIN_GLOBAL_WINDOW_SECONDS", 900))
+    base_backoff = int(current_app.config.get("RATE_LIMIT_AUTH_LOGIN_GLOBAL_BASE_BACKOFF_SECONDS", 2))
+    max_backoff = int(current_app.config.get("RATE_LIMIT_AUTH_LOGIN_GLOBAL_MAX_BACKOFF_SECONDS", 30))
+
+    ip_digest = DistributedRateLimiter.hash_identifier("auth_login_ip", client_ip)
+    pair_digest = DistributedRateLimiter.hash_identifier("auth_login_pair", f"{client_ip}|{email}")
+    acct_digest = DistributedRateLimiter.hash_identifier("auth_login_acct", email)
+
+    try:
+        # Layer 1: Per-IP request rate limit (blocks password spraying across accounts)
+        ip_allowed, ip_retry = DistributedRateLimiter.check_rate_limit(
+            "auth_login_ip",
+            ip_digest,
+            limit=ip_limit,
+            window_seconds=login_window,
+        )
+        if not ip_allowed:
+            return _rate_limit_429("Too many login attempts. Please try again later.", ip_retry)
+
+        # Layer 2: Per-(IP + normalized email) failed-attempt limit (stops brute forcing without locking other IPs)
+        pair_allowed, pair_retry = DistributedRateLimiter.is_rate_limited(
+            "auth_login_failure_pair",
+            pair_digest,
+            limit=pair_limit,
+            window_seconds=login_window,
+        )
+        if not pair_allowed:
+            return _rate_limit_429("Too many failed login attempts. Please try again later.", pair_retry)
+
+        # Layer 3: Account-global distributed abuse protection with bounded progressive backoff
+        global_allowed, global_retry = DistributedRateLimiter.check_global_login_backoff(
+            acct_digest,
+            threshold=global_limit,
+            window_seconds=global_window,
+            base_backoff_seconds=base_backoff,
+            max_backoff_seconds=max_backoff,
+        )
+        if not global_allowed:
+            return _rate_limit_429("Too many failed login attempts. Please wait briefly and try again.", global_retry)
+    except RateLimiterError:
+        return _rate_limit_503()
+
     result = AuthService.login(email, password)
 
-    return jsonify(result), (
-        200 if result.get("success") else 401
-    )
+    if result.get("success"):
+        return jsonify(result), 200
+
+    try:
+        pair_fail_ok, pair_fail_retry = DistributedRateLimiter.check_rate_limit(
+            "auth_login_failure_pair",
+            pair_digest,
+            limit=pair_limit,
+            window_seconds=login_window,
+        )
+        global_fail_ok, global_fail_retry = DistributedRateLimiter.record_global_login_failure(
+            acct_digest,
+            threshold=global_limit,
+            window_seconds=global_window,
+            base_backoff_seconds=base_backoff,
+            max_backoff_seconds=max_backoff,
+        )
+        if not pair_fail_ok:
+            return _rate_limit_429("Too many failed login attempts. Please try again later.", pair_fail_retry)
+        if not global_fail_ok:
+            return _rate_limit_429("Too many failed login attempts. Please wait briefly and try again.", global_fail_retry)
+    except RateLimiterError:
+        return _rate_limit_503()
+
+    return jsonify(result), 401
 
 
 def _otp_error_response(error):
@@ -179,7 +276,7 @@ def request_activation_otp():
         result = OTPService.request_code(
             data.get("email"),
             OTPService.ACTIVATION,
-            client_ip=request.remote_addr
+            client_ip=resolve_client_ip(request)
         )
         return jsonify(result), 200
     except OTPServiceError as error:
@@ -193,7 +290,7 @@ def request_password_reset_otp():
         result = OTPService.request_code(
             data.get("email"),
             OTPService.PASSWORD_RESET,
-            client_ip=request.remote_addr
+            client_ip=resolve_client_ip(request)
         )
         return jsonify(result), 200
     except OTPServiceError as error:
@@ -203,12 +300,41 @@ def request_password_reset_otp():
 @auth_bp.route("/otp/verify", methods=["POST"])
 def verify_otp():
     data = request.get_json(silent=True) or {}
+    client_ip = resolve_client_ip(request)
+    email = data.get("email").strip().lower() if isinstance(data.get("email"), str) else ""
+    purpose = str(data.get("purpose") or "").strip().upper()
+    window = int(current_app.config.get("RATE_LIMIT_AUTH_OTP_VERIFY_WINDOW_SECONDS", 300))
+    ip_limit = int(current_app.config.get("RATE_LIMIT_AUTH_OTP_VERIFY_IP_MAX", 15))
+    email_limit = int(current_app.config.get("RATE_LIMIT_AUTH_OTP_VERIFY_EMAIL_MAX", 10))
+
+    try:
+        ip_allowed, ip_retry = DistributedRateLimiter.check_rate_limit(
+            "auth_otp_verify_ip",
+            DistributedRateLimiter.hash_identifier("otp_verify_ip", client_ip),
+            limit=ip_limit,
+            window_seconds=window,
+        )
+        if not ip_allowed:
+            return _rate_limit_429("Too many verification attempts. Please wait before trying again.", ip_retry)
+
+        if email:
+            email_allowed, email_retry = DistributedRateLimiter.check_rate_limit(
+                "auth_otp_verify_email",
+                DistributedRateLimiter.hash_identifier("otp_verify_email", f"{purpose}:{email}"),
+                limit=email_limit,
+                window_seconds=window,
+            )
+            if not email_allowed:
+                return _rate_limit_429("Too many verification attempts for this account. Please request a new code.", email_retry)
+    except RateLimiterError:
+        return _rate_limit_503()
+
     try:
         result = OTPService.verify_code(
             data.get("email"),
             data.get("purpose"),
             data.get("code"),
-            client_ip=request.remote_addr
+            client_ip=client_ip
         )
         return jsonify(result), 200
     except OTPServiceError as error:
@@ -218,6 +344,22 @@ def verify_otp():
 @auth_bp.route("/otp/set-password", methods=["POST"])
 def set_password_with_otp():
     data = request.get_json(silent=True) or {}
+    client_ip = resolve_client_ip(request)
+    window = int(current_app.config.get("RATE_LIMIT_AUTH_OTP_VERIFY_WINDOW_SECONDS", 300))
+    pwd_limit = int(current_app.config.get("RATE_LIMIT_AUTH_SET_PASSWORD_MAX", 10))
+
+    try:
+        allowed, retry_after = DistributedRateLimiter.check_rate_limit(
+            "auth_otp_set_password",
+            DistributedRateLimiter.hash_identifier("otp_set_pwd_ip", client_ip),
+            limit=pwd_limit,
+            window_seconds=window,
+        )
+        if not allowed:
+            return _rate_limit_429("Too many password reset attempts. Please try again later.", retry_after)
+    except RateLimiterError:
+        return _rate_limit_503()
+
     try:
         result = OTPService.set_password(
             data.get("purpose"),
@@ -256,6 +398,20 @@ def refresh():
 
     identity = get_jwt_identity()
     claims = get_jwt()
+    client_ip = resolve_client_ip(request)
+    refresh_limit = int(current_app.config.get("RATE_LIMIT_AUTH_REFRESH_RPM", 30))
+
+    try:
+        allowed, retry_after = DistributedRateLimiter.check_rate_limit(
+            "auth_refresh",
+            DistributedRateLimiter.hash_identifier("refresh", f"{identity}:{client_ip}"),
+            limit=refresh_limit,
+            window_seconds=60,
+        )
+        if not allowed:
+            return _rate_limit_429("Too many session refresh requests. Please retry later.", retry_after)
+    except RateLimiterError:
+        return _rate_limit_503()
 
     account, error = resolve_account(identity, claims)
 

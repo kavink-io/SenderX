@@ -49,6 +49,20 @@ class PayloadService:
            - Valid -> route to MessageService and queue.
         4. Maintain full audit trail.
         """
+        # Reject mismatched application_id embedded inside raw JSON
+        if isinstance(raw_json, dict) and raw_json.get("application_id") is not None:
+            raw_app = raw_json.get("application_id")
+            if not isinstance(raw_app, str):
+                return {"success": False, "status_code": 400, "message": "application_id must be a string"}
+            if application_id and raw_app.strip() and raw_app.strip() != str(application_id).strip():
+                return {
+                    "success": False,
+                    "status_code": 403,
+                    "message": "Application ID mismatch in payload body",
+                }
+            if not application_id and raw_app.strip():
+                application_id = raw_app.strip()
+
         payload_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
@@ -272,10 +286,11 @@ class PayloadService:
         created_message = message_res.get("message", {})
         message_id = created_message.get("message_id")
 
-        # Automatically queue message in broker
+        # Automatically queue message in broker within trusted application scope
         queue_res = MessageService.queue_message(
             message_id=message_id,
-            organization_id=organization_id
+            organization_id=organization_id,
+            user_application_ids=[application_id] if application_id else None,
         )
 
         payload_doc["status"] = PayloadStatus.ROUTED
@@ -319,11 +334,28 @@ class PayloadService:
     # 2. RETRIEVAL & QUERYING
     # -----------------------------------------------------------------------
 
+    @staticmethod
+    def _effective_single_scope(user_application_ids: Optional[List[str]], trusted_app_id: Optional[str]):
+        if trusted_app_id is not None:
+            return trusted_app_id
+        return user_application_ids
+
     @classmethod
-    def get_payload(cls, payload_id: str, organization_id: str) -> Dict[str, Any]:
-        """Fetch a specific payload by ID within the authenticated organization context."""
-        record = PayloadRepository.find_by_id(payload_id, organization_id=organization_id)
+    def get_payload(
+        cls,
+        payload_id: str,
+        organization_id: str,
+        user_application_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Fetch a specific payload by ID strictly scoped to organization and application access."""
+        record = PayloadRepository.find_by_id(
+            payload_id,
+            organization_id=organization_id,
+            application_ids=user_application_ids,
+        )
         if not record:
+            return {"success": False, "status_code": 404, "message": "Payload request not found"}
+        if user_application_ids is not None and not record.get("application_id"):
             return {"success": False, "status_code": 404, "message": "Payload request not found"}
 
         return {
@@ -343,9 +375,33 @@ class PayloadService:
         validation_status: Optional[str] = None,
         application_id: Optional[str] = None,
         start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+        end_date: Optional[str] = None,
+        user_application_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """List received JSON requests with pagination, filters, and redaction."""
+        effective_app_filter: Any = application_id
+        if user_application_ids is not None:
+            if application_id:
+                if application_id not in user_application_ids:
+                    return {
+                        "success": True,
+                        "status_code": 200,
+                        "data": {
+                            "items": [],
+                            "pagination": {
+                                "page": 1,
+                                "limit": 50,
+                                "total": 0,
+                                "pages": 1,
+                                "has_next": False,
+                                "has_prev": False,
+                            },
+                        },
+                    }
+                effective_app_filter = application_id
+            else:
+                effective_app_filter = list(user_application_ids)
+
         res = PayloadRepository.find_all(
             organization_id=organization_id,
             limit=limit,
@@ -353,7 +409,7 @@ class PayloadService:
             status=status,
             channel=channel,
             validation_status=validation_status,
-            application_id=application_id,
+            application_id=effective_app_filter,
             start_date=start_date,
             end_date=end_date
         )
@@ -365,10 +421,21 @@ class PayloadService:
         }
 
     @classmethod
-    def get_version_history(cls, payload_id: str, organization_id: str) -> Dict[str, Any]:
-        """Retrieve complete version history for a given payload."""
-        record = PayloadRepository.find_by_id(payload_id, organization_id=organization_id)
+    def get_version_history(
+        cls,
+        payload_id: str,
+        organization_id: str,
+        user_application_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Retrieve complete version history for a given payload within authorized scope."""
+        record = PayloadRepository.find_by_id(
+            payload_id,
+            organization_id=organization_id,
+            application_ids=user_application_ids,
+        )
         if not record:
+            return {"success": False, "status_code": 404, "message": "Payload request not found"}
+        if user_application_ids is not None and not record.get("application_id"):
             return {"success": False, "status_code": 404, "message": "Payload request not found"}
 
         versions = record.get("versions", [])
@@ -376,6 +443,7 @@ class PayloadService:
             "success": True,
             "status_code": 200,
             "payload_id": payload_id,
+            "application_id": record.get("application_id"),
             "current_version": record.get("version", 1),
             "versions": [redact_sensitive_payload(v) for v in versions]
         }
@@ -391,19 +459,47 @@ class PayloadService:
         organization_id: str,
         edited_json: Any,
         user_id: str,
-        reason: str
+        reason: str,
+        user_application_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Create a new payload version:
-        - Preserves previous versions.
-        - Preserves original immutable payload.
+        - Preserves previous versions, original immutable payload, and ownership.
+        - Rejects attempts to alter application_id or organization_id.
         - Records editor's user_id, timestamp, and reason.
         - Validates edited JSON (stores validation result).
         - DO NOT dispatch automatically! Requires explicit retry action.
         """
-        record = PayloadRepository.find_by_id(payload_id, organization_id=organization_id)
+        record = PayloadRepository.find_by_id(
+            payload_id,
+            organization_id=organization_id,
+            application_ids=user_application_ids,
+        )
         if not record:
             return {"success": False, "status_code": 404, "message": "Payload request not found"}
+
+        trusted_app_id = record.get("application_id")
+        if user_application_ids is not None and not trusted_app_id:
+            return {"success": False, "status_code": 404, "message": "Payload request not found"}
+
+        if isinstance(edited_json, dict):
+            if "organization_id" in edited_json and edited_json.get("organization_id") is not None:
+                if str(edited_json.get("organization_id")).strip() != str(organization_id).strip():
+                    return {
+                        "success": False,
+                        "status_code": 403,
+                        "message": "Cannot modify payload organization_id",
+                    }
+            if "application_id" in edited_json and edited_json.get("application_id") is not None:
+                if not isinstance(edited_json.get("application_id"), str):
+                    return {"success": False, "status_code": 400, "message": "application_id must be a string"}
+                edited_app = edited_json.get("application_id").strip()
+                if edited_app != (str(trusted_app_id).strip() if trusted_app_id else ""):
+                    return {
+                        "success": False,
+                        "status_code": 403,
+                        "message": "Cannot modify payload application_id",
+                    }
 
         current_status = record.get("status")
         if current_status in [PayloadStatus.DISPATCHING, PayloadStatus.DISPATCHED]:
@@ -430,15 +526,29 @@ class PayloadService:
                 "message": f"Edited payload structure invalid: {struct_err}"
             }
 
-        # Validate routing & channel fields
+        # Validate routing & channel fields + security threats
+        from app.validators.dynamic_json_validator import DynamicJSONValidator
+
         is_valid, norm_channel, route_code, route_err = validate_channel_and_routing_fields(edited_json)
+        _, threats = DynamicJSONValidator.scan_for_markup_and_threats(edited_json)
+        validation_errors = []
+        if route_err:
+            validation_errors.append(route_err)
+        if threats:
+            validation_errors.extend(threats)
+            is_valid = False
         validation_status = "VALID" if is_valid else "INVALID"
-        validation_errors = [route_err] if route_err else []
 
         edited_payload_to_store = deepcopy(edited_json)
         if norm_channel:
             edited_payload_to_store["channel"] = norm_channel
+        if trusted_app_id is not None:
+            edited_payload_to_store["application_id"] = trusted_app_id
+        else:
+            edited_payload_to_store.pop("application_id", None)
+        edited_payload_to_store.pop("organization_id", None)
 
+        scope_filter = cls._effective_single_scope(user_application_ids, trusted_app_id)
         updated = PayloadRepository.add_version(
             payload_id=payload_id,
             organization_id=organization_id,
@@ -447,20 +557,22 @@ class PayloadService:
             reason=reason,
             validation_status=validation_status,
             validation_errors=validation_errors,
-            new_channel=norm_channel
+            new_channel=norm_channel,
+            application_ids=scope_filter,
         )
 
         if not updated:
             return {"success": False, "status_code": 500, "message": "Failed to save edited payload version"}
 
-        # Sync edited payload to DLQ if record exists
+        # Sync edited payload to DLQ if record exists within same organization + application
         DeadLetterRepository.update_payload_in_dlq(
             payload_id=payload_id,
             organization_id=organization_id,
             current_payload=edited_payload_to_store,
             payload_version=updated["version"],
             channel=norm_channel,
-            recipient=edited_payload_to_store.get("recipient")
+            recipient=edited_payload_to_store.get("recipient"),
+            application_ids=scope_filter,
         )
 
         # Audit logs
@@ -471,10 +583,12 @@ class PayloadService:
             details={
                 "version": updated["version"],
                 "reason": reason,
-                "channel": norm_channel
+                "channel": norm_channel,
+                "application_id": trusted_app_id,
             },
             performed_by=user_id,
-            version=updated["version"]
+            version=updated["version"],
+            application_id=trusted_app_id,
         )
         PayloadRepository.log_audit(
             payload_id=payload_id,
@@ -483,10 +597,12 @@ class PayloadService:
             details={
                 "version": updated["version"],
                 "validation_status": validation_status,
-                "errors": validation_errors
+                "errors": validation_errors,
+                "application_id": trusted_app_id,
             },
             performed_by=user_id,
-            version=updated["version"]
+            version=updated["version"],
+            application_id=trusted_app_id,
         )
 
         return {
@@ -510,16 +626,24 @@ class PayloadService:
         cls,
         payload_id: str,
         organization_id: str,
-        version_num: Optional[int] = None
+        version_num: Optional[int] = None,
+        user_application_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Validate an edited payload without dispatching."""
-        record = PayloadRepository.find_by_id(payload_id, organization_id=organization_id)
+        record = PayloadRepository.find_by_id(
+            payload_id,
+            organization_id=organization_id,
+            application_ids=user_application_ids,
+        )
         if not record:
+            return {"success": False, "status_code": 404, "message": "Payload request not found"}
+        if user_application_ids is not None and not record.get("application_id"):
             return {"success": False, "status_code": 404, "message": "Payload request not found"}
 
         # Target payload version
         target_payload = record.get("current_payload")
         if version_num is not None:
+            target_payload = None
             for v in record.get("versions", []):
                 if v.get("version") == version_num:
                     target_payload = v.get("payload")
@@ -538,13 +662,23 @@ class PayloadService:
                 "payload_id": payload_id
             }
 
+        from app.validators.dynamic_json_validator import DynamicJSONValidator
+
         is_route_valid, channel, _, route_err = validate_channel_and_routing_fields(target_payload)
+        _, threats = DynamicJSONValidator.scan_for_markup_and_threats(target_payload)
         errors = [route_err] if route_err else []
+        if threats:
+            errors.extend(threats)
+            is_route_valid = False
 
         return {
             "success": True,
             "status_code": 200,
             "valid": is_route_valid,
+            "status": DynamicJSONValidator.THREAT_STATUS if threats else (
+                DynamicJSONValidator.VALID_STATUS if is_route_valid else DynamicJSONValidator.INVALID_STATUS
+            ),
+            "threats": threats,
             "channel": channel,
             "errors": errors,
             "payload_id": payload_id,
@@ -560,17 +694,38 @@ class PayloadService:
         cls,
         payload_id: str,
         organization_id: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        user_application_ids: Optional[List[str]] = None,
+        expected_application_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Explicit action to revalidate and dispatch an eligible payload.
-        Idempotent: prevents duplicate dispatch.
-        Revalidates all fields before queueing.
+        Idempotent: prevents duplicate dispatch and preserves original application ownership.
         """
-        record = PayloadRepository.find_by_id(payload_id, organization_id=organization_id)
+        record = PayloadRepository.find_by_id(
+            payload_id,
+            organization_id=organization_id,
+            application_ids=user_application_ids,
+        )
         if not record:
             return {"success": False, "status_code": 404, "message": "Payload request not found"}
 
+        trusted_app_id = record.get("application_id")
+        if user_application_ids is not None and not trusted_app_id:
+            return {"success": False, "status_code": 404, "message": "Payload request not found"}
+
+        if expected_application_id is not None and str(trusted_app_id or "") != str(expected_application_id):
+            return {
+                "success": False,
+                "status_code": 409,
+                "message": "Ambiguous or mismatched application ownership on payload record",
+            }
+
+        app_ok, app_err = MessageService._validate_persisted_application_active(trusted_app_id, organization_id)
+        if not app_ok:
+            return {"success": False, "status_code": 403, "message": app_err}
+
+        scope_filter = cls._effective_single_scope(user_application_ids, trusted_app_id)
         current_status = record.get("status")
         if current_status == PayloadStatus.DISPATCHED:
             return {
@@ -589,15 +744,24 @@ class PayloadService:
 
         # 1. Revalidate current payload version
         current_payload = record.get("current_payload") or {}
+        if isinstance(current_payload, dict) and current_payload.get("application_id"):
+            if str(current_payload.get("application_id")).strip() != str(trusted_app_id or "").strip():
+                return {
+                    "success": False,
+                    "status_code": 409,
+                    "message": "Payload body application_id conflicts with persisted ownership",
+                }
+
         is_struct_valid, _, struct_err = validate_json_structure_and_limits(current_payload)
         if not is_struct_valid:
             PayloadRepository.log_audit(
                 payload_id=payload_id,
                 organization_id=organization_id,
                 event_type="RETRY_ATTEMPTED",
-                details={"outcome": "FAILED_PRE_DISPATCH_VALIDATION", "error": struct_err},
+                details={"outcome": "FAILED_PRE_DISPATCH_VALIDATION", "error": struct_err, "application_id": trusted_app_id},
                 performed_by=user_id or "SYSTEM",
-                version=record.get("version", 1)
+                version=record.get("version", 1),
+                application_id=trusted_app_id,
             )
             return {
                 "success": False,
@@ -606,26 +770,31 @@ class PayloadService:
             }
 
         is_route_valid, channel, route_code, route_err = validate_channel_and_routing_fields(current_payload)
-        if not is_route_valid:
+        from app.validators.dynamic_json_validator import DynamicJSONValidator
+        _, threats = DynamicJSONValidator.scan_for_markup_and_threats(current_payload)
+        if not is_route_valid or threats:
+            combined_err = route_err or "; ".join(threats)
             PayloadRepository.log_audit(
                 payload_id=payload_id,
                 organization_id=organization_id,
                 event_type="RETRY_ATTEMPTED",
-                details={"outcome": "FAILED_PRE_DISPATCH_VALIDATION", "error": route_err},
+                details={"outcome": "FAILED_PRE_DISPATCH_VALIDATION", "error": combined_err, "application_id": trusted_app_id},
                 performed_by=user_id or "SYSTEM",
-                version=record.get("version", 1)
+                version=record.get("version", 1),
+                application_id=trusted_app_id,
             )
             return {
                 "success": False,
-                "status_code": 400,
-                "message": f"Cannot dispatch payload with validation errors: {route_err}",
-                "errors": [route_err]
+                "status_code": 422 if threats else 400,
+                "message": f"Cannot dispatch payload with validation errors: {combined_err}",
+                "errors": ([route_err] if route_err else []) + threats
             }
 
-        # 2. Atomic state transition to DISPATCHING
+        # 2. Atomic state transition to DISPATCHING with ownership filter
         transitioned = PayloadRepository.transition_to_dispatching_atomically(
             payload_id=payload_id,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=scope_filter,
         )
         if not transitioned:
             return {
@@ -638,18 +807,25 @@ class PayloadService:
             payload_id=payload_id,
             organization_id=organization_id,
             event_type="RETRY_ATTEMPTED",
-            details={"version": record.get("version", 1), "channel": channel},
+            details={"version": record.get("version", 1), "channel": channel, "application_id": trusted_app_id},
             performed_by=user_id or "SYSTEM",
-            version=record.get("version", 1)
+            version=record.get("version", 1),
+            application_id=trusted_app_id,
         )
 
-        # 3. Create message and queue dispatch
+        # 3. Create message and queue dispatch strictly preserving persisted application_id
         dispatch_payload = dict(current_payload)
         dispatch_payload["channel"] = channel
+        if trusted_app_id is not None:
+            dispatch_payload["application_id"] = trusted_app_id
+        else:
+            dispatch_payload.pop("application_id", None)
+        dispatch_payload.pop("organization_id", None)
 
         msg_res = MessageService.create_message(
             payload=dispatch_payload,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_id=trusted_app_id,
         )
 
         if not msg_res.get("success"):
@@ -659,15 +835,17 @@ class PayloadService:
                 new_status=PayloadStatus.FAILED,
                 organization_id=organization_id,
                 failure_code=PayloadFailureCode.VALIDATION_FAILED,
-                failure_reason=err_details
+                failure_reason=err_details,
+                application_ids=scope_filter,
             )
             PayloadRepository.log_audit(
                 payload_id=payload_id,
                 organization_id=organization_id,
                 event_type="DISPATCH_FAILED",
-                details={"error": err_details},
+                details={"error": err_details, "application_id": trusted_app_id},
                 performed_by=user_id or "SYSTEM",
-                version=record.get("version", 1)
+                version=record.get("version", 1),
+                application_id=trusted_app_id,
             )
             return {
                 "success": False,
@@ -679,34 +857,38 @@ class PayloadService:
         created_msg = msg_res.get("message", {})
         message_id = created_msg.get("message_id")
 
-        # Queue message in Celery broker
+        # Queue message in Celery broker within trusted scope
         MessageService.queue_message(
             message_id=message_id,
-            organization_id=organization_id
+            organization_id=organization_id,
+            user_application_ids=[trusted_app_id] if trusted_app_id else user_application_ids,
         )
 
-        # Update payload status
+        # Update payload status with ownership filter
         PayloadRepository.update_status(
             payload_id=payload_id,
             new_status=PayloadStatus.DISPATCHED,
             organization_id=organization_id,
-            message_id=message_id
+            message_id=message_id,
+            application_ids=scope_filter,
         )
 
-        # Resolve DLQ record if present
+        # Resolve DLQ record if present within ownership filter
         DeadLetterRepository.resolve_routing_dlq(
             payload_id=payload_id,
             organization_id=organization_id,
-            message_id=message_id
+            message_id=message_id,
+            application_ids=scope_filter,
         )
 
         PayloadRepository.log_audit(
             payload_id=payload_id,
             organization_id=organization_id,
             event_type="DISPATCH_SUCCESS",
-            details={"message_id": message_id, "channel": channel},
+            details={"message_id": message_id, "channel": channel, "application_id": trusted_app_id},
             performed_by=user_id or "SYSTEM",
-            version=record.get("version", 1)
+            version=record.get("version", 1),
+            application_id=trusted_app_id,
         )
 
         return {
@@ -714,6 +896,7 @@ class PayloadService:
             "status_code": 200,
             "payload_id": payload_id,
             "message_id": message_id,
+            "application_id": trusted_app_id,
             "channel": channel,
             "status": PayloadStatus.DISPATCHED,
             "message": "Payload successfully revalidated, created, and dispatched"
@@ -724,11 +907,21 @@ class PayloadService:
     # -----------------------------------------------------------------------
 
     @classmethod
-    def get_audit_trail(cls, payload_id: str, organization_id: str) -> Dict[str, Any]:
-        """Retrieve audit log entries for a payload."""
-        # Ensure payload exists for tenant
-        record = PayloadRepository.find_by_id(payload_id, organization_id=organization_id)
+    def get_audit_trail(
+        cls,
+        payload_id: str,
+        organization_id: str,
+        user_application_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Retrieve audit log entries for a payload within authorized scope."""
+        record = PayloadRepository.find_by_id(
+            payload_id,
+            organization_id=organization_id,
+            application_ids=user_application_ids,
+        )
         if not record:
+            return {"success": False, "status_code": 404, "message": "Payload request not found"}
+        if user_application_ids is not None and not record.get("application_id"):
             return {"success": False, "status_code": 404, "message": "Payload request not found"}
 
         logs = PayloadRepository.get_audit_logs(payload_id, organization_id=organization_id)
@@ -736,5 +929,6 @@ class PayloadService:
             "success": True,
             "status_code": 200,
             "payload_id": payload_id,
+            "application_id": record.get("application_id"),
             "audit_trail": logs
         }

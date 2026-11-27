@@ -1,7 +1,9 @@
 
+import hashlib
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet, MultiFernet, InvalidToken
@@ -259,8 +261,72 @@ class ProviderConfigService:
 
         return True
 
+    SECRET_FIELDS_BY_PROVIDER = {
+        "sendgrid": {"api_key"},
+        "ses": {"aws_secret_access_key"},
+        "amazon_ses": {"aws_secret_access_key"},
+        "smtp": {"smtp_password"},
+        "twilio": {"auth_token"},
+        "meta": {"access_token", "app_secret", "webhook_verify_token"},
+        "whatsapp": {"access_token", "app_secret", "webhook_verify_token"},
+        "whatsapp_cloud": {"access_token", "app_secret", "webhook_verify_token"},
+        "teams": {"client_secret", "access_token", "refresh_token"},
+        "microsoft_teams": {"client_secret", "access_token", "refresh_token"},
+        "msteams": {"client_secret", "access_token", "refresh_token"},
+        "graph": {"client_secret", "access_token", "refresh_token"},
+    }
+    GENERIC_SECRET_FIELDS = {
+        "api_key",
+        "secret",
+        "password",
+        "auth_token",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "aws_secret_access_key",
+        "smtp_password",
+        "app_secret",
+        "webhook_verify_token",
+    }
+
     @classmethod
-    def save_configuration(cls, provider, credentials, organization_id=None, active=True):
+    def _audit_provider_event(
+        cls,
+        *,
+        event_type: str,
+        provider: str,
+        organization_id=None,
+        actor=None,
+        action_label: str = "",
+        summary: str = "",
+    ):
+        """Record a non-secret security audit entry when security_audit_logs is available."""
+        if not has_app_context() or getattr(current_app, "mongo_db", None) is None:
+            return
+        db = current_app.mongo_db
+        if isinstance(db, dict) and "security_audit_logs" not in db:
+            return
+        try:
+            from app.modules.users.audit_repository import SecurityAuditRepository
+            actor_dict = actor if isinstance(actor, dict) else {}
+            SecurityAuditRepository.log_event(
+                organization_id=organization_id or "PLATFORM",
+                event_type=event_type,
+                actor_id=actor_dict.get("user_id") or actor_dict.get("admin_id"),
+                actor_email=actor_dict.get("email"),
+                actor_name=actor_dict.get("name"),
+                target_id=f"{organization_id or 'PLATFORM'}:{provider}",
+                target_type="PROVIDER_CONFIG",
+                target_name=provider,
+                action_label=action_label or event_type,
+                summary=summary or f"{action_label} for provider '{provider}'",
+                details={"provider": provider, "scope": "ORGANIZATION" if organization_id else "PLATFORM"},
+            )
+        except Exception:
+            pass
+
+    @classmethod
+    def save_configuration(cls, provider, credentials, organization_id=None, active=True, actor=None):
 
         provider = provider.lower().strip()
         if not isinstance(credentials, dict) or not credentials:
@@ -279,21 +345,39 @@ class ProviderConfigService:
         }
         existing = collection.find_one(
             query,
-            {"credentials": 1, "configured": 1, "disconnected": 1, "status": 1}
+            {"config_id": 1, "credentials": 1, "configured": 1, "disconnected": 1, "status": 1}
         )
         merged_credentials = {}
+        is_update = False
         if existing and existing.get("credentials") and existing.get("configured") is not False and not existing.get("disconnected"):
             merged_credentials = cls._decrypt_credentials(
                 existing["credentials"],
                 provider=provider,
                 organization_id=organization_id,
             )
-        merged_credentials.update(credentials)
+            is_update = True
+
+        secret_fields = cls.SECRET_FIELDS_BY_PROVIDER.get(provider, cls.GENERIC_SECRET_FIELDS)
+        for key, value in credentials.items():
+            if (
+                is_update
+                and key in secret_fields
+                and key in merged_credentials
+                and isinstance(merged_credentials[key], str)
+                and merged_credentials[key].strip()
+                and (value is None or (isinstance(value, str) and not value.strip()))
+            ):
+                # Preserve existing secret when update payload passes an empty/blank field
+                continue
+            merged_credentials[key] = value
+
         cls.validate_credentials(provider, merged_credentials)
 
         encrypted_credentials, key_version = cls._encrypt_credentials(merged_credentials)
+        config_id = (existing or {}).get("config_id") or f"pc_{uuid.uuid4().hex}"
 
         set_doc = {
+            "config_id": config_id,
             "provider": provider,
             "organization_id": organization_id,
             "credentials": encrypted_credentials,
@@ -303,6 +387,10 @@ class ProviderConfigService:
             "status": "ACTIVE" if active else "INACTIVE",
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
+        if provider == "twilio":
+            sid_val = merged_credentials.get("account_sid")
+            if isinstance(sid_val, str) and sid_val.strip():
+                set_doc["account_sid_digest"] = hashlib.sha256(sid_val.strip().encode("utf-8")).hexdigest()
         if "token_expires_at" in merged_credentials and merged_credentials["token_expires_at"] is not None:
             try:
                 set_doc["token_expires_at"] = float(merged_credentials["token_expires_at"])
@@ -313,6 +401,15 @@ class ProviderConfigService:
             query,
             {"$set": set_doc},
             upsert=True
+        )
+
+        cls._audit_provider_event(
+            event_type="PROVIDER_CONFIG_UPDATED" if is_update else "PROVIDER_CONFIG_CREATED",
+            provider=provider,
+            organization_id=organization_id,
+            actor=actor,
+            action_label="Updated Provider Configuration" if is_update else "Created Provider Configuration",
+            summary=f"{'Updated' if is_update else 'Saved'} encrypted configuration for provider '{provider}'",
         )
 
         return True
@@ -364,6 +461,7 @@ class ProviderConfigService:
 
         projection = {
             "_id": 0,
+            "config_id": 1,
             "provider": 1,
             "configured": 1,
             "disconnected": 1,
@@ -416,6 +514,7 @@ class ProviderConfigService:
                 query,
                 {
                     "_id": 0,
+                    "config_id": 1,
                     "provider": 1,
                     "configured": 1,
                     "disconnected": 1,
@@ -602,7 +701,16 @@ class ProviderConfigService:
         }
 
     @classmethod
-    def handle_teams_oauth_callback(cls, code, state, redirect_uri=None, jwks_client=None, signing_key=None):
+    def handle_teams_oauth_callback(
+        cls,
+        code,
+        state,
+        redirect_uri=None,
+        expected_organization_id=None,
+        expected_user_id=None,
+        jwks_client=None,
+        signing_key=None
+    ):
         """
         Process Microsoft Entra ID authorization code callback.
         Validates state cryptographic integrity and organization binding,
@@ -628,6 +736,13 @@ class ProviderConfigService:
                 "message": err_msg or "Invalid OAuth state"
             }
 
+        if expected_organization_id is not None and str(state_org_id) != str(expected_organization_id):
+            return {
+                "success": False,
+                "status_code": 403,
+                "message": "OAuth state does not belong to your organization"
+            }
+
         # 2. Server-side transaction recovery & replay prevention (Atomic find_one_and_update)
         org_id = state_org_id
         code_verifier = None
@@ -637,12 +752,34 @@ class ProviderConfigService:
         if hasattr(current_app, "mongo_db") and current_app.mongo_db is not None:
             col = current_app.mongo_db["oauth_transactions"]
             now = time.time()
+
+            # Check tenant/user binding before consuming so cross-tenant callers cannot burn another org's state
+            if expected_organization_id is not None or expected_user_id is not None:
+                peek = col.find_one({"state": state}, {"_id": 0, "organization_id": 1, "user_id": 1})
+                if peek:
+                    if expected_organization_id is not None and peek.get("organization_id") != expected_organization_id:
+                        return {
+                            "success": False,
+                            "status_code": 403,
+                            "message": "OAuth transaction belongs to another organization"
+                        }
+                    if expected_user_id is not None and peek.get("user_id") and peek.get("user_id") != expected_user_id:
+                        return {
+                            "success": False,
+                            "status_code": 403,
+                            "message": "OAuth transaction was initiated by a different user"
+                        }
+
+            consume_query = {
+                "state": state,
+                "status": "PENDING",
+                "expires_at": {"$gt": now}
+            }
+            if expected_organization_id is not None:
+                consume_query["organization_id"] = expected_organization_id
+
             tx = col.find_one_and_update(
-                {
-                    "state": state,
-                    "status": "PENDING",
-                    "expires_at": {"$gt": now}
-                },
+                consume_query,
                 {
                     "$set": {
                         "status": "CONSUMED",
@@ -884,7 +1021,7 @@ class ProviderConfigService:
         return bool(result.modified_count > 0)
 
     @classmethod
-    def disconnect_provider(cls, provider, organization_id=None):
+    def disconnect_provider(cls, provider, organization_id=None, actor=None):
         """
         Disconnect a provider connection.
         Removes credentials and marks configured=False.
@@ -901,8 +1038,19 @@ class ProviderConfigService:
                     "disconnected_at": datetime.now(timezone.utc).isoformat()
                 },
                 "$unset": {
-                    "credentials": ""
+                    "credentials": "",
+                    "account_sid_digest": ""
                 }
             }
         )
-        return result.modified_count > 0 or result.matched_count > 0
+        matched = result.modified_count > 0 or result.matched_count > 0
+        if matched:
+            cls._audit_provider_event(
+                event_type="PROVIDER_CONFIG_DISCONNECTED",
+                provider=provider,
+                organization_id=organization_id,
+                actor=actor,
+                action_label="Disconnected Provider Configuration",
+                summary=f"Disconnected and cleared credentials for provider '{provider}'",
+            )
+        return matched

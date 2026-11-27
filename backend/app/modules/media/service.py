@@ -404,7 +404,8 @@ class MediaService:
                 url = storage.generate_signed_url(
                     storage_key=storage_key,
                     expires_in=3600,
-                    filename=record.get("filename")
+                    filename=record.get("filename"),
+                    organization_id=organization_id
                 )
                 if url:
                     return {
@@ -420,7 +421,7 @@ class MediaService:
 
         # Fallback to direct stream (for local storage or direct download)
         try:
-            stream = storage.get_stream(storage_key)
+            stream = storage.get_stream(storage_key, organization_id=organization_id)
             return {
                 "success": True,
                 "status_code": 200,
@@ -449,7 +450,7 @@ class MediaService:
         if storage_key:
             try:
                 storage = cls._get_storage()
-                storage.delete(storage_key)
+                storage.delete(storage_key, organization_id=organization_id)
             except Exception as exc:
                 if has_app_context():
                     current_app.logger.warning("Could not delete physical storage key %s: %s", storage_key, exc)

@@ -66,24 +66,35 @@ class DeadLetterRepository:
 
         return parsed.astimezone(timezone.utc)
 
+    @staticmethod
+    def _apply_application_filter(query, application_ids=None):
+        if application_ids is None:
+            return query
+        if isinstance(application_ids, (list, set, tuple)):
+            query["application_id"] = {"$in": list(application_ids)}
+        elif isinstance(application_ids, str):
+            stripped = application_ids.strip()
+            if stripped:
+                query["application_id"] = stripped
+        return query
+
     # --------------------------------------------------
     # SAVE DEAD LETTER
     # --------------------------------------------------
 
-    
-        
     @classmethod
     def save_from_message(
         cls,
         message,
         error,
-        organization_id=None
+        organization_id=None,
+        application_id=None
     ):
         """
         Save an exhausted message in the DLQ.
 
         Supports automatic and manual failure cycles.
-        Preserves trusted organization ID.
+        Preserves trusted organization ID and application ID.
         Prevents duplicate failure-cycle entries.
         """
 
@@ -101,14 +112,11 @@ class DeadLetterRepository:
             else message.get("organization_id")
         )
 
-        # Prevent tenant-owned messages from being saved
-        # without their organization ID.
         if not trusted_organization_id:
             raise ValueError(
                 "Organization ID is required for DLQ insertion"
             )
 
-        # Ensure message snapshot belongs to the same tenant.
         message_organization_id = message.get("organization_id")
 
         if (
@@ -119,6 +127,21 @@ class DeadLetterRepository:
                 "Message organization ID does not match trusted organization ID"
             )
 
+        trusted_application_id = (
+            application_id
+            if application_id is not None
+            else message.get("application_id")
+        )
+        message_application_id = message.get("application_id")
+        if (
+            message_application_id is not None
+            and trusted_application_id is not None
+            and str(message_application_id) != str(trusted_application_id)
+        ):
+            raise ValueError(
+                "Message application ID does not match trusted application ID"
+            )
+
         # Deterministic failure-cycle identifier.
         failure_cycle_id = (
             f"{message_id}:{retry_count}:{manual_retry_count}"
@@ -126,6 +149,7 @@ class DeadLetterRepository:
 
         snapshot_fields = [
             "message_id",
+            "application_id",
             "channel",
             "provider",
             "recipient",
@@ -146,8 +170,9 @@ class DeadLetterRepository:
             if field in message
         }
 
-        # Always explicitly preserve tenant ownership.
+        # Always explicitly preserve tenant and application ownership.
         snapshot["organization_id"] = trusted_organization_id
+        snapshot["application_id"] = trusted_application_id
 
         clean_error = sanitize_dlq_error(error)
         snapshot["last_error"] = clean_error
@@ -417,7 +442,8 @@ class DeadLetterRepository:
         current_payload: Dict[str, Any],
         payload_version: int,
         channel: Optional[str] = None,
-        recipient: Optional[str] = None
+        recipient: Optional[str] = None,
+        application_ids: Any = None,
     ) -> bool:
         """Update the payload view in DLQ when an organization user edits the JSON, encrypted at rest."""
         from app.modules.payloads.encryption import PayloadEncryption
@@ -434,11 +460,14 @@ class DeadLetterRepository:
         if recipient:
             update_fields["recipient"] = recipient
 
+        query: Dict[str, Any] = {
+            "$or": [{"message_id": payload_id}, {"payload_id": payload_id}],
+            "organization_id": organization_id,
+        }
+        cls._apply_application_filter(query, application_ids)
+
         res = cls._collection().update_one(
-            {
-                "$or": [{"message_id": payload_id}, {"payload_id": payload_id}],
-                "organization_id": organization_id
-            },
+            query,
             {
                 "$set": update_fields,
                 "$push": {
@@ -458,14 +487,15 @@ class DeadLetterRepository:
         cls,
         payload_id: str,
         organization_id: str,
-        message_id: Optional[str] = None
+        message_id: Optional[str] = None,
+        application_ids: Any = None,
     ) -> bool:
         """
         Transition a routing-ingestion DLQ record to RESOLVED status upon successful retry dispatch.
-        Matches by payload_id or message_id scoped strictly to organization_id.
+        Matches by payload_id or message_id scoped strictly to organization_id and application_ids.
         """
         now = cls._now()
-        query = {
+        query: Dict[str, Any] = {
             "$or": [
                 {"payload_id": payload_id},
                 {"message_id": payload_id}
@@ -473,6 +503,7 @@ class DeadLetterRepository:
             "organization_id": organization_id,
             "dead_letter_status": {"$in": ["PENDING_REVIEW", "INVESTIGATING", "RETRY_QUEUED"]}
         }
+        cls._apply_application_filter(query, application_ids)
 
         update_fields = {
             "dead_letter_status": "RESOLVED",
@@ -499,7 +530,7 @@ class DeadLetterRepository:
         return result.modified_count > 0
 
     @classmethod
-    def find_by_message_id(cls, message_id, organization_id=None):
+    def find_by_message_id(cls, message_id, organization_id=None, application_ids=None):
 
         query = {
             "$or": [
@@ -510,6 +541,7 @@ class DeadLetterRepository:
 
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_ids)
 
         doc = cls._collection().find_one(
             query,
@@ -531,7 +563,8 @@ class DeadLetterRepository:
     recipient=None,
     provider=None,
     include_metadata=False,
-    organization_id=None
+    organization_id=None,
+    application_id=None
 ):
         """
         Retrieve dead letters with optional filtering
@@ -541,6 +574,7 @@ class DeadLetterRepository:
         query = {}
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_id)
 
         if status:
             query["dead_letter_status"] = status.strip().upper()
@@ -599,17 +633,18 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     @classmethod
-    def get_statistics(cls, organization_id=None):
+    def get_statistics(cls, organization_id=None, application_id=None):
         """
         Generate DLQ monitoring statistics.
         """
+        match_query = {}
+        if organization_id is not None:
+            match_query["organization_id"] = organization_id
+        cls._apply_application_filter(match_query, application_id)
 
         pipeline = [
             {
-                "$match": {
-                    "organization_id": organization_id
-                }
-                if organization_id is not None else {}
+                "$match": match_query
             },
             {
                 "$facet": {
@@ -742,21 +777,22 @@ class DeadLetterRepository:
 
         
     @classmethod
-    def get_provider_analytics(cls, organization_id=None):
+    def get_provider_analytics(cls, organization_id=None, application_id=None):
         """
         Generate provider-wise DLQ failure analytics.
 
-        All aggregation pipelines are tenant-scoped
-        when organization_id is provided.
+        All aggregation pipelines are tenant- and application-scoped
+        when organization_id / application_id are provided.
         """
 
         collection = cls._collection()
 
-        # Shared tenant filter for every aggregation.
+        # Shared tenant/application filter for every aggregation.
         query = {}
 
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_id)
 
         match_stage = (
             [{"$match": query}]
@@ -917,7 +953,8 @@ class DeadLetterRepository:
         start_date=None,
         end_date=None,
         provider=None,
-        organization_id=None
+        organization_id=None,
+        application_id=None
     ):
         """
         Generate:
@@ -992,16 +1029,17 @@ class DeadLetterRepository:
                 "$options": "i"
             }
 
+        base_match = {}
+        if organization_id is not None:
+            base_match["organization_id"] = organization_id
+        cls._apply_application_filter(base_match, application_id)
+
         pipeline = [
 
             # Convert stored ISO timestamps into dates
 
             {
-                "$match": (
-                    {"organization_id": organization_id}
-                    if organization_id is not None
-                    else {}
-                )
+                "$match": base_match
             },
 
             {
@@ -1296,11 +1334,12 @@ class DeadLetterRepository:
 
 
     @classmethod
-    def mark_retry_requested(cls, message_id, organization_id=None):
+    def mark_retry_requested(cls, message_id, organization_id=None, application_ids=None):
 
         current = cls.find_by_message_id(
             message_id,
-            organization_id=organization_id
+            organization_id=organization_id,
+            application_ids=application_ids,
         )
 
         if not current:
@@ -1320,6 +1359,7 @@ class DeadLetterRepository:
 
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_ids)
 
         result = cls._collection().update_one(
             query,
@@ -1359,7 +1399,7 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     @classmethod
-    def restore_pending_review(cls, message_id, organization_id=None):
+    def restore_pending_review(cls, message_id, organization_id=None, application_ids=None):
 
         now = cls._now()
 
@@ -1371,6 +1411,7 @@ class DeadLetterRepository:
 
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_ids)
 
         result = cls._collection().update_one(
             query,
@@ -1445,7 +1486,8 @@ class DeadLetterRepository:
         cls,
         message_id,
         task_id,
-        organization_id=None
+        organization_id=None,
+        application_ids=None
     ):
 
         now = cls._now()
@@ -1459,6 +1501,7 @@ class DeadLetterRepository:
 
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_ids)
 
         result = cls._collection().update_one(
             query,
@@ -1501,7 +1544,8 @@ class DeadLetterRepository:
         message_id,
         task_id,
         provider_message_id=None,
-        organization_id=None
+        organization_id=None,
+        application_ids=None
     ):
         """
         Mark a successfully delivered manual retry as resolved.
@@ -1519,6 +1563,7 @@ class DeadLetterRepository:
 
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_ids)
 
         update_fields = {
             "dead_letter_status": "RESOLVED",
@@ -1699,7 +1744,7 @@ class DeadLetterRepository:
     # --------------------------------------------------
 
     @classmethod
-    def delete_by_message_id(cls, message_id, organization_id=None):
+    def delete_by_message_id(cls, message_id, organization_id=None, application_ids=None):
 
         query = {
             "message_id": message_id,
@@ -1708,6 +1753,7 @@ class DeadLetterRepository:
 
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_filter(query, application_ids)
 
         result = cls._collection().delete_one(query)
 

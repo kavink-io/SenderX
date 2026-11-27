@@ -76,7 +76,7 @@ D. Unknown Key in Strict Mode Rejected (HTTP 422):
 """
 
 from flask import Blueprint, request, jsonify, g, current_app
-from app.modules.auth.decorators import require_permissions
+from app.modules.auth.decorators import require_permissions, require_organization_wide_scope
 from app.modules.api_credentials.rate_limiter import (
     DistributedRateLimiter,
     RateLimiterError
@@ -93,6 +93,9 @@ templates_bp = Blueprint("templates", __name__)
 @templates_bp.route("/", methods=["POST"])
 @require_permissions("organization:templates:manage")
 def create_template():
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({
@@ -327,6 +330,9 @@ def get_template(template_id):
 @templates_bp.route("/<string:template_id>", methods=["PUT", "PATCH"])
 @require_permissions("organization:templates:manage")
 def update_template(template_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({
@@ -354,6 +360,9 @@ def update_template(template_id):
 @templates_bp.route("/<string:template_id>", methods=["DELETE"])
 @require_permissions("organization:templates:manage")
 def delete_template(template_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user.get("user_id") or g.current_user.get("email")
 
@@ -373,6 +382,9 @@ def delete_template(template_id):
 @templates_bp.route("/<string:template_id>/publish", methods=["POST"])
 @require_permissions("organization:templates:manage")
 def publish_template(template_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user.get("user_id") or g.current_user.get("email")
     payload = request.get_json(silent=True) or {}
@@ -400,6 +412,9 @@ def publish_template(template_id):
 @templates_bp.route("/<string:template_id>/archive", methods=["POST"])
 @require_permissions("organization:templates:manage")
 def archive_template(template_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user.get("user_id") or g.current_user.get("email")
 
@@ -419,6 +434,9 @@ def archive_template(template_id):
 @templates_bp.route("/<string:template_id>/duplicate", methods=["POST"])
 @require_permissions("organization:templates:manage")
 def duplicate_template(template_id):
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user.get("user_id") or g.current_user.get("email")
 

@@ -6,7 +6,7 @@ REST endpoints for organization administrators to manage external connected appl
 from flask import Blueprint, jsonify, request, g
 
 from app.modules.applications.service import ApplicationService
-from app.modules.auth.decorators import require_permissions
+from app.modules.auth.decorators import require_permissions, resolve_authorized_application_scope
 
 
 applications_bp = Blueprint("applications", __name__)
@@ -16,6 +16,11 @@ applications_bp = Blueprint("applications", __name__)
 @require_permissions("organization:configuration:manage")
 def register_application():
     """Register a new external application bound to the current organization."""
+    if resolve_authorized_application_scope() is not None:
+        return jsonify({
+            "success": False,
+            "message": "Organization-wide configuration permission is required to register new applications",
+        }), 403
     data = request.get_json(silent=True) or {}
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user["user_id"]
@@ -50,13 +55,34 @@ def list_applications():
         limit=limit,
         page=page
     )
+    user_app_scopes = resolve_authorized_application_scope()
+    if user_app_scopes is not None and isinstance(res.get("data"), list):
+        allowed = set(user_app_scopes)
+        filtered = [a for a in res["data"] if a.get("application_id") in allowed]
+        res["data"] = filtered
+        if isinstance(res.get("pagination"), dict):
+            res["pagination"]["total"] = len(filtered)
     return jsonify(res), 200
+
+
+def _check_application_scope(application_id: str):
+    """Fail closed when an application-scoped caller targets an unauthorized application."""
+    user_app_scopes = resolve_authorized_application_scope()
+    if user_app_scopes is not None and application_id not in set(user_app_scopes):
+        return jsonify({
+            "success": False,
+            "message": f"You do not have permission to access or modify application '{application_id}'",
+        }), 403
+    return None
 
 
 @applications_bp.route("/<string:application_id>", methods=["GET"])
 @require_permissions("organization:configuration:manage")
 def get_application(application_id):
     """Get metadata for a specific connected application."""
+    scope_err = _check_application_scope(application_id)
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
 
     app = ApplicationService.get_application(
@@ -73,6 +99,9 @@ def get_application(application_id):
 @require_permissions("organization:configuration:manage")
 def update_application(application_id):
     """Update metadata for a connected application."""
+    scope_err = _check_application_scope(application_id)
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user["user_id"]
     data = request.get_json(silent=True) or {}
@@ -90,6 +119,9 @@ def update_application(application_id):
 @require_permissions("organization:configuration:manage")
 def deactivate_application(application_id):
     """Deactivate application and cascade revocation to all active credentials."""
+    scope_err = _check_application_scope(application_id)
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user["user_id"]
 
@@ -105,6 +137,9 @@ def deactivate_application(application_id):
 @require_permissions("organization:configuration:manage")
 def activate_application(application_id):
     """Reactivate a previously deactivated application."""
+    scope_err = _check_application_scope(application_id)
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user["user_id"]
 
@@ -120,6 +155,9 @@ def activate_application(application_id):
 @require_permissions("organization:configuration:manage")
 def get_application_stats(application_id):
     """Get usage statistics and resource counts for an application."""
+    scope_err = _check_application_scope(application_id)
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
 
     res = ApplicationService.get_application_stats(
@@ -133,6 +171,9 @@ def get_application_stats(application_id):
 @require_permissions("organization:configuration:manage")
 def delete_application(application_id):
     """Safely remove an application from active management without deleting history."""
+    scope_err = _check_application_scope(application_id)
+    if scope_err:
+        return scope_err
     res = ApplicationService.delete_application(
         application_id=application_id,
         organization_id=g.current_organization["organization_id"],

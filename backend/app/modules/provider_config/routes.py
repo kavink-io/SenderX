@@ -1,9 +1,13 @@
 
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, current_app, request, jsonify, g
 
 from app.adapters.errors import ProviderResolutionError
 from app.modules.provider_config.service import ProviderConfigService
-from app.modules.auth.decorators import require_roles, require_permissions
+from app.modules.auth.decorators import (
+    require_roles,
+    require_permissions,
+    require_organization_wide_scope,
+)
 
 
 provider_config_bp = Blueprint(
@@ -103,6 +107,9 @@ def get_provider_configs():
 @provider_config_bp.route("/organization", methods=["POST"])
 @require_permissions("organization:providers:manage")
 def save_organization_provider_config():
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
 
     data = request.get_json(silent=True) or {}
     provider = data.get("provider")
@@ -115,12 +122,14 @@ def save_organization_provider_config():
         }), 400
 
     organization_id = g.current_organization["organization_id"]
+    actor = getattr(g, "current_user", None)
 
     try:
         ProviderConfigService.save_configuration(
             provider=provider,
             credentials=credentials,
-            organization_id=organization_id
+            organization_id=organization_id,
+            actor=actor,
         )
 
         return jsonify({
@@ -145,6 +154,9 @@ def save_organization_provider_config():
 @require_permissions("organization:providers:manage")
 def set_organization_provider_status():
     """Activate or deactivate an existing organization provider configuration."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     data = request.get_json(silent=True) or {}
     provider = data.get("provider")
     is_active = data.get("is_active")
@@ -180,6 +192,9 @@ def set_organization_provider_status():
 @provider_config_bp.route("/organization", methods=["GET"])
 @require_permissions("organization:providers:read")
 def get_organization_provider_configs():
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
 
     organization_id = g.current_organization["organization_id"]
     provider = request.args.get("provider")
@@ -205,6 +220,33 @@ def get_organization_provider_configs():
         return jsonify({"success": False, "message": "Could not retrieve provider configurations"}), 500
 
 
+@provider_config_bp.route("/organization/<string:provider>", methods=["DELETE"])
+@require_permissions("organization:providers:manage")
+def delete_organization_provider_config(provider):
+    """Disconnect and clear stored credentials for an organization's provider."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
+
+    organization_id = g.current_organization["organization_id"]
+    actor = getattr(g, "current_user", None)
+    try:
+        disconnected = ProviderConfigService.disconnect_provider(
+            provider=provider,
+            organization_id=organization_id,
+            actor=actor,
+        )
+        if not disconnected:
+            return jsonify({"success": False, "message": "Provider configuration not found"}), 404
+        return jsonify({
+            "success": True,
+            "message": f"Provider '{provider.lower().strip()}' disconnected for organization"
+        }), 200
+    except Exception:
+        current_app.logger.exception("Failed to disconnect organization provider '%s'", provider)
+        return jsonify({"success": False, "message": "Could not disconnect provider configuration"}), 500
+
+
 @provider_config_bp.route("/validate", methods=["POST"])
 @require_roles("SUPER_ADMIN")
 def validate_platform_provider_config():
@@ -221,14 +263,18 @@ def validate_platform_provider_config():
         }), 200
     except ValueError as err:
         return jsonify({"success": False, "message": str(err)}), 400
-    except Exception as err:
-        return jsonify({"success": False, "message": f"Validation failed: {str(err)}"}), 500
+    except Exception:
+        current_app.logger.exception("Platform provider validation error")
+        return jsonify({"success": False, "message": "Validation failed due to an internal error"}), 500
 
 
 @provider_config_bp.route("/organization/validate", methods=["POST"])
 @require_permissions("organization:providers:manage")
 def validate_organization_provider_config():
     """Validate organization provider credentials format and presence."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     data = request.get_json(silent=True) or {}
     provider = data.get("provider")
     credentials = data.get("credentials")
@@ -241,8 +287,9 @@ def validate_organization_provider_config():
         }), 200
     except ValueError as err:
         return jsonify({"success": False, "message": str(err)}), 400
-    except Exception as err:
-        return jsonify({"success": False, "message": f"Validation failed: {str(err)}"}), 500
+    except Exception:
+        current_app.logger.exception("Organization provider validation error")
+        return jsonify({"success": False, "message": "Validation failed due to an internal error"}), 500
 
 
 # ======================================================
@@ -256,6 +303,9 @@ def get_teams_connect_url():
     Generate Microsoft Entra ID authorization URL for connecting
     the organization's Teams account with delegated permissions.
     """
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user.get("user_id") if hasattr(g, "current_user") and g.current_user else None
     redirect_uri = request.args.get("redirect_uri")
@@ -269,8 +319,9 @@ def get_teams_connect_url():
         return jsonify(result), 200
     except ValueError as err:
         return jsonify({"success": False, "message": str(err)}), 400
-    except Exception as err:
-        return jsonify({"success": False, "message": f"Could not generate Teams connect URL: {str(err)}"}), 500
+    except Exception:
+        current_app.logger.exception("Failed to generate Teams connect URL")
+        return jsonify({"success": False, "message": "Could not generate Teams connect URL"}), 500
 
 
 @provider_config_bp.route("/teams/oauth/callback", methods=["GET"])
@@ -305,15 +356,22 @@ def teams_oauth_exchange():
     """
     Manual/frontend token exchange endpoint for SPA authorization code grant.
     """
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     data = request.get_json(silent=True) or {}
     code = data.get("code")
     state = data.get("state")
     redirect_uri = data.get("redirect_uri")
+    organization_id = g.current_organization["organization_id"]
+    user_id = g.current_user.get("user_id") if hasattr(g, "current_user") and g.current_user else None
 
     result = ProviderConfigService.handle_teams_oauth_callback(
         code=code,
         state=state,
-        redirect_uri=redirect_uri
+        redirect_uri=redirect_uri,
+        expected_organization_id=organization_id,
+        expected_user_id=user_id,
     )
     status_code = result.get("status_code", 200 if result.get("success") else 400)
     return jsonify(result), status_code
@@ -323,8 +381,12 @@ def teams_oauth_exchange():
 @require_permissions("organization:providers:manage")
 def disconnect_teams():
     """Disconnect Microsoft Teams integration for the organization."""
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return scope_err
     organization_id = g.current_organization["organization_id"]
-    ProviderConfigService.disconnect_provider("teams", organization_id=organization_id)
+    actor = getattr(g, "current_user", None)
+    ProviderConfigService.disconnect_provider("teams", organization_id=organization_id, actor=actor)
     return jsonify({
         "success": True,
         "message": "Microsoft Teams disconnected successfully for organization"

@@ -99,16 +99,9 @@ def redact_sensitive_payload(obj: Any) -> Any:
 
 
 def calculate_json_depth(value: Any, current_depth: int = 1) -> int:
-    """Calculate the maximum nesting depth of a JSON-serializable structure."""
-    if isinstance(value, dict):
-        if not value:
-            return current_depth
-        return max(calculate_json_depth(v, current_depth + 1) for v in value.values())
-    elif isinstance(value, list):
-        if not value:
-            return current_depth
-        return max(calculate_json_depth(item, current_depth + 1) for item in value)
-    return current_depth
+    """Iteratively calculate the maximum nesting depth of a JSON-serializable structure."""
+    from app.validators.dynamic_json_validator import DynamicJSONValidator
+    return DynamicJSONValidator.get_depth(value, current_depth)
 
 
 def validate_json_structure_and_limits(
@@ -117,31 +110,39 @@ def validate_json_structure_and_limits(
     max_depth: int = 20
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     """
-    Verify root is a dictionary, valid JSON encoding, size <= max_bytes, and depth <= max_depth.
+    Verify root is a dictionary, valid JSON encoding, size <= max_bytes, and iterative
+    complexity limits (depth, node count, array length, object keys, string length, types).
     Returns (is_valid, failure_code, error_message).
     """
+    from app.validators.dynamic_json_validator import DynamicJSONValidator
+
     if not isinstance(payload, dict):
         return False, PayloadFailureCode.INVALID_JSON_STRUCTURE, "JSON root must be an object"
 
+    limits = DynamicJSONValidator.resolve_limits(
+        overrides={"max_bytes": max_bytes, "max_depth": max_depth},
+        for_ingestion=True,
+    )
+    inspect_res = DynamicJSONValidator.inspect_limits_and_threats(payload, limits=limits)
+    if inspect_res["type_errors"]:
+        return False, PayloadFailureCode.INVALID_JSON_STRUCTURE, inspect_res["type_errors"][0]
+
+    for err in inspect_res["limit_errors"]:
+        if "depth" in err.lower():
+            return False, PayloadFailureCode.JSON_NESTING_TOO_DEEP, err
+        return False, PayloadFailureCode.PAYLOAD_TOO_LARGE, err
+
     try:
         serialized = json.dumps(payload, allow_nan=False)
-    except (TypeError, ValueError, OverflowError) as exc:
-        return False, PayloadFailureCode.INVALID_JSON_STRUCTURE, f"Invalid JSON data: {str(exc)}"
+    except (TypeError, ValueError, OverflowError):
+        return False, PayloadFailureCode.INVALID_JSON_STRUCTURE, "Invalid JSON data"
 
     byte_len = len(serialized.encode("utf-8"))
-    if byte_len > max_bytes:
+    if byte_len > limits["max_bytes"]:
         return (
             False,
             PayloadFailureCode.PAYLOAD_TOO_LARGE,
-            f"JSON payload size ({byte_len} bytes) exceeds maximum limit of {max_bytes} bytes (10 MB)"
-        )
-
-    depth = calculate_json_depth(payload)
-    if depth > max_depth:
-        return (
-            False,
-            PayloadFailureCode.JSON_NESTING_TOO_DEEP,
-            f"JSON payload depth ({depth}) exceeds maximum allowable nesting depth of {max_depth}"
+            f"JSON payload size ({byte_len} bytes) exceeds maximum limit of {limits['max_bytes']} bytes"
         )
 
     return True, None, None

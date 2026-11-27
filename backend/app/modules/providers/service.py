@@ -6,12 +6,17 @@ class ProviderService:
             "channel": "email",
             "status": "supported"
         },
-        "amazon_ses": {
+        "ses": {
             "name": "Amazon SES",
             "channel": "email",
             "status": "supported"
         },
-        "meta_cloud_api": {
+        "smtp": {
+            "name": "SMTP",
+            "channel": "email",
+            "status": "supported"
+        },
+        "meta": {
             "name": "Meta WhatsApp Cloud API",
             "channel": "whatsapp",
             "status": "supported"
@@ -21,15 +26,16 @@ class ProviderService:
             "channel": "sms",
             "status": "supported"
         },
-        "msg91": {
-            "name": "MSG91",
-            "channel": "sms",
+        "teams": {
+            "name": "Microsoft Teams (Graph API)",
+            "channel": "microsoft_teams",
             "status": "supported"
         },
-        "telegram_bot_api": {
-            "name": "Telegram Bot API",
+        "telegram": {
+            "name": "Telegram (Mock Only)",
             "channel": "telegram",
-            "status": "supported"
+            "status": "mock_only",
+            "note": "Mock adapter only; live Telegram Bot API adapter is not implemented."
         }
     }
 

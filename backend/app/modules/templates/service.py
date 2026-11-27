@@ -697,6 +697,7 @@ class TemplateService:
             "name_lower": new_name.strip().lower(),
             "description": template.get("description", ""),
             "category": template.get("category", "general"),
+            "channel": template.get("channel", "email"),
             "subject": template.get("subject", ""),
             "html_body": template.get("html_body", ""),
             "css": template.get("css", ""),

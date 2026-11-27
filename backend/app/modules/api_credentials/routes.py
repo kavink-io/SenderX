@@ -6,7 +6,7 @@ Routes for organization administrators to register and manage externally supplie
 from flask import Blueprint, jsonify, request, g
 
 from app.modules.api_credentials.service import ApiCredentialService, DuplicateApiKeyError
-from app.modules.auth.decorators import require_permissions
+from app.modules.auth.decorators import require_permissions, resolve_authorized_application_scope
 
 
 api_credentials_bp = Blueprint("api_credentials", __name__)
@@ -58,11 +58,15 @@ def list_credentials():
     """List API credentials for the authenticated organization."""
     organization_id = g.current_organization["organization_id"]
     app_id = request.args.get("application_id")
+    user_app_scopes = resolve_authorized_application_scope()
 
     items = ApiCredentialService.list_credentials(
         organization_id=organization_id,
         application_id=app_id
     )
+    if user_app_scopes is not None:
+        allowed = set(user_app_scopes)
+        items = [c for c in items if c.get("application_id") in allowed]
 
     return jsonify({
         "success": True,
@@ -76,12 +80,13 @@ def list_credentials():
 def get_credential(credential_id):
     """Retrieve metadata for a specific API credential."""
     organization_id = g.current_organization["organization_id"]
+    user_app_scopes = resolve_authorized_application_scope()
 
     cred = ApiCredentialService.get_credential(
         credential_id=credential_id,
         organization_id=organization_id
     )
-    if not cred:
+    if not cred or (user_app_scopes is not None and cred.get("application_id") not in user_app_scopes):
         return jsonify({"success": False, "message": "API credential not found"}), 404
 
     return jsonify({"success": True, "data": cred}), 200
@@ -97,6 +102,14 @@ def update_credential(credential_id):
 
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user["user_id"]
+    user_app_scopes = resolve_authorized_application_scope()
+    if user_app_scopes is not None:
+        existing = ApiCredentialService.get_credential(credential_id=credential_id, organization_id=organization_id)
+        if not existing or existing.get("application_id") not in user_app_scopes:
+            return jsonify({"success": False, "message": "API credential not found"}), 404
+        if "application_id" in data and str(data["application_id"]).strip() not in user_app_scopes:
+            return jsonify({"success": False, "message": "Forbidden: cannot assign credential to another application"}), 403
+
     try:
         result = ApiCredentialService.update_credential(
             credential_id=credential_id,
@@ -118,6 +131,11 @@ def delete_credential(credential_id):
     """Delete one API key record without affecting its connected application."""
     organization_id = g.current_organization["organization_id"]
     user_id = g.current_user["user_id"]
+    user_app_scopes = resolve_authorized_application_scope()
+    if user_app_scopes is not None:
+        existing = ApiCredentialService.get_credential(credential_id=credential_id, organization_id=organization_id)
+        if not existing or existing.get("application_id") not in user_app_scopes:
+            return jsonify({"success": False, "message": "API credential not found"}), 404
 
     success = ApiCredentialService.delete_credential(
         credential_id=credential_id,
