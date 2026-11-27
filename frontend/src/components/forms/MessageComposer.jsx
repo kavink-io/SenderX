@@ -5,7 +5,7 @@ import { useToast } from '../../context/ToastContext';
 import { useAppScope } from '../../context/ScopeContext';
 import { GlassCard, GlassTabs, GlassButton, GlassBadge, GlassSelect } from '../glass';
 
-export default function MessageComposer({ onMessageSent }) {
+export default function MessageComposer({ onMessageSent, inPanel = false }) {
   const [channel, setChannel] = useState('email');
   const [recipient, setRecipient] = useState('');
   const [subject, setSubject] = useState('');
@@ -81,11 +81,13 @@ export default function MessageComposer({ onMessageSent }) {
   };
 
   return (
-    <GlassCard style={{ marginBottom: '1.35rem' }}>
+    <GlassCard style={{ marginBottom: inPanel ? 0 : '1.35rem' }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '1.1rem' }}>
-        <h3 style={{ fontSize: '1.05rem', margin: 0, color: 'var(--text-primary)' }}>
-          Direct Message Composer
-        </h3>
+        {!inPanel && (
+          <h3 style={{ fontSize: '1.05rem', margin: 0, color: 'var(--text-primary)' }}>
+            Direct Message Composer
+          </h3>
+        )}
         <GlassTabs
           activeKey={channel}
           onChange={setChannel}

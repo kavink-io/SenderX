@@ -1,4 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
+import OffCanvasPanel from './OffCanvasPanel';
+import { lockBodyScroll, unlockBodyScroll } from './overlayScrollLock';
 
 export default function Modal({
   isOpen,
@@ -7,25 +9,71 @@ export default function Modal({
   children,
   footer,
   maxWidth = '600px',
-  id = ''
+  id = '',
+  variant = 'panel',
+  size,
+  description,
 }) {
+  if (variant !== 'dialog') {
+    const widthValue = String(maxWidth);
+    const numericWidth = Number.parseInt(widthValue, 10);
+    const panelSize = size || (
+      widthValue.includes('1200') || numericWidth >= 960 ? 'xl'
+        : numericWidth >= 650 ? 'large'
+          : numericWidth >= 500 ? 'medium'
+            : 'small'
+    );
+
+    return (
+      <OffCanvasPanel
+        isOpen={isOpen}
+        onClose={onClose}
+        title={title}
+        description={description}
+        size={panelSize}
+        id={id}
+      >
+        {children}
+        {footer && <div className="modal-footer">{footer}</div>}
+      </OffCanvasPanel>
+    );
+  }
+
+  return (
+    <CompactModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={title}
+      children={children}
+      footer={footer}
+      maxWidth={maxWidth}
+      id={id}
+    />
+  );
+}
+
+function CompactModal({ isOpen, onClose, title, children, footer, maxWidth, id }) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!isOpen) return;
 
+    const scrollToken = {};
+    lockBodyScroll(scrollToken);
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
-    document.body.style.overflow = 'hidden';
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = '';
+      unlockBodyScroll(scrollToken);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

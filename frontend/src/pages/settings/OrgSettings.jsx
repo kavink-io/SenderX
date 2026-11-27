@@ -1,15 +1,20 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import ApiClient from '../../services/api';
 import ChangeRequestsSection from '../../components/settings/ChangeRequestsSection';
 import ProviderConfigSection from '../../components/settings/ProviderConfigSection';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { GlassCard, GlassTabs, GlassBadge } from '../../components/glass';
+import AppearanceSettings from '../../components/settings/AppearanceSettings';
 
 export default function OrgSettings() {
+  const [searchParams] = useSearchParams();
   const [org, setOrg] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('IDENTITY'); // 'IDENTITY', 'CHANGES', 'PROVIDERS'
+  const [activeTab, setActiveTab] = useState(() => (
+    searchParams.get('tab') === 'PROVIDERS' ? 'PROVIDERS' : 'IDENTITY'
+  ));
 
   const { isOrgAdmin } = useAuth();
   const { showToast } = useToast();
@@ -40,6 +45,7 @@ export default function OrgSettings() {
           onChange={setActiveTab}
           tabs={[
             { key: 'IDENTITY', label: 'Organization Identity' },
+            { key: 'APPEARANCE', label: 'Appearance & Layout' },
             { key: 'CHANGES', label: 'Rebranding Requests' },
             { key: 'PROVIDERS', label: 'Provider Configurations' },
           ]}
@@ -98,6 +104,7 @@ export default function OrgSettings() {
 
       {activeTab === 'CHANGES' && <ChangeRequestsSection />}
       {activeTab === 'PROVIDERS' && <ProviderConfigSection />}
+      {activeTab === 'APPEARANCE' && <AppearanceSettings />}
     </div>
   );
 }

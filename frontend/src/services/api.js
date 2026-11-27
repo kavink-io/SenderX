@@ -592,6 +592,11 @@ export const ApiClient = {
   },
 
   // Provider Config
+  async getOrganizationProviderConfigs(provider = null) {
+    const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+    return await this.request(`/provider-config/organization${query}`);
+  },
+
   async saveProviderConfig(provider, credentials) {
     return await this.request("/provider-config/organization", {
       method: "POST",
@@ -612,8 +617,13 @@ export const ApiClient = {
     return await this.request("/analytics/platform");
   },
 
-  async getOrganizationAnalytics() {
-    return await this.request("/analytics/organization");
+  async getOrganizationAnalytics(filters = {}) {
+    const params = new URLSearchParams();
+    if (filters.start_date) params.set("start_date", filters.start_date);
+    if (filters.end_date) params.set("end_date", filters.end_date);
+    if (filters.include_details) params.set("include_details", "true");
+    const query = params.toString();
+    return await this.request(`/analytics/organization${query ? `?${query}` : ""}`);
   },
 
   // Health

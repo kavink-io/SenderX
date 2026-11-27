@@ -1,24 +1,44 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useAppScope } from '../../context/ScopeContext';
+import { useTheme } from '../../context/ThemeContext';
 import ThemeToggle from '../common/ThemeToggle';
 import ApiClient from '../../services/api';
-import { getPageMeta, PLATFORM_NAVIGATION, ORG_NAVIGATION } from '../../utils/navigation';
-import { GlassNavbar, GlassSearch, GlassDropdown, GlassSelect } from '../glass';
+import { getNavigationLabel, PLATFORM_NAVIGATION, ORG_NAVIGATION, getPageMeta } from '../../utils/navigation';
+import { GlassNavbar, GlassDropdown, GlassSelect } from '../glass';
+
+function SearchIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-4-4" />
+    </svg>
+  );
+}
+
+function ChevronIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
 
 export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenProfile }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { account, isPlatformAdmin, isOrgAdmin, allowedTabs, hasPermission, dashboardContext, logout } = useAuth();
+  const searchRef = useRef(null);
+  const { account, isPlatformAdmin, isOrgAdmin, dashboardContext, logout, hasPermission } = useAuth();
   const { activeAppId, setAppScope, assignedApps, setAssignedApps } = useAppScope();
-
-  const [showNotifs, setShowNotifs] = useState(false);
-  const [hasUnreadNotifs, setHasUnreadNotifs] = useState(true);
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [globalQuery, setGlobalQuery] = useState('');
-  const [showSearchMenu, setShowSearchMenu] = useState(false);
-  const searchInputRef = useRef(null);
+  const { preferences, updatePreferences } = useTheme();
+  const [query, setQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isNotifsOpen, setIsNotifsOpen] = useState(false);
+  const [notificationItems, setNotificationItems] = useState([]);
+  const [readNotificationIds, setReadNotificationIds] = useState([]);
+  const [notificationFilter, setNotificationFilter] = useState('all');
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
 
   useEffect(() => {
     async function fetchApps() {
@@ -30,276 +50,326 @@ export default function TopNav({ isSidebarOpen = true, onToggleSidebar, onOpenPr
         } else if (Array.isArray(dashboardContext?.assigned_applications)) {
           setAssignedApps(dashboardContext.assigned_applications);
         }
-      } catch (e) {
-        console.warn('Could not load applications for scope selector:', e);
+      } catch (error) {
+        console.warn('Could not load applications for scope selector:', error);
       }
     }
     fetchApps();
   }, [isPlatformAdmin, dashboardContext, setAssignedApps]);
 
   useEffect(() => {
-    const handleShortcut = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-        setShowSearchMenu(true);
+    let active = true;
+    async function fetchRecentMessages() {
+      if (isPlatformAdmin || !hasPermission('organization:messages:read')) {
+        setNotificationItems([]);
+        return;
+      }
+      try {
+        const response = await ApiClient.listMessages(1, 10, { application_id: activeAppId || undefined });
+        if (!active) return;
+        if (response?.success) {
+          const data = response.data;
+          const items = Array.isArray(data) ? data : (data?.items || response.items || []);
+          setNotificationItems(items);
+        } else {
+          setNotificationItems([]);
+          console.warn('Could not load recent message notifications:', response?.message || 'Request was unsuccessful');
+        }
+      } catch (error) {
+        if (active) {
+          setNotificationItems([]);
+          console.warn('Could not load recent message notifications:', error);
+        }
+      }
+    }
+    fetchRecentMessages();
+    return () => { active = false; };
+  }, [activeAppId, hasPermission, isPlatformAdmin]);
+
+  useEffect(() => {
+    const handleShortcut = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchRef.current?.focus();
+        setIsSearchOpen(true);
       }
     };
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
   }, []);
 
-  const searchableItems = useMemo(() => {
-    const base = isPlatformAdmin
-      ? PLATFORM_NAVIGATION
-      : ORG_NAVIGATION.filter((item) => {
-          if (!isOrgAdmin && allowedTabs.size > 0 && !allowedTabs.has(item.tabId)) return false;
-          if (item.requiredPermission && !hasPermission(item.requiredPermission)) return false;
-          return true;
-        });
+  const pageTitle = getPageMeta(location.pathname).title;
+  const orgName = isPlatformAdmin ? 'Platform' : (dashboardContext?.organization?.name || 'Organization');
+  const displayName = account?.name || account?.email || 'User';
+  const roleLabel = isPlatformAdmin
+    ? 'Platform Admin'
+    : isOrgAdmin
+      ? 'Organization Admin'
+      : (account?.roles?.[0]?.name || account?.roles?.[0]?.role_id || 'Employee');
+  const initials = displayName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 
-    const q = globalQuery.trim().toLowerCase();
-    if (!q) return base;
-    return base.filter(
-      (item) => item.name.toLowerCase().includes(q) || item.path.toLowerCase().includes(q)
-    );
-  }, [isPlatformAdmin, isOrgAdmin, allowedTabs, hasPermission, globalQuery]);
+  const searchItems = useMemo(() => {
+    const source = isPlatformAdmin ? PLATFORM_NAVIGATION : ORG_NAVIGATION;
+    return source
+      .filter((item) => isPlatformAdmin || !item.requiredPermission || hasPermission(item.requiredPermission))
+      .map((item) => ({
+        ...item,
+        name: getNavigationLabel(item),
+        group: item.name.includes('Message') || item.name.includes('Template') || item.name === 'Overview'
+          ? 'Workspace'
+          : item.name.includes('Analytic')
+            ? 'Insights'
+            : 'Management',
+      }))
+      .concat([{ id: 'appearance-settings', name: 'Appearance & Layout', path: '/appearance', group: 'Preferences' }]);
+  }, [hasPermission, isPlatformAdmin]);
+  const matchingItems = searchItems.filter((item) => item.name.toLowerCase().includes(query.trim().toLowerCase()));
+  const groupedItems = matchingItems.reduce((groups, item) => {
+    groups[item.group] = [...(groups[item.group] || []), item];
+    return groups;
+  }, {});
+  const visibleNotifications = notificationFilter === 'unread'
+    ? notificationItems.filter((item) => !readNotificationIds.includes(item.message_id || item._id))
+    : notificationItems;
+  const notificationGroups = visibleNotifications.reduce((groups, item) => {
+    const rawDate = item.created_at || item.updated_at;
+    const date = rawDate ? new Date(rawDate) : null;
+    const label = !date || Number.isNaN(date.getTime())
+      ? 'Recent'
+      : date.toDateString() === new Date().toDateString() ? 'Today' : 'Earlier';
+    groups[label] = [...(groups[label] || []), item];
+    return groups;
+  }, {});
 
-  const { title: pageTitle, sub: pageSubtitle } = getPageMeta(location.pathname);
-
-  const handleNavigateSearch = (path) => {
-    navigate(path);
-    setGlobalQuery('');
-    setShowSearchMenu(false);
-  };
+  const { title: breadcrumbTitle } = getPageMeta(location.pathname);
+  const toggleDirection = () => updatePreferences({ direction: preferences.direction === 'rtl' ? 'ltr' : 'rtl' });
 
   return (
-    <GlassNavbar>
-      <div className="top-nav-left">
-        <div className="page-title-row">
-          {!isSidebarOpen && (
-            <button
-              id="btn-sidebar-reopen"
-              className="icon-btn sidebar-toggle-btn"
-              onClick={onToggleSidebar}
-              title="Open navigation sidebar"
-              aria-label="Open navigation sidebar"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="3" y1="12" x2="21" y2="12"></line>
-                <line x1="3" y1="6" x2="21" y2="6"></line>
-                <line x1="3" y1="18" x2="21" y2="18"></line>
-              </svg>
-            </button>
-          )}
-          <h2 id="page-title">{pageTitle}</h2>
-        </div>
-        <p className="subtitle" id="page-subtitle" style={{ margin: 0 }}>
-          {pageSubtitle}
-        </p>
+    <GlassNavbar className="saas-header">
+      <div className="saas-header-left">
+        {!isSidebarOpen && (
+          <button
+            id="btn-sidebar-reopen"
+            className="icon-btn sidebar-toggle-btn saas-sidebar-reopen"
+            onClick={onToggleSidebar}
+            title="Open navigation sidebar"
+            aria-label="Open navigation sidebar"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9 4v16" />
+            </svg>
+          </button>
+        )}
+        <nav className="saas-breadcrumb" aria-label="Breadcrumb">
+          <span>SenderX</span>
+          <ChevronIcon />
+          <span>{orgName}</span>
+          <ChevronIcon />
+          <span className="current">{breadcrumbTitle}</span>
+        </nav>
       </div>
 
-      <div className="top-nav-right">
-        {/* Global Quick-Jump Search */}
-        <div className="lg-global-search-wrap">
-          <GlassDropdown
-            isOpen={showSearchMenu && searchableItems.length > 0}
-            onClose={() => setShowSearchMenu(false)}
-            align="left"
-            menuStyle={{ width: '260px' }}
-            trigger={
-              <GlassSearch
-                inputRef={searchInputRef}
-                id="global-nav-search"
-                value={globalQuery}
-                onFocus={() => setShowSearchMenu(true)}
-                onChange={(e) => {
-                  setGlobalQuery(e.target.value);
-                  setShowSearchMenu(true);
-                }}
-                onClear={() => setGlobalQuery('')}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && searchableItems.length > 0) {
-                    e.preventDefault();
-                    handleNavigateSearch(searchableItems[0].path);
-                  }
-                }}
-                placeholder="Jump to page..."
-                shortcutHint="Ctrl K"
-                aria-label="Jump to page"
+      <nav className="saas-horizontal-nav" aria-label="Primary navigation">
+        {searchItems.filter((item) => item.id !== 'appearance-settings').map((item) => (
+          <NavLink key={item.id} to={item.path} title={item.name}>
+            {item.name}
+          </NavLink>
+        ))}
+      </nav>
+
+      <div className="saas-header-actions">
+        <GlassDropdown
+          isOpen={isSearchOpen}
+          onClose={() => setIsSearchOpen(false)}
+          menuStyle={{ width: 360, maxWidth: 'min(360px, calc(100vw - 24px))', padding: 8 }}
+          trigger={
+            <label className="saas-search">
+              <SearchIcon />
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={(event) => { setQuery(event.target.value); setIsSearchOpen(true); }}
+                onFocus={() => setIsSearchOpen(true)}
+                placeholder="Search here"
+                aria-label="Search navigation"
               />
-            }
-          >
-            <div style={{ padding: '4px 8px 6px', fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
-              Quick Navigation
-            </div>
-            {searchableItems.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className="lg-dropdown-item"
-                onClick={() => handleNavigateSearch(item.path)}
-              >
-                <span className="nav-icon" style={{ display: 'inline-flex' }}>{item.icon}</span>
-                <span>{item.name}</span>
-              </button>
-            ))}
-          </GlassDropdown>
-        </div>
-
-        {/* Application Scope Selector */}
-        {!isPlatformAdmin && (
-          <div className="app-scope-selector-box" id="header-scope-box">
-            <label htmlFor="header-scope-select" className="scope-label" title="Filter resources by Connected Application">
-              Scope:
+              <span className="saas-search-shortcut"><kbd>Ctrl</kbd><kbd>+</kbd><kbd>K</kbd></span>
             </label>
-            <GlassSelect
-              id="header-scope-select"
-              compact
-              value={activeAppId || ''}
-              onChange={(e) => setAppScope(e.target.value || null)}
-              aria-label="Filter resources by Connected Application"
-            >
-              {isOrgAdmin && <option value="">Global (All Applications)</option>}
-              {assignedApps.map((app) => (
-                <option key={app.application_id || app._id} value={app.application_id || app._id}>
-                  {app.name || app.application_id}
-                </option>
-              ))}
-            </GlassSelect>
-          </div>
-        )}
-
-        {/* Environment Indicator */}
-        <div
-          id="header-env-indicator"
-          className="env-indicator env-live"
-          title="Current deployment environment"
+          }
         >
-          <span className="env-dot"></span>
-          <span>{isPlatformAdmin ? 'Platform Console' : 'Live'}</span>
-        </div>
+          {!isPlatformAdmin && (
+            <div className="saas-search-scope-mobile">
+              <span>Application scope</span>
+              <GlassSelect
+                id="mobile-header-scope-select"
+                compact
+                value={activeAppId || ''}
+                onChange={(event) => setAppScope(event.target.value || null)}
+                aria-label="Filter resources by connected application"
+              >
+                {isOrgAdmin && <option value="">All Applications</option>}
+                {assignedApps.map((app) => (
+                  <option key={app.application_id || app._id} value={app.application_id || app._id}>
+                    {app.name || app.application_id}
+                  </option>
+                ))}
+              </GlassSelect>
+            </div>
+          )}
+          <div className="saas-search-results">
+            {Object.entries(groupedItems).length ? Object.entries(groupedItems).map(([group, items]) => (
+              <section key={group} className="saas-search-group">
+                <div className="saas-search-group-title">{group}</div>
+                {items.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className="saas-search-result"
+                    onClick={() => {
+                      setIsSearchOpen(false);
+                      setQuery('');
+                      navigate(item.path);
+                    }}
+                  >
+                    {item.icon ? <span className="nav-icon">{item.icon}</span> : <span className="search-result-dot" />}
+                    <span>{item.name}</span>
+                  </button>
+                ))}
+              </section>
+            )) : <div className="saas-search-empty">No matching pages</div>}
+          </div>
+        </GlassDropdown>
 
-        {/* Theme Toggle */}
         <ThemeToggle />
 
-        {/* Notification Bell Dropdown */}
         <GlassDropdown
-          isOpen={showNotifs}
-          onClose={() => setShowNotifs(false)}
-          menuStyle={{ width: '300px', padding: '12px' }}
+          isOpen={isNotifsOpen}
+          onClose={() => setIsNotifsOpen(false)}
+          menuStyle={{ width: 320, maxWidth: 'min(320px, calc(100vw - 24px))', padding: 0 }}
           trigger={
             <button
               id="btn-notifications"
               className="icon-btn"
-              onClick={() => setShowNotifs((prev) => !prev)}
+              onClick={() => setIsNotifsOpen((open) => !open)}
               title="Notifications"
               aria-label="View notifications"
+              aria-expanded={isNotifsOpen}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path>
-                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                <path d="M10 21h4" />
               </svg>
-              {hasUnreadNotifs && <span className="notification-badge-dot" />}
             </button>
           }
         >
-          <div className="notification-header">
-            <span className="notif-title">Notifications</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {hasUnreadNotifs && (
-                <button
-                  type="button"
-                  onClick={() => setHasUnreadNotifs(false)}
-                  style={{ background: 'none', border: 'none', color: 'var(--accent-blue)', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer' }}
-                >
-                  Mark read
-                </button>
-              )}
-              <span className="badge badge-success">Live</span>
-            </div>
+          <div className="saas-popover-heading">
+            <strong>Notifications</strong>
+            <button
+              type="button"
+              onClick={() => setReadNotificationIds(notificationItems.map((item) => item.message_id || item._id))}
+              disabled={!notificationItems.length}
+            >
+              Mark all as read
+            </button>
           </div>
-          <div className="notification-list">
-            <div className="notification-item">
-              <div className="notif-text">System is running normally. All services operational.</div>
-              <div className="notif-time">Just now</div>
+          <div className="saas-notification-filters">
+            {['all', 'unread'].map((filter) => (
+              <button type="button" key={filter} className={notificationFilter === filter ? 'active' : ''} onClick={() => setNotificationFilter(filter)}>
+                {filter === 'all' ? 'All' : 'Unread'}
+              </button>
+            ))}
+          </div>
+          {Object.keys(notificationGroups).length ? (
+            <div className="saas-notification-list">
+              {Object.entries(notificationGroups).map(([group, items]) => (
+                <section key={group}>
+                  <h4>{group}</h4>
+                  {items.map((item) => {
+                    const id = item.message_id || item._id;
+                    const isRead = readNotificationIds.includes(id);
+                    return (
+                      <button type="button" className={`saas-notification-row ${isRead ? 'is-read' : ''}`} key={id} onClick={() => setReadNotificationIds((current) => current.includes(id) ? current : [...current, id])}>
+                        <span className="saas-notification-icon" aria-hidden="true">↗</span>
+                        <span>
+                          <strong>{item.status || 'Message'} · {item.channel || 'Delivery'}</strong>
+                          <small>{item.recipient || item.to || 'Message activity'}</small>
+                          {(item.updated_at || item.created_at) && (
+                            <time>{new Date(item.updated_at || item.created_at).toLocaleString()}</time>
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </section>
+              ))}
             </div>
+          ) : (
+            <div className="saas-notification-empty">
+              <span className="saas-notification-icon" aria-hidden="true">✓</span>
+              <strong>{notificationFilter === 'unread' ? 'No unread messages' : 'No recent messages'}</strong>
+              <span>Message activity will appear here when available.</span>
+            </div>
+          )}
+          <div className="saas-popover-footer">
+            <button type="button" onClick={() => { setNotificationItems([]); setReadNotificationIds([]); }} disabled={!notificationItems.length}>Clear all</button>
           </div>
         </GlassDropdown>
 
-        {/* User Profile Pill & Dropdown */}
         <GlassDropdown
-          isOpen={showProfileMenu}
-          onClose={() => setShowProfileMenu(false)}
-          menuStyle={{ minWidth: '215px' }}
+          isOpen={isProfileOpen}
+          onClose={() => setIsProfileOpen(false)}
+          menuStyle={{ width: 232, padding: 8 }}
           trigger={
-            <div
+            <button
               id="user-profile-pill"
-              className="user-profile-pill"
-              onClick={() => setShowProfileMenu((prev) => !prev)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setShowProfileMenu((prev) => !prev);
-                }
-              }}
-              title="Account menu"
-              role="button"
-              tabIndex={0}
-              aria-expanded={showProfileMenu}
+              type="button"
+              className="saas-profile-trigger"
+              onClick={() => setIsProfileOpen((open) => !open)}
+              aria-expanded={isProfileOpen}
+              aria-label="Account menu"
             >
-              <span className="user-email" id="header-user-email">
-                {account?.email || 'User'}
+              <span className="saas-avatar">{initials}</span>
+              <span className="saas-profile-name">
+                <strong>{displayName}</strong>
+                <small>{roleLabel}</small>
               </span>
-            </div>
+            </button>
           }
         >
-          <button
-            type="button"
-            className="lg-dropdown-item"
-            onClick={() => {
-              setShowProfileMenu(false);
-              onOpenProfile();
-            }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-              <circle cx="12" cy="7" r="4" />
-            </svg>
-            <span>Profile &amp; Security</span>
+          <button type="button" className="saas-profile-card" onClick={() => { setIsProfileOpen(false); onOpenProfile(); }}>
+            <span className="saas-avatar saas-avatar-large">{initials}</span>
+            <strong>{displayName}</strong>
+            <small>{roleLabel}</small>
+          </button>
+          <div className="lg-dropdown-divider" />
+          <button type="button" className="lg-dropdown-item saas-rtl-setting" onClick={toggleDirection}>
+            <span className="saas-menu-glyph" aria-hidden="true">¶</span>
+            <span>RTL</span>
+            <span className={`saas-switch ${preferences.direction === 'rtl' ? 'is-on' : ''}`} aria-hidden="true"><i /></span>
+          </button>
+          <div className="lg-dropdown-item saas-language-setting" aria-label="Language: English">
+            <span className="saas-menu-glyph" aria-hidden="true">文</span>
+            <span>Language</span>
+            <span className="saas-menu-value">Eng&nbsp; ›</span>
+          </div>
+          <button type="button" className="lg-dropdown-item" onClick={() => { setIsProfileOpen(false); navigate('/appearance'); }}>
+            <span className="saas-menu-glyph" aria-hidden="true">⚙</span>
+            <span>Settings</span>
           </button>
           <div className="lg-dropdown-divider" />
           <button
             type="button"
-            className="lg-dropdown-item is-danger"
-            onClick={() => {
-              setShowProfileMenu(false);
-              logout();
-            }}
+            className="saas-logout-button"
+            onClick={() => { setIsProfileOpen(false); logout(); }}
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            Logout
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
+              <path d="m16 17 5-5-5-5M21 12H9" />
             </svg>
-            <span>Sign Out</span>
           </button>
         </GlassDropdown>
-
-        {/* Quick Logout Button in Header */}
-        <button
-          id="btn-header-logout"
-          className="icon-btn logout-header-btn"
-          onClick={logout}
-          title="Sign Out"
-          aria-label="Sign out"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-            <polyline points="16 17 21 12 16 7"/>
-            <line x1="21" y1="12" x2="9" y2="12"/>
-          </svg>
-        </button>
       </div>
     </GlassNavbar>
   );

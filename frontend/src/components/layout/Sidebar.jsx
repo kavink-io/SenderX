@@ -1,11 +1,11 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { PLATFORM_NAVIGATION, ORG_NAVIGATION } from '../../utils/navigation';
+import { getNavigationLabel, PLATFORM_NAVIGATION, ORG_NAVIGATION } from '../../utils/navigation';
 import { GlassSidebar } from '../glass';
 
-export default function Sidebar({ isOpen, onClose, onToggle, onOpenProfile }) {
-  const { account, isPlatformAdmin, isOrgAdmin, allowedTabs, hasPermission, dashboardContext } = useAuth();
+export default function Sidebar({ isOpen, onClose, onToggle }) {
+  const { isPlatformAdmin, isOrgAdmin, allowedTabs, hasPermission } = useAuth();
 
   const handleNavClick = () => {
     if (window.innerWidth <= 1024) {
@@ -25,21 +25,27 @@ export default function Sidebar({ isOpen, onClose, onToggle, onOpenProfile }) {
         return true;
       });
 
-  const displayName = account?.name || account?.email || 'User';
-  let roleLabel = 'EMPLOYEE';
-  if (isPlatformAdmin) {
-    roleLabel = 'PLATFORM_ADMIN';
-  } else if (isOrgAdmin) {
-    roleLabel = 'ORG_ADMIN';
-  } else if (account?.roles && account.roles.length > 0) {
-    roleLabel = account.roles[0].name || account.roles[0].role_id;
-  }
+  const sections = isPlatformAdmin
+    ? [
+        { title: 'Manage', ids: ['platform-organizations'] },
+        { title: 'Insights', ids: ['platform-analytics'] },
+        { title: 'Platform', ids: ['platform-monitoring', 'platform-change-requests'] },
+      ]
+    : [
+        { title: 'Manage', ids: ['menu-overview', 'menu-messages', 'menu-templates'] },
+        { title: 'Insights', ids: ['menu-analytics'] },
+        { title: 'Manage Accounts', ids: ['menu-applications', 'menu-credentials', 'menu-users'] },
+        { title: 'Tools', ids: ['menu-json-requests', 'menu-dlq', 'menu-settings'] },
+      ];
 
   return (
     <GlassSidebar className={isOpen ? 'sidebar-open mobile-open' : 'sidebar-closed'}>
       <div className="sidebar-header">
         <div className="sidebar-brand">
-          <div className="brand-logo sm">SX</div>
+          <svg className="saas-brand-mark" width="27" height="27" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M21.2 3.2 3.6 10.1c-1.1.4-1.1 2 0 2.4l6.3 2.1 2.1 6.3c.4 1.1 2 1.1 2.4 0l6.9-17.6c.4-1-.9-2.3-2.1-2.1Z" fill="currentColor" />
+            <path d="m9.9 14.6 6.5-6.5" stroke="white" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
           <span className="brand-title">SenderX</span>
         </div>
         <button
@@ -49,62 +55,38 @@ export default function Sidebar({ isOpen, onClose, onToggle, onOpenProfile }) {
           title="Toggle navigation sidebar"
           aria-label="Toggle navigation sidebar"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="3" y1="12" x2="21" y2="12"></line>
-            <line x1="3" y1="6" x2="21" y2="6"></line>
-            <line x1="3" y1="18" x2="21" y2="18"></line>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M9 4v16" />
           </svg>
         </button>
       </div>
 
       <nav className="sidebar-nav">
-        <div className="nav-section">
-          <div id="nav-org-items">
-            {navItems.map((item) => (
+        {sections.map((section) => {
+          const items = section.ids
+            .map((id) => navItems.find((item) => item.id === id))
+            .filter(Boolean);
+          if (!items.length) return null;
+          return (
+            <div className="nav-section" key={section.title}>
+              <div className="nav-category">{section.title}</div>
+              {items.map((item) => (
               <NavLink
                 key={item.id}
                 to={item.path}
                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                 onClick={handleNavClick}
+                title={getNavigationLabel(item)}
               >
                 <span className="nav-icon">{item.icon}</span>
-                <span>{item.name}</span>
+                <span>{getNavigationLabel(item)}</span>
               </NavLink>
-            ))}
-          </div>
-        </div>
+              ))}
+            </div>
+          );
+        })}
       </nav>
-
-      {/* Tenant info & user footer */}
-      <div className="sidebar-footer">
-        {!isPlatformAdmin && dashboardContext?.organization && (
-          <div className="tenant-badge-container" style={{ padding: '0 0.5rem 0.75rem' }}>
-            <span className="tenant-badge" title={dashboardContext.organization.name}>
-              {dashboardContext.organization.name || 'Organization'}
-            </span>
-          </div>
-        )}
-        <div
-          className="user-profile-summary"
-          onClick={onOpenProfile}
-          style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-          title="View profile"
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-            <div className="avatar-circle">
-              {(displayName.charAt(0) || 'U').toUpperCase()}
-            </div>
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              <div id="current-account-name" style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                {displayName}
-              </div>
-              <div id="current-account-type" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                {roleLabel}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
     </GlassSidebar>
   );
 }

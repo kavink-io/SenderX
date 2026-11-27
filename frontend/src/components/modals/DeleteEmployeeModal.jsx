@@ -39,6 +39,7 @@ export default function DeleteEmployeeModal({ isOpen, onClose, employee, onDelet
       title="Delete Employee"
       maxWidth="540px"
       id="modal-delete-employee"
+      variant="dialog"
     >
       <div style={{ color: 'var(--status-error)', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '1rem' }}>
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

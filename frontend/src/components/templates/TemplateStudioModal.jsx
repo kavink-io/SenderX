@@ -308,6 +308,7 @@ export default function TemplateStudioModal({ isOpen, onClose, template, onSaved
           : 'Email Template Studio'
       }
       maxWidth="min(1200px, 94vw)"
+      size="xl"
       id="modal-template-editor"
     >
       {saveError && (

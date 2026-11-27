@@ -4,6 +4,7 @@ import DataGrid from '../../components/tables/DataGrid';
 import MessageComposer from '../../components/forms/MessageComposer';
 import MessageDetailsModal from '../../components/modals/MessageDetailsModal';
 import ConfirmRetryModal from '../../components/modals/ConfirmRetryModal';
+import OffCanvasPanel from '../../components/common/OffCanvasPanel';
 import { useToast } from '../../context/ToastContext';
 import { useAppScope } from '../../context/ScopeContext';
 import { GlassSearch, GlassSelect } from '../../components/glass';
@@ -20,6 +21,7 @@ export default function MessagesPage() {
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [retryTargetMessage, setRetryTargetMessage] = useState(null);
+  const [isComposerOpen, setIsComposerOpen] = useState(false);
 
   const { showToast } = useToast();
   const { activeAppId } = useAppScope();
@@ -150,8 +152,20 @@ export default function MessagesPage() {
 
   return (
     <div className="tab-pane active" id="tab-org-messages">
-      {/* Message Composer */}
-      <MessageComposer onMessageSent={fetchMessages} />
+      <div className="saas-message-compose-trigger">
+        <button type="button" className="btn btn-primary" onClick={() => setIsComposerOpen(true)}>
+          Compose Message
+        </button>
+      </div>
+      <OffCanvasPanel
+        isOpen={isComposerOpen}
+        onClose={() => setIsComposerOpen(false)}
+        title="Compose Message"
+        size="large"
+        id="panel-message-composer"
+      >
+        <MessageComposer onMessageSent={fetchMessages} inPanel />
+      </OffCanvasPanel>
 
       {/* Outbox filtering bar */}
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>

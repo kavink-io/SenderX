@@ -60,6 +60,7 @@ export default function DeleteOrgModal({ isOpen, onClose, org, onDeleted }) {
       title="Delete Organization"
       maxWidth="560px"
       id="modal-delete-org"
+      variant="dialog"
     >
       <form onSubmit={handleDelete}>
         <div style={{ color: 'var(--status-error)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>

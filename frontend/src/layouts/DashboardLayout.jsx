@@ -5,17 +5,18 @@ import TopNav from '../components/layout/TopNav';
 import MobileBackdrop from '../components/layout/MobileBackdrop';
 import UserProfileModal from '../components/modals/UserProfileModal';
 import { useAuth } from '../context/AuthContext';
-import { getPageMeta } from '../utils/navigation';
+import { useTheme } from '../context/ThemeContext';
 
 export default function DashboardLayout() {
   const location = useLocation();
-  const { isPlatformAdmin, dashboardContext } = useAuth();
-  const { title: pageTitle } = getPageMeta(location.pathname);
-  const orgName = isPlatformAdmin ? 'Platform' : (dashboardContext?.organization?.name || 'Organization');
+  const { isPlatformAdmin } = useAuth();
+  const { preferences, updatePreferences } = useTheme();
   const [isDesktop, setIsDesktop] = useState(() => {
     return typeof window !== 'undefined' ? window.innerWidth > 1024 : true;
   });
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() =>
+    preferences.sidebarMode !== 'collapsed' && preferences.navigationLayout !== 'horizontal'
+  );
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
@@ -31,9 +32,24 @@ export default function DashboardLayout() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    if (preferences.navigationLayout === 'horizontal') {
+      setIsSidebarOpen(false);
+    } else if (!preferences.sidebarCollapsible) {
+      setIsSidebarOpen(true);
+    } else if (preferences.sidebarMode === 'expanded') {
+      setIsSidebarOpen(true);
+    } else if (preferences.sidebarMode === 'collapsed') {
+      setIsSidebarOpen(false);
+    }
+  }, [preferences.navigationLayout, preferences.sidebarMode]);
+
   const handleToggleSidebar = () => {
     if (isDesktop) {
-      setIsSidebarOpen((prev) => !prev);
+      if (!preferences.sidebarCollapsible) return;
+      const nextOpen = !isSidebarOpen;
+      setIsSidebarOpen(nextOpen);
+      updatePreferences({ sidebarMode: nextOpen ? 'expanded' : 'collapsed' });
     } else {
       setIsMobileDrawerOpen((prev) => !prev);
     }
@@ -49,7 +65,6 @@ export default function DashboardLayout() {
         isOpen={isDesktop ? isSidebarOpen : isMobileDrawerOpen}
         onClose={handleCloseMobileDrawer}
         onToggle={handleToggleSidebar}
-        onOpenProfile={() => setIsProfileModalOpen(true)}
       />
       {!isDesktop && (
         <MobileBackdrop
@@ -64,13 +79,6 @@ export default function DashboardLayout() {
           onOpenProfile={() => setIsProfileModalOpen(true)}
         />
         <main className="page-container">
-          <nav className="breadcrumb-nav page-body-breadcrumb" id="breadcrumb-container" aria-label="Breadcrumb">
-            <span>SenderX</span>
-            <span className="separator">/</span>
-            <span id="breadcrumb-org-name">{orgName}</span>
-            <span className="separator">/</span>
-            <span className="current" id="breadcrumb-current-tab">{pageTitle}</span>
-          </nav>
           <div key={location.pathname} className="lg-page-transition">
             <Outlet />
           </div>

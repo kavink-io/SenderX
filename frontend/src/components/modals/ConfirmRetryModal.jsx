@@ -35,6 +35,7 @@ export default function ConfirmRetryModal({ isOpen, onClose, message, onRetried 
       title="Confirm Message Retry"
       maxWidth="480px"
       id="modal-confirm-retry"
+      variant="dialog"
     >
       <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
         Are you sure you want to re-queue message <code style={{ color: 'var(--accent-cyan)' }}>{msgId}</code> to recipient <strong>{message.recipient}</strong>?

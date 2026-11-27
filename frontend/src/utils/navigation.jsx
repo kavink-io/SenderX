@@ -209,6 +209,14 @@ export const ORG_NAVIGATION = [
   }
 ];
 
+export function getNavigationLabel(item) {
+  if (item.id === 'menu-overview') return 'Dashboard';
+  if (item.id === 'menu-credentials') return 'API Keys';
+  if (item.id === 'menu-users') return 'Users & Roles';
+  if (item.name === 'Email Templates') return 'Templates';
+  return item.name;
+}
+
 export const ROUTE_META = {
   '/platform/organizations': { title: 'Platform Organizations', sub: 'Platform-wide organization management' },
   '/platform/change-requests': { title: 'Organization Change Requests', sub: 'Review, approve, or reject tenant name and slug rebranding requests' },
@@ -224,6 +232,7 @@ export const ROUTE_META = {
   '/org/analytics': { title: 'Analytics', sub: 'Comprehensive volume, delivery performance, and failure trends' },
   '/org/users': { title: 'Employees & Roles', sub: 'Manage organization members, assignments, and custom role permissions' },
   '/org/settings': { title: 'Settings', sub: 'Organization profile, environment policies, and security architecture parameters' },
+  '/appearance': { title: 'Appearance & Layout', sub: 'Personalize your SenderX workspace' },
 };
 
 /** Resolve header/breadcrumb title and subtitle metadata for a route path. */

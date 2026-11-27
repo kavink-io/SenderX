@@ -25,6 +25,7 @@ import DlqPage from '../pages/dlq/DlqPage';
 import OrgAnalytics from '../pages/organization/OrgAnalytics';
 import EmployeesAndRoles from '../pages/employee/EmployeesAndRoles';
 import OrgSettings from '../pages/settings/OrgSettings';
+import AppearancePage from '../pages/settings/AppearancePage';
 
 function RootRedirect() {
   const { isAuthenticated, isPlatformAdmin, isLoading } = useAuth();
@@ -57,6 +58,17 @@ export default function AppRoutes() {
 
       {/* Root redirect */}
       <Route path="/" element={<RootRedirect />} />
+
+      <Route
+        path="/appearance"
+        element={
+          <ProtectedRoute>
+            <DashboardLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<AppearancePage />} />
+      </Route>
 
       {/* Platform Admin Routes */}
       <Route
