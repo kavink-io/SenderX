@@ -9,6 +9,7 @@ from app.modules.messages.repository import MessageRepository
 from app.modules.dead_letters.repository import DeadLetterRepository
 
 from app.adapters.adapter_registry import AdapterRegistry
+from app.adapters.errors import ProviderResolutionError
 from app.modules.dead_letters.sanitizer import sanitize_dlq_error
 
 
@@ -103,14 +104,52 @@ def process_message(self, message_id):
     try:
 
         # --------------------------------------------------
-        # 4. Send through configured provider
+        # 4. Verify tenant boundary and resolve configured provider
         # --------------------------------------------------
+
+        if not organization_id or not isinstance(organization_id, str) or not organization_id.strip():
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.PROVIDER_NOT_AUTHORIZED,
+                message="Message must belong to a valid organization for tenant dispatch",
+                status_code=403,
+            )
 
         provider = message.get("provider")
         channel = message.get("channel")
+        if not channel or not str(channel).strip():
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.CHANNEL_PROVIDER_MISMATCH,
+                message="Explicit delivery channel is required for dispatch",
+                status_code=400,
+                organization_id=organization_id,
+            )
+
+        if hasattr(current_app, "mongo_db") and current_app.mongo_db is not None:
+            org_col = None
+            try:
+                org_col = current_app.mongo_db["organizations"]
+            except Exception:
+                org_col = None
+            if org_col is not None and hasattr(org_col, "find_one"):
+                org_doc = org_col.find_one({"organization_id": organization_id})
+                if org_doc is not None and str(org_doc.get("status", "")).upper() != "ACTIVE":
+                    raise ProviderResolutionError(
+                        code=ProviderResolutionError.PROVIDER_NOT_AUTHORIZED,
+                        message="Organization is inactive and cannot dispatch messages",
+                        status_code=403,
+                        provider=provider,
+                        channel=channel,
+                        organization_id=organization_id,
+                    )
 
         if not provider and channel not in ("email", "sms", "whatsapp", "microsoft_teams", "teams"):
-            raise ValueError("Message provider is required")
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.CHANNEL_PROVIDER_MISMATCH,
+                message=f"Unsupported delivery channel '{channel}'",
+                status_code=400,
+                channel=channel,
+                organization_id=organization_id,
+            )
 
         extra_kwargs = {}
         whatsapp_integration = None
@@ -220,6 +259,7 @@ def process_message(self, message_id):
             provider=provider,
             channel=channel,
             organization_id=organization_id,
+            allow_platform_fallback=bool(message.get("use_platform_provider")),
             **extra_kwargs
         )
 
@@ -372,7 +412,9 @@ def process_message(self, message_id):
     except Exception as error:
 
         retry_count = self.request.retries
-        error_message = sanitize_dlq_error(str(error))
+        error_code = getattr(error, "code", None) or getattr(error, "error_code", None)
+        raw_message = sanitize_dlq_error(str(error))
+        error_message = f"[{error_code}] {raw_message}" if error_code and f"[{error_code}]" not in raw_message else raw_message
 
         current_app.logger.error(
             "Message processing error: %s | Retry: %s | Error: %s",
@@ -402,7 +444,7 @@ def process_message(self, message_id):
                 error_message
             )
 
-            return {
+            failure_result = {
                 "success": False,
                 "message_id": message_id,
                 "status": (
@@ -412,6 +454,9 @@ def process_message(self, message_id):
                 "retry_count": retry_count,
                 "error": error_message
             }
+            if error_code:
+                failure_result["error_code"] = error_code
+            return failure_result
 
         # --------------------------------------------------
         # 8. Check automatic retry limit

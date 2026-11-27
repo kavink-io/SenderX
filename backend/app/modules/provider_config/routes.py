@@ -1,6 +1,7 @@
 
 from flask import Blueprint, request, jsonify, g
 
+from app.adapters.errors import ProviderResolutionError
 from app.modules.provider_config.service import ProviderConfigService
 from app.modules.auth.decorators import require_roles, require_permissions
 
@@ -40,6 +41,9 @@ def save_provider_config():
             "success": True,
             "message": "Provider configuration saved securely"
         }), 201
+
+    except ProviderResolutionError as error:
+        return jsonify(error.to_dict()), error.status_code
 
     except ValueError as error:
         return jsonify({
@@ -129,10 +133,48 @@ def save_organization_provider_config():
             }
         }), 201
 
+    except ProviderResolutionError as error:
+        return jsonify(error.to_dict()), error.status_code
     except ValueError as error:
         return jsonify({"success": False, "message": str(error)}), 400
     except Exception:
         return jsonify({"success": False, "message": "Could not save provider configuration"}), 500
+
+
+@provider_config_bp.route("/organization/status", methods=["PATCH", "POST"])
+@require_permissions("organization:providers:manage")
+def set_organization_provider_status():
+    """Activate or deactivate an existing organization provider configuration."""
+    data = request.get_json(silent=True) or {}
+    provider = data.get("provider")
+    is_active = data.get("is_active")
+    if not provider or not isinstance(is_active, bool):
+        return jsonify({
+            "success": False,
+            "message": "'provider' and boolean 'is_active' are required"
+        }), 400
+
+    organization_id = g.current_organization["organization_id"]
+    try:
+        ProviderConfigService.set_configuration_active_state(
+            provider=provider,
+            is_active=is_active,
+            organization_id=organization_id,
+        )
+        return jsonify({
+            "success": True,
+            "message": f"Organization provider '{provider}' {'activated' if is_active else 'deactivated'}",
+            "data": {
+                "provider": provider.lower().strip(),
+                "organization_id": organization_id,
+                "configured": is_active,
+                "status": "ACTIVE" if is_active else "INACTIVE",
+            },
+        }), 200
+    except ProviderResolutionError as err:
+        return jsonify(err.to_dict()), err.status_code
+    except Exception:
+        return jsonify({"success": False, "message": "Could not update provider configuration status"}), 500
 
 
 @provider_config_bp.route("/organization", methods=["GET"])

@@ -13,6 +13,7 @@ from flask import current_app, has_app_context
 
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.users.audit_repository import SecurityAuditRepository
+from app.adapters.errors import ProviderResolutionError
 from app.modules.whatsapp.encryption import WhatsAppEncryption, WhatsAppEncryptionError
 from app.modules.whatsapp.meta_client import (
     MetaWhatsAppClient,
@@ -818,6 +819,7 @@ class WhatsAppIntegrationService:
         organization_id: str,
         integration_id: Optional[str] = None,
         from_phone_number_id: Optional[str] = None,
+        allow_platform_fallback: bool = False,
         app=None
     ) -> Dict[str, Any]:
         """
@@ -825,16 +827,22 @@ class WhatsAppIntegrationService:
         Security Guarantees:
         1. Always uses trusted organization_id from the message document (never external payload).
         2. If integration_id or from_phone_number_id is specified, strictly verifies ownership by organization_id.
-           Cross-organization access raises ValueError.
+           Cross-organization access raises ProviderResolutionError(PROVIDER_NOT_AUTHORIZED).
         3. If no integration is specified:
-           - If organization has > 1 active integration, raises ValueError (Requirement 15).
+           - If organization has > 1 active integration, raises AMBIGUOUS_PROVIDER_CONFIGURATION.
            - If organization has exactly 1 active integration, uses it.
-           - If 0 active integrations in whatsapp_integrations, falls back to legacy provider_configs.
-        4. Decrypts access token at point of dispatch.
-        5. Merges with centralized platform settings (Meta App Secret, Graph API Version).
+           - If 0 active integrations in whatsapp_integrations, checks strictly org-scoped legacy provider_configs.
+        4. Decrypts access token at point of dispatch using MultiFernet.
+        5. Merges centralized platform metadata (Meta App Secret, Graph API Version).
         """
-        if not organization_id or not isinstance(organization_id, str):
-            raise ValueError("organization_id is required to resolve credentials")
+        if not organization_id or not isinstance(organization_id, str) or not organization_id.strip():
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.PROVIDER_NOT_AUTHORIZED,
+                message="organization_id is required to resolve credentials",
+                status_code=403,
+                provider="whatsapp",
+                channel="whatsapp",
+            )
 
         clean_org_id = organization_id.strip()
 
@@ -857,7 +865,14 @@ class WhatsAppIntegrationService:
                     app=app
                 )
                 if deleted_in_org:
-                    raise ValueError(f"WhatsApp integration '{clean_int_id}' is disconnected or inactive")
+                    raise ProviderResolutionError(
+                        code=ProviderResolutionError.PROVIDER_INACTIVE,
+                        message=f"WhatsApp integration '{clean_int_id}' is disconnected or inactive",
+                        status_code=400,
+                        provider="whatsapp",
+                        channel="whatsapp",
+                        organization_id=clean_org_id,
+                    )
 
                 # Check if it exists in another organization to raise explicit cross-tenant error
                 other_org_doc = WhatsAppIntegrationRepository.find_by_id(
@@ -867,15 +882,32 @@ class WhatsAppIntegrationService:
                     app=app
                 )
                 if other_org_doc:
-                    raise ValueError(
-                        f"WhatsApp integration '{clean_int_id}' not found or access denied for this organization"
+                    raise ProviderResolutionError(
+                        code=ProviderResolutionError.PROVIDER_NOT_AUTHORIZED,
+                        message=f"WhatsApp integration '{clean_int_id}' not found or access denied for this organization",
+                        status_code=403,
+                        provider="whatsapp",
+                        channel="whatsapp",
+                        organization_id=clean_org_id,
                     )
-                raise ValueError(
-                    f"WhatsApp integration '{clean_int_id}' not found for this organization"
+                raise ProviderResolutionError(
+                    code=ProviderResolutionError.PROVIDER_NOT_CONFIGURED,
+                    message=f"WhatsApp integration '{clean_int_id}' not found for this organization",
+                    status_code=400,
+                    provider="whatsapp",
+                    channel="whatsapp",
+                    organization_id=clean_org_id,
                 )
 
             if target_doc.get("status") != WhatsAppIntegrationStatus.CONNECTED.value or target_doc.get("deleted_at") is not None:
-                raise ValueError(f"WhatsApp integration '{clean_int_id}' is disconnected or inactive")
+                raise ProviderResolutionError(
+                    code=ProviderResolutionError.PROVIDER_INACTIVE,
+                    message=f"WhatsApp integration '{clean_int_id}' is disconnected or inactive",
+                    status_code=400,
+                    provider="whatsapp",
+                    channel="whatsapp",
+                    organization_id=clean_org_id,
+                )
 
         # Step 2: If from_phone_number_id requested
         elif from_phone_number_id and str(from_phone_number_id).strip():
@@ -887,45 +919,99 @@ class WhatsAppIntegrationService:
                 app=app
             )
             if not target_doc:
-                raise ValueError(
-                    f"WhatsApp sender phone number ID '{clean_phone_id}' not found for this organization"
+                raise ProviderResolutionError(
+                    code=ProviderResolutionError.PROVIDER_NOT_CONFIGURED,
+                    message=f"WhatsApp sender phone number ID '{clean_phone_id}' not found for this organization",
+                    status_code=400,
+                    provider="whatsapp",
+                    channel="whatsapp",
+                    organization_id=clean_org_id,
                 )
             if target_doc.get("status") != WhatsAppIntegrationStatus.CONNECTED.value or target_doc.get("deleted_at") is not None:
-                raise ValueError(f"WhatsApp phone number ID '{clean_phone_id}' is disconnected or inactive")
+                raise ProviderResolutionError(
+                    code=ProviderResolutionError.PROVIDER_INACTIVE,
+                    message=f"WhatsApp phone number ID '{clean_phone_id}' is disconnected or inactive",
+                    status_code=400,
+                    provider="whatsapp",
+                    channel="whatsapp",
+                    organization_id=clean_org_id,
+                )
 
         # Step 3: Neither specified -> Check all active integrations
         else:
             active_list = WhatsAppIntegrationRepository.find_active_by_organization(clean_org_id, app=app)
             if len(active_list) > 1:
-                # Requirement 15: Do not automatically select an integration if multiple active phone numbers exist
-                raise ValueError(
-                    "Multiple active WhatsApp integrations exist for this organization. "
-                    "A valid sender 'whatsapp_integration_id' or 'from_phone_number_id' must be specified in the message request."
+                raise ProviderResolutionError(
+                    code=ProviderResolutionError.AMBIGUOUS_PROVIDER_CONFIGURATION,
+                    message=(
+                        "Multiple active WhatsApp integrations exist for this organization. "
+                        "A valid sender 'whatsapp_integration_id' or 'from_phone_number_id' must be specified in the message request."
+                    ),
+                    status_code=400,
+                    provider="whatsapp",
+                    channel="whatsapp",
+                    organization_id=clean_org_id,
                 )
             elif len(active_list) == 1:
                 target_doc = active_list[0]
             else:
-                # Fallback to centralized / legacy provider_configs for backward compatibility
+                # Fallback strictly to organization-scoped legacy provider_configs unless explicitly platform-authorized
                 from app.modules.provider_config.service import ProviderConfigService
                 legacy_config = None
-                try:
-                    legacy_config = ProviderConfigService.get_decrypted_configuration("whatsapp", organization_id=clean_org_id)
-                except Exception:
-                    legacy_config = None
+                for p_key in ("whatsapp", "meta", "whatsapp_cloud"):
+                    legacy_config = ProviderConfigService.get_decrypted_configuration(
+                        p_key,
+                        organization_id=clean_org_id,
+                        allow_platform_fallback=allow_platform_fallback,
+                    )
+                    if legacy_config and legacy_config.get("access_token") and legacy_config.get("phone_number_id"):
+                        return legacy_config
 
-                if legacy_config and legacy_config.get("access_token") and legacy_config.get("phone_number_id"):
-                    return legacy_config
+                all_in_org = WhatsAppIntegrationRepository.find_all_by_organization(clean_org_id, include_deleted=False, app=app)
+                if all_in_org:
+                    raise ProviderResolutionError(
+                        code=ProviderResolutionError.PROVIDER_INACTIVE,
+                        message="WhatsApp integration is disconnected or inactive for this organization",
+                        status_code=400,
+                        provider="whatsapp",
+                        channel="whatsapp",
+                        organization_id=clean_org_id,
+                    )
 
-                raise ValueError("No active WhatsApp integration found for this organization")
+                raise ProviderResolutionError(
+                    code=ProviderResolutionError.PROVIDER_NOT_CONFIGURED,
+                    message="No active WhatsApp integration found for this organization",
+                    status_code=400,
+                    provider="whatsapp",
+                    channel="whatsapp",
+                    organization_id=clean_org_id,
+                )
 
         # Step 4: Decrypt access token
         ciphertext = target_doc.get("encrypted_access_token")
         if not ciphertext:
-            raise ValueError(f"WhatsApp integration '{target_doc.get('integration_id')}' has no configured access token")
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.PROVIDER_NOT_CONFIGURED,
+                message=f"WhatsApp integration '{target_doc.get('integration_id')}' has no configured access token",
+                status_code=400,
+                provider="whatsapp",
+                channel="whatsapp",
+                organization_id=clean_org_id,
+            )
 
-        decrypted_token = WhatsAppEncryption.decrypt_token(ciphertext)
+        try:
+            decrypted_token = WhatsAppEncryption.decrypt_token(ciphertext)
+        except WhatsAppEncryptionError as enc_err:
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.CREDENTIAL_DECRYPTION_FAILED,
+                message="WhatsApp access token could not be decrypted cleanly",
+                status_code=500,
+                provider="whatsapp",
+                channel="whatsapp",
+                organization_id=clean_org_id,
+            ) from enc_err
 
-        # Step 5: Merge centralized platform settings
+        # Step 5: Merge centralized platform metadata (App Secret / Graph Version only)
         platform_settings = PlatformSettingsService.get_meta_settings(decrypt=True, app=app)
         app_secret = platform_settings.get("meta_app_secret") or os.getenv("WHATSAPP_APP_SECRET") or os.getenv("META_APP_SECRET")
         app_id = platform_settings.get("meta_app_id") or os.getenv("META_APP_ID")

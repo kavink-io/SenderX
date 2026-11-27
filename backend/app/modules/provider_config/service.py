@@ -1,14 +1,14 @@
 
-import base64
 import json
 import os
 import time
 from datetime import datetime, timezone
 
-from cryptography.fernet import Fernet
-from flask import current_app
+from cryptography.fernet import Fernet, MultiFernet, InvalidToken
+from flask import current_app, has_app_context
 
 from app.adapters.base_adapter import ProviderError
+from app.adapters.errors import ProviderResolutionError
 from app.adapters.teams.teams_utils import (
     generate_oauth_state,
     validate_oauth_state,
@@ -25,21 +25,159 @@ from app.adapters.teams.graph_client import (
 )
 
 
-class ProviderConfigService:
+class PlatformProviderPolicy:
+    """
+    Explicit authorization gate controlling whether an organization may route
+    through platform-level provider credentials (`organization_id=None`).
+    Never allows implicit fallback.
+    """
 
     @staticmethod
-    def _cipher():
+    def is_authorized(organization_id, provider=None, channel=None):
+        if not organization_id or not isinstance(organization_id, str) or not organization_id.strip():
+            return False
 
-        key = current_app.config.get(
-            "CREDENTIAL_ENCRYPTION_KEY"
-        )
+        clean_org_id = organization_id.strip()
+        if not has_app_context() or not getattr(current_app, "mongo_db", None):
+            return False
 
-        if not key:
-            raise ValueError(
-                "Encryption key is not configured"
+        db = current_app.mongo_db
+        try:
+            org_col = db["organizations"]
+        except Exception:
+            return False
+
+        if not hasattr(org_col, "find_one"):
+            return False
+
+        org = org_col.find_one({"organization_id": clean_org_id})
+        if not org or str(org.get("status", "")).upper() != "ACTIVE":
+            return False
+
+        if org.get("allow_platform_provider_routing") is True:
+            return True
+
+        clean_provider = str(provider).lower().strip() if provider else None
+        clean_channel = str(channel).lower().strip() if channel else None
+
+        allowed_providers = org.get("authorized_platform_providers")
+        if clean_provider and isinstance(allowed_providers, (list, tuple, set)):
+            if clean_provider in {str(p).lower().strip() for p in allowed_providers if p}:
+                return True
+
+        allowed_channels = org.get("authorized_platform_channels")
+        if clean_channel and isinstance(allowed_channels, (list, tuple, set)):
+            if clean_channel in {str(c).lower().strip() for c in allowed_channels if c}:
+                return True
+
+        return False
+
+
+class ProviderConfigService:
+
+    INACTIVE_STATUSES = {"INACTIVE", "DISABLED", "DISCONNECTED", "REVOKED"}
+
+    @classmethod
+    def _get_fernet_instances(cls):
+        """
+        Load primary Fernet key and optional previous rotation keys cleanly.
+        Returns (primary_fernet, multi_fernet, key_version).
+        """
+        primary_key = None
+        previous_keys_raw = None
+        key_version = "v1"
+
+        if has_app_context():
+            primary_key = current_app.config.get("CREDENTIAL_ENCRYPTION_KEY")
+            previous_keys_raw = current_app.config.get("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS")
+            key_version = current_app.config.get("CREDENTIAL_ENCRYPTION_KEY_VERSION", "v1")
+
+        if not primary_key:
+            primary_key = os.getenv("CREDENTIAL_ENCRYPTION_KEY")
+        if not previous_keys_raw:
+            previous_keys_raw = os.getenv("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS", "")
+        if not key_version or key_version == "v1":
+            key_version = os.getenv("CREDENTIAL_ENCRYPTION_KEY_VERSION", "v1")
+
+        if not primary_key:
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.CREDENTIAL_DECRYPTION_FAILED,
+                message="Encryption key is not configured",
+                status_code=500,
             )
 
-        return Fernet(key.encode())
+        previous_keys = []
+        if isinstance(previous_keys_raw, list):
+            previous_keys = [str(k).strip() for k in previous_keys_raw if k and str(k).strip()]
+        elif isinstance(previous_keys_raw, str) and previous_keys_raw.strip():
+            previous_keys = [k.strip() for k in previous_keys_raw.split(",") if k.strip()]
+
+        try:
+            primary_bytes = primary_key.encode("utf-8") if isinstance(primary_key, str) else primary_key
+            primary_fernet = Fernet(primary_bytes)
+            all_fernets = [primary_fernet]
+            for prev_key in previous_keys:
+                prev_bytes = prev_key.encode("utf-8") if isinstance(prev_key, str) else prev_key
+                all_fernets.append(Fernet(prev_bytes))
+            return primary_fernet, MultiFernet(all_fernets), str(key_version)
+        except Exception:
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.CREDENTIAL_DECRYPTION_FAILED,
+                message="Provider encryption key configuration is invalid",
+                status_code=500,
+            )
+
+    @classmethod
+    def _cipher(cls):
+        primary_fernet, _, _ = cls._get_fernet_instances()
+        return primary_fernet
+
+    @classmethod
+    def _encrypt_credentials(cls, credentials_dict):
+        primary_fernet, _, key_version = cls._get_fernet_instances()
+        ciphertext = primary_fernet.encrypt(
+            json.dumps(credentials_dict).encode("utf-8")
+        ).decode("ascii")
+        return ciphertext, key_version
+
+    @classmethod
+    def _decrypt_credentials(cls, ciphertext, provider=None, organization_id=None):
+        if not ciphertext or not isinstance(ciphertext, str):
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.CREDENTIAL_DECRYPTION_FAILED,
+                message="Stored provider credentials could not be decrypted cleanly",
+                status_code=500,
+                provider=provider,
+                organization_id=organization_id,
+            )
+        _, multi_fernet, _ = cls._get_fernet_instances()
+        try:
+            decrypted = multi_fernet.decrypt(ciphertext.strip().encode("utf-8"))
+            parsed = json.loads(decrypted.decode("utf-8"))
+            if not isinstance(parsed, dict):
+                raise ValueError("Decrypted credentials payload is not an object")
+            return parsed
+        except (InvalidToken, Exception):
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.CREDENTIAL_DECRYPTION_FAILED,
+                message="Stored provider credentials could not be decrypted cleanly",
+                status_code=500,
+                provider=provider,
+                organization_id=organization_id,
+            )
+
+    @classmethod
+    def _is_document_active(cls, doc):
+        if not doc:
+            return False
+        if doc.get("disconnected") is True:
+            return False
+        if doc.get("configured") is False:
+            return False
+        status = str(doc.get("status") or "").strip().upper()
+        if status in cls.INACTIVE_STATUSES:
+            return False
+        return bool(doc.get("configured", False))
 
     @classmethod
     def validate_credentials(cls, provider, credentials):
@@ -122,11 +260,14 @@ class ProviderConfigService:
         return True
 
     @classmethod
-    def save_configuration(cls, provider, credentials, organization_id=None):
+    def save_configuration(cls, provider, credentials, organization_id=None, active=True):
 
         provider = provider.lower().strip()
         if not isinstance(credentials, dict) or not credentials:
             raise ValueError("Credentials dictionary cannot be empty")
+
+        if not has_app_context() or getattr(current_app, "mongo_db", None) is None:
+            return None
 
         collection = current_app.mongo_db[
             "provider_configs"
@@ -137,25 +278,29 @@ class ProviderConfigService:
             "organization_id": organization_id
         }
         existing = collection.find_one(
-            {**query, "configured": True},
-            {"credentials": 1}
+            query,
+            {"credentials": 1, "configured": 1, "disconnected": 1, "status": 1}
         )
         merged_credentials = {}
-        if existing and existing.get("credentials"):
-            decrypted = cls._cipher().decrypt(existing["credentials"].encode())
-            merged_credentials = json.loads(decrypted.decode())
+        if existing and existing.get("credentials") and existing.get("configured") is not False and not existing.get("disconnected"):
+            merged_credentials = cls._decrypt_credentials(
+                existing["credentials"],
+                provider=provider,
+                organization_id=organization_id,
+            )
         merged_credentials.update(credentials)
         cls.validate_credentials(provider, merged_credentials)
 
-        encrypted_credentials = cls._cipher().encrypt(
-            json.dumps(merged_credentials).encode()
-        ).decode()
+        encrypted_credentials, key_version = cls._encrypt_credentials(merged_credentials)
 
         set_doc = {
             "provider": provider,
             "organization_id": organization_id,
             "credentials": encrypted_credentials,
-            "configured": True,
+            "key_version": key_version,
+            "configured": bool(active),
+            "disconnected": not bool(active),
+            "status": "ACTIVE" if active else "INACTIVE",
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         if "token_expires_at" in merged_credentials and merged_credentials["token_expires_at"] is not None:
@@ -172,55 +317,99 @@ class ProviderConfigService:
 
         return True
 
+    @classmethod
+    def set_configuration_active_state(cls, provider, is_active, organization_id=None):
+        """Activate or deactivate an existing provider configuration without removing credentials."""
+        provider = provider.lower().strip()
+        collection = current_app.mongo_db["provider_configs"]
+        query = {
+            "provider": provider,
+            "organization_id": organization_id,
+        }
+        existing = collection.find_one(query)
+        if not existing or not existing.get("credentials"):
+            raise ProviderResolutionError(
+                code=ProviderResolutionError.PROVIDER_NOT_CONFIGURED,
+                message=f"Provider configuration '{provider}' was not found",
+                status_code=404,
+                provider=provider,
+                organization_id=organization_id,
+            )
+        collection.update_one(
+            query,
+            {
+                "$set": {
+                    "configured": bool(is_active),
+                    "disconnected": not bool(is_active),
+                    "status": "ACTIVE" if is_active else "INACTIVE",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        return True
+
     @staticmethod
-    def get_configuration_status(provider, organization_id=None):
+    def get_configuration_status(provider, organization_id=None, allow_platform_fallback=False):
 
         provider = provider.lower().strip()
+        if not has_app_context() or getattr(current_app, "mongo_db", None) is None:
+            return None
+
+        if not has_app_context() or getattr(current_app, "mongo_db", None) is None:
+            return None
 
         collection = current_app.mongo_db[
             "provider_configs"
         ]
+
+        projection = {
+            "_id": 0,
+            "provider": 1,
+            "configured": 1,
+            "disconnected": 1,
+            "status": 1,
+            "organization_id": 1,
+            "updated_at": 1
+        }
 
         doc = collection.find_one(
             {
                 "provider": provider,
                 "organization_id": organization_id
             },
-            {
-                "_id": 0,
-                "provider": 1,
-                "configured": 1,
-                "organization_id": 1,
-                "updated_at": 1
-            }
+            projection
         )
 
-        if not doc and organization_id is not None:
-            # Check platform fallback status
-            doc = collection.find_one(
-                {
-                    "provider": provider,
-                    "organization_id": None
-                },
-                {
-                    "_id": 0,
-                    "provider": 1,
-                    "configured": 1,
-                    "organization_id": 1,
-                    "updated_at": 1
-                }
-            )
+        if not doc and organization_id is not None and allow_platform_fallback:
+            if PlatformProviderPolicy.is_authorized(organization_id, provider=provider):
+                doc = collection.find_one(
+                    {
+                        "provider": provider,
+                        "organization_id": None
+                    },
+                    projection
+                )
 
         return doc
 
     @staticmethod
-    def get_all_configuration_statuses(organization_id=None):
+    def get_all_configuration_statuses(organization_id=None, include_all_tenants=False):
+        if not has_app_context() or getattr(current_app, "mongo_db", None) is None:
+            return []
+
+        if not has_app_context() or getattr(current_app, "mongo_db", None) is None:
+            return None
 
         collection = current_app.mongo_db[
             "provider_configs"
         ]
 
-        query = {"organization_id": organization_id} if organization_id is not None else {}
+        if organization_id is not None:
+            query = {"organization_id": organization_id}
+        elif include_all_tenants:
+            query = {}
+        else:
+            query = {"organization_id": None}
 
         return list(
             collection.find(
@@ -229,6 +418,8 @@ class ProviderConfigService:
                     "_id": 0,
                     "provider": 1,
                     "configured": 1,
+                    "disconnected": 1,
+                    "status": 1,
                     "organization_id": 1,
                     "updated_at": 1
                 }
@@ -236,9 +427,28 @@ class ProviderConfigService:
         )
 
     @classmethod
-    def get_decrypted_configuration(cls, provider, organization_id=None):
+    def get_decrypted_configuration(
+        cls,
+        provider,
+        organization_id=None,
+        allow_platform_fallback=False,
+        require_active=True,
+    ):
 
         provider = provider.lower().strip()
+
+        if organization_id is not None:
+            if not isinstance(organization_id, str) or not organization_id.strip():
+                raise ProviderResolutionError(
+                    code=ProviderResolutionError.PROVIDER_NOT_AUTHORIZED,
+                    message="Valid organization_id is required for tenant provider configuration lookup",
+                    status_code=403,
+                    provider=provider,
+                )
+            organization_id = organization_id.strip()
+
+        if not has_app_context() or getattr(current_app, "mongo_db", None) is None:
+            return None
 
         collection = current_app.mongo_db[
             "provider_configs"
@@ -246,37 +456,75 @@ class ProviderConfigService:
 
         document = None
 
-        # 1. Organization-specific configuration
+        # 1. Organization-specific configuration (strict tenant match)
         if organization_id is not None:
             document = collection.find_one({
                 "provider": provider,
                 "organization_id": organization_id,
-                "configured": True
             })
+            if document and not cls._is_document_active(document):
+                if require_active:
+                    raise ProviderResolutionError(
+                        code=ProviderResolutionError.PROVIDER_INACTIVE,
+                        message=f"Provider '{provider}' configuration is inactive or disconnected for this organization",
+                        status_code=400,
+                        provider=provider,
+                        organization_id=organization_id,
+                    )
+                return None
 
-        # 2. Platform-level fallback
+        # 2. Explicit, authorized platform configuration lookup only
         if not document:
-            document = collection.find_one({
-                "provider": provider,
-                "organization_id": None,
-                "configured": True
-            })
+            if organization_id is None:
+                document = collection.find_one({
+                    "provider": provider,
+                    "organization_id": None,
+                })
+                if document and not cls._is_document_active(document):
+                    if require_active:
+                        raise ProviderResolutionError(
+                            code=ProviderResolutionError.PROVIDER_INACTIVE,
+                            message=f"Platform provider '{provider}' configuration is inactive",
+                            status_code=400,
+                            provider=provider,
+                        )
+                    return None
+            elif allow_platform_fallback:
+                if not PlatformProviderPolicy.is_authorized(organization_id, provider=provider):
+                    raise ProviderResolutionError(
+                        code=ProviderResolutionError.PROVIDER_NOT_AUTHORIZED,
+                        message=f"Organization is not authorized to use platform credentials for provider '{provider}'",
+                        status_code=403,
+                        provider=provider,
+                        organization_id=organization_id,
+                    )
+                document = collection.find_one({
+                    "provider": provider,
+                    "organization_id": None,
+                })
+                if document and not cls._is_document_active(document):
+                    if require_active:
+                        raise ProviderResolutionError(
+                            code=ProviderResolutionError.PROVIDER_INACTIVE,
+                            message=f"Authorized platform provider '{provider}' configuration is inactive",
+                            status_code=400,
+                            provider=provider,
+                            organization_id=organization_id,
+                        )
+                    return None
 
         if not document:
             return None
 
-        encrypted_credentials = document.get(
-            "credentials"
-        )
-
+        encrypted_credentials = document.get("credentials")
         if not encrypted_credentials:
             return None
 
-        decrypted = cls._cipher().decrypt(
-            encrypted_credentials.encode()
+        return cls._decrypt_credentials(
+            encrypted_credentials,
+            provider=provider,
+            organization_id=organization_id,
         )
-
-        return json.loads(decrypted.decode())
 
     @classmethod
     def get_teams_authorization_url(cls, organization_id, redirect_uri=None, user_id=None):
@@ -576,8 +824,11 @@ class ProviderConfigService:
             return False
 
         try:
-            decrypted = cls._cipher().decrypt(current_doc["credentials"].encode())
-            current_creds = json.loads(decrypted.decode())
+            current_creds = cls._decrypt_credentials(
+                current_doc["credentials"],
+                provider=provider,
+                organization_id=organization_id,
+            )
         except Exception:
             return False
 
@@ -595,10 +846,8 @@ class ProviderConfigService:
         updated_creds["token_expires_at"] = new_exp
         updated_creds["refreshed_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Re-encrypt updated credentials
-        encrypted_credentials = cls._cipher().encrypt(
-            json.dumps(updated_creds).encode()
-        ).decode()
+        # Re-encrypt updated credentials using current primary key
+        encrypted_credentials, key_version = cls._encrypt_credentials(updated_creds)
 
         # Atomic conditional update query in MongoDB:
         # 1. Matches provider and organization_id
@@ -622,8 +871,11 @@ class ProviderConfigService:
             {
                 "$set": {
                     "credentials": encrypted_credentials,
+                    "key_version": key_version,
                     "token_expires_at": new_exp,
                     "configured": True,
+                    "disconnected": False,
+                    "status": "ACTIVE",
                     "refreshed_at": now_iso
                 }
             }
@@ -645,6 +897,7 @@ class ProviderConfigService:
                 "$set": {
                     "configured": False,
                     "disconnected": True,
+                    "status": "DISCONNECTED",
                     "disconnected_at": datetime.now(timezone.utc).isoformat()
                 },
                 "$unset": {
