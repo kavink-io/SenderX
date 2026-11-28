@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 class MediaMetadataModel(BaseModel):
     media_id: str = Field(..., description="Unique media identifier (UUID)")
     organization_id: str = Field(..., description="Organization scope owner")
+    application_id: Optional[str] = Field(None, description="Owning connected application ID, or None for organization-shared/legacy media")
     filename: str = Field(..., description="Sanitized safe filename on storage")
     original_filename: str = Field(..., description="Original client-supplied filename")
     mime_type: str = Field(..., description="Verified canonical MIME type")

@@ -19,6 +19,25 @@ class MediaRepository:
     def _collection(cls):
         return current_app.mongo_db[cls.COLLECTION]
 
+    @staticmethod
+    def _apply_application_scope(
+        query: Dict[str, Any],
+        allowed_application_ids: Optional[List[str]] = None,
+        include_org_shared: bool = False
+    ) -> Dict[str, Any]:
+        """Restrict query to explicit application IDs when caller is application-scoped."""
+        if allowed_application_ids is not None:
+            clean_apps: List[Any] = [str(a).strip() for a in allowed_application_ids if a and str(a).strip()]
+            if include_org_shared and clean_apps:
+                query["$or"] = [
+                    {"application_id": {"$in": clean_apps}},
+                    {"application_id": None},
+                    {"application_id": {"$exists": False}},
+                ]
+            else:
+                query["application_id"] = {"$in": clean_apps}
+        return query
+
     @classmethod
     def create(cls, media_data: Dict[str, Any]) -> Dict[str, Any]:
         """Insert a new media metadata record."""
@@ -26,21 +45,35 @@ class MediaRepository:
         return cls.find_by_id(media_data["media_id"], organization_id=media_data.get("organization_id"))
 
     @classmethod
-    def find_by_id(cls, media_id: str, organization_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Retrieve media by ID, strictly enforcing organization scoping when supplied."""
+    def find_by_id(
+        cls,
+        media_id: str,
+        organization_id: Optional[str] = None,
+        allowed_application_ids: Optional[List[str]] = None,
+        include_org_shared: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve media by ID, strictly enforcing organization and optional application scoping."""
         query: Dict[str, Any] = {"media_id": media_id}
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_scope(query, allowed_application_ids, include_org_shared=include_org_shared)
         return cls._collection().find_one(query, {"_id": 0})
 
     @classmethod
-    def find_by_ids(cls, media_ids: List[str], organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def find_by_ids(
+        cls,
+        media_ids: List[str],
+        organization_id: Optional[str] = None,
+        allowed_application_ids: Optional[List[str]] = None,
+        include_org_shared: bool = False
+    ) -> List[Dict[str, Any]]:
         """Retrieve multiple media records by their IDs."""
         if not media_ids:
             return []
         query: Dict[str, Any] = {"media_id": {"$in": media_ids}}
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_scope(query, allowed_application_ids, include_org_shared=include_org_shared)
         cursor = cls._collection().find(query, {"_id": 0})
         return list(cursor)
 
@@ -53,10 +86,13 @@ class MediaRepository:
         mime_type: Optional[str] = None,
         status: Optional[str] = None,
         channel: Optional[str] = None,
-        search: Optional[str] = None
+        search: Optional[str] = None,
+        allowed_application_ids: Optional[List[str]] = None,
+        include_org_shared: bool = False
     ) -> Dict[str, Any]:
         """Paginated search for organization media."""
         query: Dict[str, Any] = {"organization_id": organization_id}
+        cls._apply_application_scope(query, allowed_application_ids, include_org_shared=include_org_shared)
 
         if status:
             query["status"] = status
@@ -70,13 +106,21 @@ class MediaRepository:
         if channel:
             query[f"channel_compatibility.{channel}"] = True
 
-        if search:
+        if search and search.strip():
             escaped = re.escape(search.strip())
-            query["$or"] = [
+            search_or = [
                 {"filename": {"$regex": escaped, "$options": "i"}},
                 {"original_filename": {"$regex": escaped, "$options": "i"}},
                 {"purpose": {"$regex": escaped, "$options": "i"}}
             ]
+            if "$or" in query:
+                ownership_or = query.pop("$or")
+                query.setdefault("$and", []).extend([
+                    {"$or": ownership_or},
+                    {"$or": search_or},
+                ])
+            else:
+                query["$or"] = search_or
 
         total = cls._collection().count_documents(query)
         total_pages = max(1, math.ceil(total / limit)) if total > 0 else 1
@@ -98,21 +142,34 @@ class MediaRepository:
         }
 
     @classmethod
-    def update(cls, media_id: str, update_data: Dict[str, Any], organization_id: Optional[str] = None) -> bool:
+    def update(
+        cls,
+        media_id: str,
+        update_data: Dict[str, Any],
+        organization_id: Optional[str] = None,
+        allowed_application_ids: Optional[List[str]] = None
+    ) -> bool:
         """Update media metadata fields."""
         query: Dict[str, Any] = {"media_id": media_id}
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_scope(query, allowed_application_ids)
 
         result = cls._collection().update_one(query, {"$set": update_data})
         return result.modified_count > 0 or result.matched_count > 0
 
     @classmethod
-    def soft_delete(cls, media_id: str, organization_id: Optional[str] = None) -> bool:
+    def soft_delete(
+        cls,
+        media_id: str,
+        organization_id: Optional[str] = None,
+        allowed_application_ids: Optional[List[str]] = None
+    ) -> bool:
         """Mark media as DELETED with timestamp."""
         query: Dict[str, Any] = {"media_id": media_id}
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_scope(query, allowed_application_ids)
 
         result = cls._collection().update_one(
             query,
@@ -126,21 +183,33 @@ class MediaRepository:
         return result.modified_count > 0
 
     @classmethod
-    def hard_delete(cls, media_id: str, organization_id: Optional[str] = None) -> bool:
+    def hard_delete(
+        cls,
+        media_id: str,
+        organization_id: Optional[str] = None,
+        allowed_application_ids: Optional[List[str]] = None
+    ) -> bool:
         """Permanently delete media record from database."""
         query: Dict[str, Any] = {"media_id": media_id}
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_scope(query, allowed_application_ids)
 
         result = cls._collection().delete_one(query)
         return result.deleted_count > 0
 
     @classmethod
-    def increment_usage(cls, media_id: str, organization_id: Optional[str] = None) -> bool:
+    def increment_usage(
+        cls,
+        media_id: str,
+        organization_id: Optional[str] = None,
+        allowed_application_ids: Optional[List[str]] = None
+    ) -> bool:
         """Increment media reuse count."""
         query: Dict[str, Any] = {"media_id": media_id}
         if organization_id is not None:
             query["organization_id"] = organization_id
+        cls._apply_application_scope(query, allowed_application_ids)
 
         result = cls._collection().update_one(
             query,

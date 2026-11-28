@@ -52,6 +52,15 @@ def require_api_key_or_token(required_permissions: Optional[List[str]] = None) -
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            # Reject conflicting credential types supplied simultaneously
+            raw_x_api_key = request.headers.get("X-API-Key")
+            raw_auth_header = request.headers.get("Authorization", "").strip()
+            if raw_x_api_key and raw_x_api_key.strip() and raw_auth_header:
+                return jsonify({
+                    "success": False,
+                    "message": "Conflicting authentication credentials supplied"
+                }), 401
+
             # 1. Check for external API key first
             api_key = extract_api_key_from_request()
             if api_key:
@@ -119,6 +128,9 @@ def require_api_key_or_token(required_permissions: Optional[List[str]] = None) -
                     "organization:dlq:read": ["messages:read", "dlq:read"],
                     "organization:dead_letters:manage": ["messages:manage"],
                     "organization:dlq:retry": ["messages:manage"],
+                    "organization:media:upload": ["media:upload"],
+                    "organization:media:read": ["media:read"],
+                    "organization:media:delete": ["media:delete"],
                 }
                 scope_compatibility = {"payloads:write": "payloads:ingest", "messages:write": "messages:create"}
                 granted_scopes = {

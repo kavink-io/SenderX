@@ -1069,14 +1069,19 @@ def test_s3_production_security_fail_closed_and_iam_workload_identity():
         assert "aws_access_key_id" not in client_kwargs
         assert "aws_secret_access_key" not in client_kwargs
 
-    # 4. Enforces private ACL and AES256 encryption in S3 save
+    # 4. Enforces no object ACL (BucketOwnerEnforced compatible) and AES256 encryption in S3 save
     mock_s3 = MagicMock()
     storage = S3Storage(bucket_name="secure-bucket", s3_client=mock_s3)
-    storage.save(VALID_PDF_BYTES, "orgs/org-123/2026/11/doc.pdf", content_type="application/pdf")
+    storage.save(
+        VALID_PDF_BYTES,
+        "orgs/org-123/2026/11/doc.pdf",
+        content_type="application/pdf",
+        organization_id="org-123",
+    )
 
     assert mock_s3.upload_fileobj.call_count == 1
     extra_args = mock_s3.upload_fileobj.call_args[1]["ExtraArgs"]
-    assert extra_args["ACL"] == "private"
+    assert "ACL" not in extra_args
     assert extra_args["ServerSideEncryption"] == "AES256"
 
     # 5. Pre-signed URL expiration capped at 3600 seconds
@@ -1184,4 +1189,561 @@ def test_provider_specific_size_restrictions():
     is_v, err = validate_provider_media_limits("sms", "twilio", twilio_valid, recipient="+447911123456")
     assert is_v is False
     assert "only supported for US and Canada" in err
+
+
+# ---------------------------------------------------------------------------
+# 27. S3 BUCKET OWNER ENFORCED, ORG ISOLATION & ADAPTER OPERATIONS
+# ---------------------------------------------------------------------------
+
+def test_s3_upload_bucket_owner_enforced_no_acl():
+    mock_s3 = MagicMock()
+    storage = S3Storage(bucket_name="senderx-prod-media-test", region_name="ap-south-1", s3_client=mock_s3)
+
+    res = storage.save(
+        data=VALID_PDF_BYTES,
+        storage_key="orgs/org-1/2026/11/file.pdf",
+        content_type="application/pdf",
+        metadata={"organization_id": "org-1", "media_id": "m-1"},
+        organization_id="org-1",
+    )
+
+    assert res["storage_backend"] == "s3"
+    assert res["bucket"] == "senderx-prod-media-test"
+    assert res["storage_key"] == "orgs/org-1/2026/11/file.pdf"
+    assert res["encryption"] == "AES256"
+    call_kwargs = mock_s3.upload_fileobj.call_args[1]
+    assert "ACL" not in call_kwargs["ExtraArgs"]
+    assert call_kwargs["ExtraArgs"]["ContentType"] == "application/pdf"
+    assert call_kwargs["ExtraArgs"]["ServerSideEncryption"] == "AES256"
+    assert call_kwargs["ExtraArgs"]["Metadata"] == {"organization_id": "org-1", "media_id": "m-1"}
+
+
+def test_media_service_upload_passes_organization_id_to_storage(app, monkeypatch):
+    with app.app_context():
+        mock_storage = MagicMock()
+        mock_storage.backend_name = "s3"
+        mock_storage.save.return_value = {
+            "storage_key": "orgs/org-x/2026/11/id_test.pdf",
+            "storage_backend": "s3",
+            "bucket": "test-bucket",
+            "size_bytes": len(VALID_PDF_BYTES),
+            "content_type": "application/pdf",
+            "encryption": "AES256",
+        }
+        monkeypatch.setattr(MediaService, "_get_storage", classmethod(lambda cls: mock_storage))
+        monkeypatch.setattr(MediaRepository, "create", classmethod(lambda cls, doc: "media-id-1"))
+
+        org_id = str(uuid.uuid4())
+        res = MediaService.upload_file(
+            file_obj=VALID_PDF_BYTES,
+            organization_id=org_id,
+            custom_filename="test.pdf",
+        )
+
+        assert res["success"] is True
+        save_kwargs = mock_storage.save.call_args[1]
+        assert save_kwargs["organization_id"] == org_id
+        assert save_kwargs["storage_key"].startswith(f"orgs/{org_id}/")
+
+
+def test_s3_organization_prefix_validation():
+    mock_s3 = MagicMock()
+    storage = S3Storage(bucket_name="senderx-prod-media-test", s3_client=mock_s3)
+
+    with pytest.raises(StorageSecurityError):
+        storage.save(
+            VALID_PDF_BYTES,
+            "orgs/org-other/2026/11/doc.pdf",
+            organization_id="org-owner",
+        )
+
+    with pytest.raises(StorageSecurityError):
+        storage.generate_signed_url(
+            "orgs/org-other/2026/11/doc.pdf",
+            organization_id="org-owner",
+        )
+
+    with pytest.raises(StorageSecurityError):
+        storage.delete(
+            "orgs/org-other/2026/11/doc.pdf",
+            organization_id="org-owner",
+        )
+
+    with pytest.raises(StorageSecurityError):
+        storage.get_stream(
+            "../orgs/org-owner/2026/11/doc.pdf",
+            organization_id="org-owner",
+        )
+
+    assert storage.exists("../orgs/org-owner/2026/11/doc.pdf", organization_id="org-owner") is False
+    mock_s3.head_object.assert_not_called()
+
+
+def test_s3_presigned_download_url_generation():
+    mock_s3 = MagicMock()
+    mock_s3.generate_presigned_url.return_value = "https://senderx-prod-media-test.s3.ap-south-1.amazonaws.com/signed"
+    storage = S3Storage(bucket_name="senderx-prod-media-test", region_name="ap-south-1", s3_client=mock_s3)
+
+    url = storage.generate_signed_url(
+        storage_key="orgs/org-1/2026/11/doc.pdf",
+        expires_in=600,
+        filename="report.pdf",
+        organization_id="org-1",
+    )
+
+    assert url == "https://senderx-prod-media-test.s3.ap-south-1.amazonaws.com/signed"
+    call_kwargs = mock_s3.generate_presigned_url.call_args[1]
+    assert call_kwargs["ClientMethod"] == "get_object"
+    assert call_kwargs["ExpiresIn"] == 600
+    assert call_kwargs["Params"]["Bucket"] == "senderx-prod-media-test"
+    assert call_kwargs["Params"]["Key"] == "orgs/org-1/2026/11/doc.pdf"
+    assert call_kwargs["Params"]["ResponseContentDisposition"] == 'attachment; filename="report.pdf"'
+
+
+def test_s3_object_existence_and_deletion():
+    from botocore.exceptions import ClientError
+
+    mock_s3 = MagicMock()
+    storage = S3Storage(bucket_name="senderx-prod-media-test", s3_client=mock_s3)
+    key = "orgs/org-1/2026/11/doc.pdf"
+
+    assert storage.exists(key, organization_id="org-1") is True
+    mock_s3.head_object.assert_called_once_with(Bucket="senderx-prod-media-test", Key=key)
+
+    mock_s3.head_object.side_effect = ClientError(
+        {"Error": {"Code": "404", "Message": "Not Found"}},
+        "HeadObject",
+    )
+    assert storage.exists(key, organization_id="org-1") is False
+
+    assert storage.delete(key, organization_id="org-1") is True
+    mock_s3.delete_object.assert_called_once_with(Bucket="senderx-prod-media-test", Key=key)
+
+
+def test_s3_upload_error_handling():
+    from botocore.exceptions import ClientError
+
+    mock_s3 = MagicMock()
+    mock_s3.upload_fileobj.side_effect = ClientError(
+        {"Error": {"Code": "AccessControlListNotSupported", "Message": "The bucket does not allow ACLs"}},
+        "PutObject",
+    )
+    storage = S3Storage(bucket_name="senderx-prod-media-test", s3_client=mock_s3)
+
+    with pytest.raises(StorageOperationError) as exc:
+        storage.save(
+            VALID_PDF_BYTES,
+            "orgs/org-1/2026/11/doc.pdf",
+            organization_id="org-1",
+        )
+    assert "AccessControlListNotSupported" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# 28. PHASE 8 DUAL AUTHENTICATION & APPLICATION-SCOPED MEDIA ISOLATION
+# ---------------------------------------------------------------------------
+
+def _setup_dual_auth_media_env(monkeypatch, app):
+    """Build isolated in-memory Mongo-backed state for Phase 8 dual-auth media tests."""
+    from app.modules.api_credentials.models import hash_api_key
+    from app.modules.api_credentials.rate_limiter import DistributedRateLimiter
+    from app.modules.api_credentials.repository import ApiCredentialRepository
+    from app.modules.applications.repository import ApplicationRepository
+
+    org_id = f"org-{uuid.uuid4().hex[:8]}"
+    app_a_id = f"app-a-{uuid.uuid4().hex[:6]}"
+    app_b_id = f"app-b-{uuid.uuid4().hex[:6]}"
+    key_a_full = f"sx_test_{uuid.uuid4().hex}"
+    key_a_read_only = f"sx_test_{uuid.uuid4().hex}"
+    key_b = f"sx_test_{uuid.uuid4().hex}"
+    key_revoked = f"sx_test_{uuid.uuid4().hex}"
+    key_inactive_app = f"sx_test_{uuid.uuid4().hex}"
+
+    org_doc = {"organization_id": org_id, "name": "Phase8 Org", "status": "ACTIVE"}
+    apps_db = {
+        app_a_id: {"application_id": app_a_id, "organization_id": org_id, "status": "ACTIVE"},
+        app_b_id: {"application_id": app_b_id, "organization_id": org_id, "status": "ACTIVE"},
+        "app-inactive": {"application_id": "app-inactive", "organization_id": org_id, "status": "INACTIVE"},
+    }
+    creds_by_hash = {
+        hash_api_key(key_a_full): {
+            "credential_id": "cred-a-full",
+            "organization_id": org_id,
+            "application_id": app_a_id,
+            "status": "ACTIVE",
+            "environment": "test",
+            "scopes": ["media:upload", "media:read", "media:delete"],
+        },
+        hash_api_key(key_a_read_only): {
+            "credential_id": "cred-a-ro",
+            "organization_id": org_id,
+            "application_id": app_a_id,
+            "status": "ACTIVE",
+            "environment": "test",
+            "scopes": ["media:read"],
+        },
+        hash_api_key(key_b): {
+            "credential_id": "cred-b",
+            "organization_id": org_id,
+            "application_id": app_b_id,
+            "status": "ACTIVE",
+            "environment": "test",
+            "scopes": ["media:upload", "media:read", "media:delete"],
+        },
+        hash_api_key(key_revoked): {
+            "credential_id": "cred-revoked",
+            "organization_id": org_id,
+            "application_id": app_a_id,
+            "status": "INACTIVE",
+            "environment": "test",
+            "scopes": ["media:upload", "media:read", "media:delete"],
+        },
+        hash_api_key(key_inactive_app): {
+            "credential_id": "cred-inactive-app",
+            "organization_id": org_id,
+            "application_id": "app-inactive",
+            "status": "ACTIVE",
+            "environment": "test",
+            "scopes": ["media:upload", "media:read", "media:delete"],
+        },
+    }
+
+    monkeypatch.setattr(DistributedRateLimiter, "peek_auth_failure", classmethod(lambda cls, ip: (True, 0)))
+    monkeypatch.setattr(DistributedRateLimiter, "record_auth_failure", classmethod(lambda cls, ip: (True, 0)))
+    monkeypatch.setattr(DistributedRateLimiter, "check_rate_limit", classmethod(lambda cls, **kw: (True, 0)))
+    monkeypatch.setattr(ApiCredentialRepository, "find_by_hash", classmethod(lambda cls, h: creds_by_hash.get(h)))
+    monkeypatch.setattr(ApiCredentialRepository, "update_last_used", classmethod(lambda cls, *a, **kw: None))
+    monkeypatch.setattr(OrganizationRepository, "find_by_id", classmethod(lambda cls, oid: org_doc if oid == org_id else None))
+    monkeypatch.setattr(ApplicationRepository, "find_by_id", classmethod(lambda cls, aid, organization_id=None: apps_db.get(aid)))
+    monkeypatch.setattr(ApplicationRepository, "record_activity", classmethod(lambda cls, *a, **kw: None))
+
+    # In-memory media store
+    media_store = {}
+    legacy_id = str(uuid.uuid4())
+    media_store[legacy_id] = {
+        "media_id": legacy_id,
+        "organization_id": org_id,
+        "filename": "legacy.txt",
+        "original_filename": "legacy.txt",
+        "mime_type": "text/plain",
+        "file_extension": ".txt",
+        "size_bytes": 12,
+        "checksum_sha256": "abc",
+        "storage_backend": "local",
+        "storage_key": f"orgs/{org_id}/2026/11/{legacy_id}_legacy.txt",
+        "status": "ACTIVE",
+        "scan_status": "CLEAN",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    def _match(doc, organization_id=None, allowed_application_ids=None, include_org_shared=False):
+        if organization_id is not None and doc.get("organization_id") != organization_id:
+            return False
+        if allowed_application_ids is not None:
+            app_val = doc.get("application_id")
+            if app_val not in allowed_application_ids and not (include_org_shared and app_val is None):
+                return False
+        return True
+
+    def _create(cls, doc):
+        media_store[doc["media_id"]] = dict(doc)
+        return dict(doc)
+
+    def _find_by_id(cls, media_id, organization_id=None, allowed_application_ids=None, include_org_shared=False):
+        doc = media_store.get(media_id)
+        if doc and _match(doc, organization_id, allowed_application_ids, include_org_shared):
+            return dict(doc)
+        return None
+
+    def _find_all(cls, organization_id, page=1, limit=50, allowed_application_ids=None, include_org_shared=False, **kw):
+        items = [
+            dict(d) for d in media_store.values()
+            if d.get("status") != "DELETED" and _match(d, organization_id, allowed_application_ids, include_org_shared)
+        ]
+        return {"data": items, "pagination": {"total": len(items), "page": page, "limit": limit, "pages": 1}}
+
+    def _soft_delete(cls, media_id, organization_id=None, allowed_application_ids=None):
+        doc = media_store.get(media_id)
+        if doc and _match(doc, organization_id, allowed_application_ids):
+            doc["status"] = "DELETED"
+            return True
+        return False
+
+    monkeypatch.setattr(MediaRepository, "create", classmethod(_create))
+    monkeypatch.setattr(MediaRepository, "find_by_id", classmethod(_find_by_id))
+    monkeypatch.setattr(MediaRepository, "find_all", classmethod(_find_all))
+    monkeypatch.setattr(MediaRepository, "soft_delete", classmethod(_soft_delete))
+
+    mock_storage = MagicMock()
+    mock_storage.backend_name = "s3"
+    mock_storage.save.side_effect = lambda **kw: {
+        "storage_key": kw["storage_key"],
+        "storage_backend": "s3",
+        "bucket": "test-bucket",
+        "size_bytes": len(kw["data"]),
+        "content_type": kw["content_type"],
+        "encryption": "AES256",
+    }
+    mock_storage.generate_signed_url.return_value = "https://s3.ap-south-1.amazonaws.com/test-bucket/signed"
+    mock_storage.delete.return_value = True
+    monkeypatch.setattr(MediaService, "_get_storage", classmethod(lambda cls: mock_storage))
+
+    return {
+        "org_id": org_id,
+        "app_a_id": app_a_id,
+        "app_b_id": app_b_id,
+        "key_a_full": key_a_full,
+        "key_a_read_only": key_a_read_only,
+        "key_b": key_b,
+        "key_revoked": key_revoked,
+        "key_inactive_app": key_inactive_app,
+        "legacy_id": legacy_id,
+        "media_store": media_store,
+    }
+
+
+def test_phase8_media_dual_auth_authentication_and_mixed_credentials(app, monkeypatch):
+    ctx = _setup_dual_auth_media_env(monkeypatch, app)
+    client = app.test_client()
+
+    # 1. Missing credentials -> 401
+    assert client.get("/api/v1/media/").status_code == 401
+
+    # 2. Invalid API key -> 401
+    assert client.get("/api/v1/media/", headers={"X-API-Key": "sx_test_invalid"}).status_code == 401
+
+    # 3. Revoked API key -> 401
+    assert client.get("/api/v1/media/", headers={"X-API-Key": ctx["key_revoked"]}).status_code == 401
+
+    # 4. Inactive application -> 401
+    assert client.get("/api/v1/media/", headers={"X-API-Key": ctx["key_inactive_app"]}).status_code == 401
+
+    # 5. Insufficient API key scope (read-only key attempting upload/delete) -> 403
+    resp_scope = client.post(
+        "/api/v1/media/upload",
+        headers={"X-API-Key": ctx["key_a_read_only"]},
+        data={"file": (io.BytesIO(VALID_TXT_BYTES), "hello.txt")},
+        content_type="multipart/form-data",
+    )
+    assert resp_scope.status_code == 403
+
+    # 6. Conflicting X-API-Key + Authorization Bearer JWT -> 401
+    with app.app_context():
+        jwt_token = create_access_token(
+            identity="user-1",
+            additional_claims={"account_type": "ORGANIZATION_USER", "organization_id": ctx["org_id"]},
+        )
+    resp_conflict = client.get(
+        "/api/v1/media/",
+        headers={"X-API-Key": ctx["key_a_full"], "Authorization": f"Bearer {jwt_token}"},
+    )
+    assert resp_conflict.status_code == 401
+    assert "Conflicting authentication credentials" in resp_conflict.get_json()["message"]
+
+    # 7. Expired JWT -> 401
+    with app.app_context():
+        expired_jwt = create_access_token(
+            identity="user-1",
+            expires_delta=timedelta(seconds=-10),
+            additional_claims={"account_type": "ORGANIZATION_USER", "organization_id": ctx["org_id"]},
+        )
+    assert client.get("/api/v1/media/", headers={"Authorization": f"Bearer {expired_jwt}"}).status_code == 401
+
+
+def test_phase8_media_api_key_crud_and_cross_application_isolation(app, monkeypatch):
+    ctx = _setup_dual_auth_media_env(monkeypatch, app)
+    client = app.test_client()
+
+    # 1. App A single upload -> 201 and stores server-derived application_id
+    up_resp = client.post(
+        "/api/v1/media/upload",
+        headers={"X-API-Key": ctx["key_a_full"]},
+        data={"file": (io.BytesIO(VALID_TXT_BYTES), "app_a.txt")},
+        content_type="multipart/form-data",
+    )
+    assert up_resp.status_code == 201
+    media_a = up_resp.get_json()["media"]
+    media_a_id = media_a["media_id"]
+    assert media_a["application_id"] == ctx["app_a_id"]
+    assert media_a["organization_id"] == ctx["org_id"]
+
+    # 2. App A bulk upload -> 201
+    bulk_resp = client.post(
+        "/api/v1/media/bulk-upload",
+        headers={"X-API-Key": ctx["key_a_full"]},
+        data={"files": [(io.BytesIO(VALID_TXT_BYTES), "b1.txt"), (io.BytesIO(VALID_TXT_BYTES), "b2.txt")]},
+        content_type="multipart/form-data",
+    )
+    assert bulk_resp.status_code == 201
+    assert bulk_resp.get_json()["success_count"] == 2
+
+    # 3. App A lists only its own 3 files (legacy record without application_id is hidden!)
+    list_a = client.get("/api/v1/media/", headers={"X-API-Key": ctx["key_a_full"]}).get_json()
+    listed_ids_a = {item["media_id"] for item in list_a["data"]}
+    assert media_a_id in listed_ids_a
+    assert ctx["legacy_id"] not in listed_ids_a
+
+    # 4. App A gets metadata and downloads (S3 presigned 302 redirect)
+    assert client.get(f"/api/v1/media/{media_a_id}", headers={"X-API-Key": ctx["key_a_full"]}).status_code == 200
+    dl_a = client.get(f"/api/v1/media/{media_a_id}/download", headers={"X-API-Key": ctx["key_a_full"]})
+    assert dl_a.status_code == 302
+    assert "s3.ap-south-1.amazonaws.com" in dl_a.headers["Location"]
+
+    # 5. App B cannot list, get, download, or delete App A's media or legacy media
+    list_b = client.get("/api/v1/media/", headers={"X-API-Key": ctx["key_b"]}).get_json()
+    assert list_b["data"] == []
+    assert client.get(f"/api/v1/media/{media_a_id}", headers={"X-API-Key": ctx["key_b"]}).status_code == 404
+    assert client.get(f"/api/v1/media/{media_a_id}/download", headers={"X-API-Key": ctx["key_b"]}).status_code == 404
+    assert client.delete(f"/api/v1/media/{media_a_id}", headers={"X-API-Key": ctx["key_b"]}).status_code == 404
+    assert client.get(f"/api/v1/media/{ctx['legacy_id']}", headers={"X-API-Key": ctx["key_b"]}).status_code == 404
+
+    # 6. App A deletes its own media -> 200, then 404
+    assert client.delete(f"/api/v1/media/{media_a_id}", headers={"X-API-Key": ctx["key_a_full"]}).status_code == 200
+    assert client.get(f"/api/v1/media/{media_a_id}", headers={"X-API-Key": ctx["key_a_full"]}).status_code == 404
+
+
+def test_phase8_media_jwt_backward_compatibility_and_org_wide_scope(app, monkeypatch):
+    ctx = _setup_dual_auth_media_env(monkeypatch, app)
+    client = app.test_client()
+
+    user_org_wide = {
+        "user_id": "u-org",
+        "email": "org@example.com",
+        "organization_id": ctx["org_id"],
+        "is_active": True,
+        "status": "ACTIVE",
+        "token_version": 1,
+        "role_assignments": [{"role_id": "r-org", "application_id": None}],
+    }
+    user_app_scoped = {
+        "user_id": "u-app",
+        "email": "app@example.com",
+        "organization_id": ctx["org_id"],
+        "is_active": True,
+        "status": "ACTIVE",
+        "token_version": 1,
+        "role_assignments": [{"role_id": "r-app", "application_id": ctx["app_a_id"]}],
+    }
+    roles_db = {
+        "r-org": {
+            "role_id": "r-org",
+            "scope": "ORGANIZATION",
+            "permissions": ["organization:media:upload", "organization:media:read", "organization:media:delete"],
+        },
+        "r-app": {
+            "role_id": "r-app",
+            "scope": "ORGANIZATION",
+            "permissions": ["organization:media:upload", "organization:media:read", "organization:media:delete"],
+        },
+    }
+    monkeypatch.setattr(
+        UserRepository,
+        "find_by_id",
+        classmethod(lambda cls, uid: user_org_wide if uid == "u-org" else (user_app_scoped if uid == "u-app" else None)),
+    )
+    monkeypatch.setattr(RoleRepository, "find_by_id", classmethod(lambda cls, rid, organization_id=None: roles_db.get(rid)))
+
+    with app.app_context():
+        jwt_org = create_access_token(
+            identity="u-org",
+            additional_claims={"account_type": "ORGANIZATION_USER", "organization_id": ctx["org_id"], "token_version": 1},
+        )
+        jwt_app = create_access_token(
+            identity="u-app",
+            additional_claims={"account_type": "ORGANIZATION_USER", "organization_id": ctx["org_id"], "token_version": 1},
+        )
+
+    # 1. Org-wide JWT can still see legacy media (application_id=None) and upload org-shared media
+    list_org = client.get("/api/v1/media/", headers={"Authorization": f"Bearer {jwt_org}"})
+    assert list_org.status_code == 200
+    assert any(item["media_id"] == ctx["legacy_id"] for item in list_org.get_json()["data"])
+
+    up_org = client.post(
+        "/api/v1/media/upload",
+        headers={"Authorization": f"Bearer {jwt_org}"},
+        data={"file": (io.BytesIO(VALID_TXT_BYTES), "org_shared.txt")},
+        content_type="multipart/form-data",
+    )
+    assert up_org.status_code == 201
+    assert up_org.get_json()["media"]["application_id"] is None
+
+    # 2. App-scoped JWT is still blocked by require_organization_wide_scope() on upload/delete -> 403
+    up_app_jwt = client.post(
+        "/api/v1/media/upload",
+        headers={"Authorization": f"Bearer {jwt_app}"},
+        data={"file": (io.BytesIO(VALID_TXT_BYTES), "blocked.txt")},
+        content_type="multipart/form-data",
+    )
+    assert up_app_jwt.status_code == 403
+    del_app_jwt = client.delete(f"/api/v1/media/{ctx['legacy_id']}", headers={"Authorization": f"Bearer {jwt_app}"})
+    assert del_app_jwt.status_code == 403
+
+
+def test_phase8_5_1_media_repository_find_all_preserves_scope_with_search(monkeypatch):
+    """Ensure search $or never overwrites application-ownership $or in MediaRepository.find_all."""
+    captured_queries = []
+
+    class _FakeCursor:
+        def sort(self, *a, **kw):
+            return self
+
+        def skip(self, *a, **kw):
+            return self
+
+        def limit(self, *a, **kw):
+            return []
+
+    class _FakeCollection:
+        def count_documents(self, q):
+            captured_queries.append(dict(q))
+            return 0
+
+        def find(self, q, proj):
+            return _FakeCursor()
+
+    monkeypatch.setattr(MediaRepository, "_collection", classmethod(lambda cls: _FakeCollection()))
+
+    # 1. App-scoped JWT (include_org_shared=True) + search -> must combine both $or clauses via $and
+    MediaRepository.find_all(
+        organization_id="org-1",
+        search="report",
+        allowed_application_ids=["app-a"],
+        include_org_shared=True,
+    )
+    q_jwt_search = captured_queries[-1]
+    assert "$and" in q_jwt_search
+    assert "$or" not in q_jwt_search
+    assert len(q_jwt_search["$and"]) == 2
+    assert q_jwt_search["$and"][0]["$or"] == [
+        {"application_id": {"$in": ["app-a"]}},
+        {"application_id": None},
+        {"application_id": {"$exists": False}},
+    ]
+    assert any("filename" in cond for cond in q_jwt_search["$and"][1]["$or"])
+
+    # 2. API_KEY (include_org_shared=False) + search -> keeps strict application_id filter and search $or
+    MediaRepository.find_all(
+        organization_id="org-1",
+        search="report",
+        allowed_application_ids=["app-a"],
+        include_org_shared=False,
+    )
+    q_api_search = captured_queries[-1]
+    assert q_api_search["application_id"] == {"$in": ["app-a"]}
+    assert "$or" in q_api_search
+
+    # 3. Empty/whitespace search -> leaves ownership $or untouched
+    MediaRepository.find_all(
+        organization_id="org-1",
+        search="   ",
+        allowed_application_ids=["app-a"],
+        include_org_shared=True,
+    )
+    q_jwt_empty = captured_queries[-1]
+    assert "$and" not in q_jwt_empty
+    assert q_jwt_empty["$or"] == [
+        {"application_id": {"$in": ["app-a"]}},
+        {"application_id": None},
+        {"application_id": {"$exists": False}},
+    ]
 

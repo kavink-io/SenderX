@@ -61,7 +61,8 @@ class MediaService:
         channel: Optional[str] = None,
         expires_in_seconds: Optional[int] = None,
         expires_in_days: Optional[int] = None,
-        custom_filename: Optional[str] = None
+        custom_filename: Optional[str] = None,
+        application_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Ingest, validate, store, and record metadata for a single uploaded media file.
@@ -177,18 +178,24 @@ class MediaService:
         month = f"{now.month:02d}"
         storage_key = f"orgs/{organization_id}/{year}/{month}/{media_id}_{safe_filename}"
 
+        clean_app_id = application_id.strip() if isinstance(application_id, str) and application_id.strip() else None
+
         # 10. Persist binary to storage backend
         try:
             storage = cls._get_storage()
+            storage_metadata = {
+                "organization_id": organization_id,
+                "media_id": media_id,
+                "original_filename": original_filename
+            }
+            if clean_app_id:
+                storage_metadata["application_id"] = clean_app_id
             storage_res = storage.save(
                 data=raw_bytes,
                 storage_key=storage_key,
                 content_type=canonical_mime,
-                metadata={
-                    "organization_id": organization_id,
-                    "media_id": media_id,
-                    "original_filename": original_filename
-                }
+                metadata=storage_metadata,
+                organization_id=organization_id,
             )
         except StorageError as exc:
             if has_app_context():
@@ -211,6 +218,7 @@ class MediaService:
         media_document = {
             "media_id": media_id,
             "organization_id": organization_id,
+            "application_id": clean_app_id,
             "filename": safe_filename,
             "original_filename": original_filename,
             "mime_type": canonical_mime,
@@ -272,7 +280,8 @@ class MediaService:
         user_id: Optional[str] = None,
         purpose: Optional[str] = None,
         expires_in_seconds: Optional[int] = None,
-        expires_in_days: Optional[int] = None
+        expires_in_days: Optional[int] = None,
+        application_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Process multiple file uploads with total request size validation and individual error handling.
@@ -317,7 +326,8 @@ class MediaService:
                 user_id=user_id,
                 purpose=purpose,
                 expires_in_seconds=expires_in_seconds,
-                expires_in_days=expires_in_days
+                expires_in_days=expires_in_days,
+                application_id=application_id
             )
             if res.get("success"):
                 uploaded.append(res["media"])
@@ -341,9 +351,20 @@ class MediaService:
         }
 
     @classmethod
-    def get_media(cls, media_id: str, organization_id: str) -> Dict[str, Any]:
-        """Retrieve media metadata, enforcing tenant isolation."""
-        record = MediaRepository.find_by_id(media_id, organization_id=organization_id)
+    def get_media(
+        cls,
+        media_id: str,
+        organization_id: str,
+        allowed_application_ids: Optional[List[str]] = None,
+        include_org_shared: bool = False
+    ) -> Dict[str, Any]:
+        """Retrieve media metadata, enforcing tenant and application isolation."""
+        record = MediaRepository.find_by_id(
+            media_id,
+            organization_id=organization_id,
+            allowed_application_ids=allowed_application_ids,
+            include_org_shared=include_org_shared
+        )
         if not record or record.get("status") == "DELETED":
             return {"success": False, "message": "Media not found", "status_code": 404}
         return {"success": True, "status_code": 200, "data": record}
@@ -357,7 +378,9 @@ class MediaService:
         mime_type: Optional[str] = None,
         status: Optional[str] = None,
         channel: Optional[str] = None,
-        search: Optional[str] = None
+        search: Optional[str] = None,
+        allowed_application_ids: Optional[List[str]] = None,
+        include_org_shared: bool = False
     ) -> Dict[str, Any]:
         """List media with pagination, filters, and multi-tenant scoping."""
         return MediaRepository.find_all(
@@ -367,7 +390,9 @@ class MediaService:
             mime_type=mime_type,
             status=status,
             channel=channel,
-            search=search
+            search=search,
+            allowed_application_ids=allowed_application_ids,
+            include_org_shared=include_org_shared
         )
 
     @classmethod
@@ -375,12 +400,19 @@ class MediaService:
         cls,
         media_id: str,
         organization_id: str,
-        prefer_signed_url: bool = False
+        prefer_signed_url: bool = False,
+        allowed_application_ids: Optional[List[str]] = None,
+        include_org_shared: bool = False
     ) -> Dict[str, Any]:
         """
         Validate download authorization and prepare binary stream or pre-signed URL.
         """
-        record = MediaRepository.find_by_id(media_id, organization_id=organization_id)
+        record = MediaRepository.find_by_id(
+            media_id,
+            organization_id=organization_id,
+            allowed_application_ids=allowed_application_ids,
+            include_org_shared=include_org_shared
+        )
         if not record or record.get("status") == "DELETED":
             return {"success": False, "message": "Media not found", "status_code": 404}
 
@@ -438,11 +470,20 @@ class MediaService:
             return {"success": False, "message": f"Storage retrieval error: {str(exc)}", "status_code": 500}
 
     @classmethod
-    def delete_media(cls, media_id: str, organization_id: str) -> Dict[str, Any]:
+    def delete_media(
+        cls,
+        media_id: str,
+        organization_id: str,
+        allowed_application_ids: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
         """
         Delete physical file from storage and mark metadata as DELETED.
         """
-        record = MediaRepository.find_by_id(media_id, organization_id=organization_id)
+        record = MediaRepository.find_by_id(
+            media_id,
+            organization_id=organization_id,
+            allowed_application_ids=allowed_application_ids
+        )
         if not record or record.get("status") == "DELETED":
             return {"success": False, "message": "Media not found", "status_code": 404}
 
@@ -455,7 +496,11 @@ class MediaService:
                 if has_app_context():
                     current_app.logger.warning("Could not delete physical storage key %s: %s", storage_key, exc)
 
-        MediaRepository.soft_delete(media_id, organization_id=organization_id)
+        MediaRepository.soft_delete(
+            media_id,
+            organization_id=organization_id,
+            allowed_application_ids=allowed_application_ids
+        )
 
         if has_app_context():
             current_app.logger.info("Media deleted: %s for org: %s", media_id, organization_id)
@@ -475,7 +520,8 @@ class MediaService:
         organization_id: str,
         provider: Optional[str] = None,
         recipient: Optional[str] = None,
-        include_bytes: bool = False
+        include_bytes: bool = False,
+        allowed_application_ids: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Validate, verify channel and provider compatibility, enforce malware policy and expiration,
@@ -484,7 +530,11 @@ class MediaService:
         if not media_ids:
             return []
 
-        records = MediaRepository.find_by_ids(media_ids, organization_id=organization_id)
+        records = MediaRepository.find_by_ids(
+            media_ids,
+            organization_id=organization_id,
+            allowed_application_ids=allowed_application_ids
+        )
         found_ids = {r["media_id"] for r in records}
         missing = set(media_ids) - found_ids
         if missing:

@@ -102,10 +102,9 @@ class S3Storage(BaseStorage):
     ) -> Dict[str, Any]:
         key = self._validate_key(storage_key, organization_id=organization_id)
 
-        # Enforce private bucket access and server-side encryption
+        # Enforce server-side encryption without object ACLs (BucketOwnerEnforced compatible)
         extra_args: Dict[str, Any] = {
             "ContentType": content_type,
-            "ACL": "private"
         }
         if self.server_side_encryption:
             extra_args["ServerSideEncryption"] = self.server_side_encryption

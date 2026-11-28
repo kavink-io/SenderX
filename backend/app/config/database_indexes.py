@@ -180,6 +180,8 @@ def ensure_database_indexes(app=None, force=False):
     db["media"].create_index([("media_id", pymongo.ASCENDING)], unique=True)
     db["media"].create_index([("organization_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
     db["media"].create_index([("organization_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
+    db["media"].create_index([("organization_id", pymongo.ASCENDING), ("application_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
+    db["media"].create_index([("organization_id", pymongo.ASCENDING), ("application_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
     db["media"].create_index([("organization_id", pymongo.ASCENDING), ("checksum_sha256", pymongo.ASCENDING)])
     db["media"].create_index([("organization_id", pymongo.ASCENDING), ("mime_type", pymongo.ASCENDING)])
     db["media"].create_index([("expires_at", pymongo.ASCENDING)])

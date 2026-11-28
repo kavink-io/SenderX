@@ -6,21 +6,49 @@ and deleting media attachments.
 
 from typing import List
 from flask import Blueprint, request, jsonify, g, send_file, redirect, Response
-from app.modules.auth.decorators import require_permissions, require_organization_wide_scope
+from app.modules.api_credentials.decorators import require_api_key_or_token
+from app.modules.auth.decorators import (
+    require_organization_wide_scope,
+    resolve_authorized_application_scope,
+)
 from app.modules.media.service import MediaService
 
 media_bp = Blueprint("media", __name__)
+
+
+def _resolve_media_write_context():
+    """
+    Resolve (application_id, user_id, error_response) for upload and delete routes:
+    - API_KEY: binds application_id from g.current_application_id (fails closed if missing).
+    - ORGANIZATION_USER JWT: preserves require_organization_wide_scope(), application_id=None.
+    """
+    if getattr(g, "auth_type", None) == "API_KEY":
+        app_id = getattr(g, "current_application_id", None)
+        if not app_id or not str(app_id).strip():
+            return None, None, (jsonify({
+                "success": False,
+                "message": "API credential is missing application scope"
+            }), 403)
+        cred = getattr(g, "current_credential", None) or {}
+        return str(app_id).strip(), f"api_key:{cred.get('credential_id')}", None
+
+    scope_err = require_organization_wide_scope()
+    if scope_err:
+        return None, None, scope_err
+
+    user_id = g.current_user.get("user_id") or g.current_user.get("email")
+    return None, user_id, None
 
 
 # ---------------------------------------------------------------------------
 # 1. SINGLE FILE UPLOAD
 # ---------------------------------------------------------------------------
 @media_bp.route("/upload", methods=["POST"])
-@require_permissions("organization:media:upload")
+@require_api_key_or_token(required_permissions=["organization:media:upload"])
 def upload_media():
-    scope_err = require_organization_wide_scope()
-    if scope_err:
-        return scope_err
+    app_id, user_id, err_resp = _resolve_media_write_context()
+    if err_resp:
+        return err_resp
     """
     POST /api/v1/media/upload
     Form-data parameters:
@@ -37,7 +65,6 @@ def upload_media():
         }), 400
 
     organization_id = g.current_organization["organization_id"]
-    user_id = g.current_user.get("user_id") or g.current_user.get("email")
 
     purpose = request.form.get("purpose")
     channel = request.form.get("channel")
@@ -52,7 +79,8 @@ def upload_media():
         purpose=purpose,
         channel=channel,
         expires_in_seconds=expires_in_sec,
-        expires_in_days=expires_in_days
+        expires_in_days=expires_in_days,
+        application_id=app_id
     )
 
     status_code = result.get("status_code", 201 if result["success"] else 400)
@@ -63,11 +91,11 @@ def upload_media():
 # 2. BULK FILE UPLOAD
 # ---------------------------------------------------------------------------
 @media_bp.route("/bulk-upload", methods=["POST"])
-@require_permissions("organization:media:upload")
+@require_api_key_or_token(required_permissions=["organization:media:upload"])
 def bulk_upload_media():
-    scope_err = require_organization_wide_scope()
-    if scope_err:
-        return scope_err
+    app_id, user_id, err_resp = _resolve_media_write_context()
+    if err_resp:
+        return err_resp
     """
     POST /api/v1/media/bulk-upload
     Multipart form-data with multiple files under 'files' or 'file'.
@@ -80,7 +108,6 @@ def bulk_upload_media():
         }), 400
 
     organization_id = g.current_organization["organization_id"]
-    user_id = g.current_user.get("user_id") or g.current_user.get("email")
 
     purpose = request.form.get("purpose")
     expires_in_sec = request.form.get("expires_in_seconds", type=int)
@@ -92,7 +119,8 @@ def bulk_upload_media():
         user_id=user_id,
         purpose=purpose,
         expires_in_seconds=expires_in_sec,
-        expires_in_days=expires_in_days
+        expires_in_days=expires_in_days,
+        application_id=app_id
     )
 
     status_code = result.get("status_code", 201 if result["success"] else 400)
@@ -104,7 +132,7 @@ def bulk_upload_media():
 # ---------------------------------------------------------------------------
 @media_bp.route("/", methods=["GET"])
 @media_bp.route("", methods=["GET"])
-@require_permissions("organization:media:read")
+@require_api_key_or_token(required_permissions=["organization:media:read"])
 def list_media():
     """
     GET /api/v1/media
@@ -112,6 +140,8 @@ def list_media():
     - page, limit, mime_type, status, channel, search
     """
     organization_id = g.current_organization["organization_id"]
+    allowed_apps = resolve_authorized_application_scope()
+    include_org_shared = getattr(g, "auth_type", None) != "API_KEY"
 
     try:
         page = max(1, int(request.args.get("page", 1)))
@@ -132,7 +162,9 @@ def list_media():
         mime_type=mime_type,
         status=status,
         channel=channel,
-        search=search
+        search=search,
+        allowed_application_ids=allowed_apps,
+        include_org_shared=include_org_shared
     )
 
     return jsonify({
@@ -146,17 +178,21 @@ def list_media():
 # 4. GET MEDIA METADATA
 # ---------------------------------------------------------------------------
 @media_bp.route("/<string:media_id>", methods=["GET"])
-@require_permissions("organization:media:read")
+@require_api_key_or_token(required_permissions=["organization:media:read"])
 def get_media(media_id: str):
     """
     GET /api/v1/media/<media_id>
     Retrieve metadata without downloading the binary payload.
     """
     organization_id = g.current_organization["organization_id"]
+    allowed_apps = resolve_authorized_application_scope()
+    include_org_shared = getattr(g, "auth_type", None) != "API_KEY"
 
     result = MediaService.get_media(
         media_id=media_id,
-        organization_id=organization_id
+        organization_id=organization_id,
+        allowed_application_ids=allowed_apps,
+        include_org_shared=include_org_shared
     )
 
     status_code = result.get("status_code", 200 if result["success"] else 404)
@@ -167,19 +203,23 @@ def get_media(media_id: str):
 # 5. SECURE DOWNLOAD
 # ---------------------------------------------------------------------------
 @media_bp.route("/<string:media_id>/download", methods=["GET"])
-@require_permissions("organization:media:read")
+@require_api_key_or_token(required_permissions=["organization:media:read"])
 def download_media(media_id: str):
     """
     GET /api/v1/media/<media_id>/download
     Streams the binary file with security headers or redirects to a pre-signed URL.
     """
     organization_id = g.current_organization["organization_id"]
+    allowed_apps = resolve_authorized_application_scope()
+    include_org_shared = getattr(g, "auth_type", None) != "API_KEY"
     prefer_signed = request.args.get("signed", "false").lower() == "true"
 
     result = MediaService.download_media(
         media_id=media_id,
         organization_id=organization_id,
-        prefer_signed_url=prefer_signed
+        prefer_signed_url=prefer_signed,
+        allowed_application_ids=allowed_apps,
+        include_org_shared=include_org_shared
     )
 
     if not result.get("success"):
@@ -210,20 +250,22 @@ def download_media(media_id: str):
 # 6. DELETE MEDIA
 # ---------------------------------------------------------------------------
 @media_bp.route("/<string:media_id>", methods=["DELETE"])
-@require_permissions("organization:media:delete")
+@require_api_key_or_token(required_permissions=["organization:media:delete"])
 def delete_media(media_id: str):
-    scope_err = require_organization_wide_scope()
-    if scope_err:
-        return scope_err
+    _, _, err_resp = _resolve_media_write_context()
+    if err_resp:
+        return err_resp
     """
     DELETE /api/v1/media/<media_id>
     Deletes the underlying storage file and marks metadata as DELETED.
     """
     organization_id = g.current_organization["organization_id"]
+    allowed_apps = resolve_authorized_application_scope()
 
     result = MediaService.delete_media(
         media_id=media_id,
-        organization_id=organization_id
+        organization_id=organization_id,
+        allowed_application_ids=allowed_apps
     )
 
     status_code = result.get("status_code", 200 if result["success"] else 404)
